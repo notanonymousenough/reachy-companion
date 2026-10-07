@@ -10,6 +10,18 @@
       "noise_scale": 0.667,
       "noise_w_scale": 0.8,
       "normalize_audio": true
+    },
+    "playback_eq": {
+      "enabled": true,
+      "highpass_hz": 100,
+      "bass_hz": 250,
+      "bass_width_q": 1.0,
+      "bass_db": -3.0,
+      "presence_hz": 2500,
+      "presence_width_q": 1.0,
+      "presence_db": 3.0,
+      "treble_db": 2.0,
+      "headroom_db": 3.0
     }
   },
   "conversation": {

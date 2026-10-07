@@ -20,6 +20,9 @@ class Config:
             values = json.loads(profile_path.read_text())
             if not isinstance(values, dict) or set(values) - {'llm', 'tts', 'conversation'}:
                 raise ValueError('Profile may only change llm, tts and conversation')
+            # Existing private configs can predate the optional speaker EQ.
+            if 'playback_eq' in values.get('tts', {}) and 'playback_eq' not in self.data['tts']:
+                self.data['tts']['playback_eq'] = dict(values['tts']['playback_eq'])
             def merge(target, patch):
                 for key, value in patch.items():
                     if key not in target:
@@ -77,6 +80,21 @@ class Config:
             raise ValueError('TTS length_scale must be between 0.5 and 2')
         if not -1200 <= self.data['tts']['pitch_cents'] <= 1200:
             raise ValueError('TTS pitch must be between -1200 and 1200 cents')
+        eq = self.data['tts'].get('playback_eq', {})
+        if eq.get('enabled', False):
+            if not 20 <= eq['highpass_hz'] <= 300:
+                raise ValueError('Speaker highpass must be between 20 and 300 Hz')
+            for key in ('bass_hz', 'presence_hz'):
+                if not 20 <= eq[key] <= 7000:
+                    raise ValueError('Invalid speaker EQ frequency')
+            for key in ('bass_width_q', 'presence_width_q'):
+                if not 0.3 <= eq[key] <= 3:
+                    raise ValueError('Invalid speaker EQ width')
+            for key in ('bass_db', 'presence_db', 'treble_db'):
+                if not -12 <= eq[key] <= 12:
+                    raise ValueError('Invalid speaker EQ gain')
+            if not 0 <= eq['headroom_db'] <= 12:
+                raise ValueError('Invalid speaker EQ headroom')
         for role in ('hub', 'robot', 'worker'):
             item = self.data['deployment'][role]
             if not Path(item['root']).is_absolute() or '\n' in item['root']:

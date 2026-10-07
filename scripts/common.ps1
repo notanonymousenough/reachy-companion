@@ -21,6 +21,10 @@ function Read-CompanionSettings {
         foreach ($property in $profile.PSObject.Properties) {
             if ($property.Name -notin @('llm','tts','conversation')) { throw 'Profile may only change llm, tts and conversation.' }
         }
+        # Optional speaker EQ can be added by a newer profile after git pull.
+        if ($profile.PSObject.Properties['tts'] -and $profile.tts.PSObject.Properties['playback_eq'] -and -not $settings.tts.PSObject.Properties['playback_eq']) {
+            $settings.tts | Add-Member -NotePropertyName playback_eq -NotePropertyValue $profile.tts.playback_eq
+        }
         Merge-CompanionSettings $settings $profile
     }
     return $settings

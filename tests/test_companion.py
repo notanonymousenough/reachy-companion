@@ -69,6 +69,16 @@ class ConfigurationTests(unittest.TestCase):
             update(self.config, 'robot')
         self.assertFalse(any('pip' in ' '.join(call.args[0]) for call in run.call_args_list))
 
+    def test_new_speaker_profile_works_with_older_private_configuration(self):
+        old = json.loads(self.config.filename.read_text())
+        del old['tts']['playback_eq']
+        self.config.filename.write_text(json.dumps(old))
+        configured = Config(self.config.filename)
+        self.assertEqual(configured['tts']['playback_eq']['presence_db'], 3)
+        configured.data['tts']['playback_eq']['presence_hz'] = 9000
+        with self.assertRaises(ValueError):
+            configured.validate()
+
     def test_secret_and_config_are_private_and_not_overwritten(self):
         token = self.config.token
         self.assertGreaterEqual(len(token), 32)

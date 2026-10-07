@@ -21,6 +21,9 @@ if (Test-Path "config.worker.local.json") { $characterFiles += "config.worker.lo
 $characterPlans = @()
 foreach ($characterFile in ($characterFiles | Select-Object -Unique)) {
     $characterSettings = Get-Content -Raw -Encoding UTF8 $characterFile | ConvertFrom-Json
+    if ($characterPatch.PSObject.Properties['tts'] -and $characterPatch.tts.PSObject.Properties['playback_eq'] -and -not $characterSettings.tts.PSObject.Properties['playback_eq']) {
+        $characterSettings.tts | Add-Member -NotePropertyName playback_eq -NotePropertyValue $characterPatch.tts.playback_eq
+    }
     Merge-CharacterSettings -Target $characterSettings -Patch $characterPatch
     $characterPlans += [pscustomobject]@{ Path = $characterFile; Settings = $characterSettings }
 }

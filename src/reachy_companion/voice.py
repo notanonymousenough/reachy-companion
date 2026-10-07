@@ -21,6 +21,17 @@ from vosk import Model, KaldiRecognizer, SetLogLevel
 LOG = logging.getLogger('reachy-voice')
 
 
+def speaker_eq_effects(config):
+    """Output-only speaker correction; native WAV and microphone are unchanged."""
+    eq = config['tts'].get('playback_eq', {})
+    if not eq.get('enabled', False):
+        return []
+    return ['highpass', str(eq['highpass_hz']),
+            'equalizer', str(eq['bass_hz']), str(eq['bass_width_q']) + 'q', str(eq['bass_db']),
+            'equalizer', str(eq['presence_hz']), str(eq['presence_width_q']) + 'q', str(eq['presence_db']),
+            'treble', str(eq['treble_db']), 'gain', '-n', str(-eq['headroom_db'])]
+
+
 class Pipeline:
     def __init__(self, config):
         self.config = config
@@ -188,6 +199,7 @@ class Pipeline:
                            '-c', '1', '-r', str(rate), '-']
                 if self.config['tts']['pitch_cents']:
                     command += ['pitch', str(self.config['tts']['pitch_cents'])]
+                command += speaker_eq_effects(self.config)
                 pcm = subprocess.run(command, input=chunk.audio_int16_bytes, capture_output=True,
                                      timeout=self.config['timeouts']['pitch'], check=True).stdout
                 total += len(pcm)
