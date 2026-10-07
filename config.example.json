@@ -141,7 +141,7 @@
       "highpass_hz": 100,
       "bass_hz": 400,
       "bass_width_q": 0.8,
-      "bass_db": -4.5,
+      "bass_db": -6.0,
       "presence_hz": 3000,
       "presence_width_q": 1.0,
       "presence_db": 3.0,
