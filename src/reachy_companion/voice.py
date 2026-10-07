@@ -337,7 +337,7 @@ def main(config, worker=False):
                         raise ValueError('Invalid expression request size')
                     payload = json.loads(self.rfile.read(size))
                     value = plan(config['conversation'].get('expressions', {}),
-                                 payload['phase'], payload.get('emotion', 'neutral'))
+                                 payload['phase'], payload.get('emotion', 'neutral'), payload.get('variant', 0))
                     if payload['phase'] == 'speaking' and config['conversation'].get('barge_in', {}).get('enabled', False):
                         value['steps'] = value['steps'][-1:]
                     self.reply(200, value)

@@ -2,23 +2,37 @@
 import math
 from .expressions import EMOTIONS
 
-GESTURES = ('auto', 'nod', 'shake', 'tilt', 'perk', 'settle')
+GESTURES = ('auto', 'nod', 'shake', 'tilt', 'perk', 'settle', 'shrug', 'laugh', 'ponder', 'celebrate', 'comfort', 'bow', 'sweep', 'wiggle')
 
 
 def pose_step(settings, emotion, gesture='auto', beat=0):
     if emotion not in EMOTIONS or gesture not in GESTURES:
         raise ValueError('Unknown expressive action')
+    from .emotion_library import blend
     base = settings['poses'][emotion]
-    pose = dict(base)
-    ears = list(base['antennas'])
+    pose = blend(settings, base, emotion, beat * settings['speech_sync']['min_cue_interval_seconds'], beat // 12) if gesture != 'settle' else dict(base)
+    ears = list(pose['antennas'])
     amplitude = settings['speech_sync']['amplitude_degrees']
     sign = 1 if beat % 2 else -1
-    if gesture in ('auto', 'nod'):
+    if gesture == 'auto':
+        pose['pitch'] += sign * amplitude * .5
+        ears = [ears[0]-sign*amplitude*.5, ears[1]+sign*amplitude*.5]
+    elif gesture in ('nod', 'bow', 'comfort'):
         pose['pitch'] += sign * amplitude
     elif gesture == 'shake':
         pose['yaw'] += sign * amplitude
     elif gesture == 'tilt':
         pose['roll'] += sign * amplitude
+    elif gesture in ('shrug', 'wiggle'):
+        pose['roll'] += sign * amplitude
+        ears = [ears[0]+sign*amplitude, ears[1]+sign*amplitude]
+    elif gesture in ('ponder', 'sweep'):
+        pose['yaw'] += sign * amplitude
+        pose['roll'] += amplitude*.5
+    elif gesture in ('laugh', 'celebrate'):
+        pose['pitch'] += sign*amplitude
+        pose['roll'] += sign*amplitude*.75
+        ears = [ears[0]-sign*amplitude*2, ears[1]+sign*amplitude*2]
     elif gesture == 'perk':
         ears = [ears[0] - sign * amplitude * 2, ears[1] + sign * amplitude * 2]
     head = {axis: math.radians(max(-settings['max_head_degrees'], min(settings['max_head_degrees'], pose[axis])))

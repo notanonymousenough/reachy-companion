@@ -72,6 +72,7 @@ class ExpressionPlayer:
 
     def run(self):
         handled = 0
+        variant = 0
         while not self.stopping.is_set():
             cue = None
             with self.condition:
@@ -86,7 +87,7 @@ class ExpressionPlayer:
                         self.condition.wait(.05)
                     elif self.version != handled:
                         break
-                    elif self.state and self.state[0] == 'speaking':
+                    elif self.state and (self.state[0] == 'speaking' or (self.state[0] == 'processing' and self.settings.get('library', {}).get('repeat_processing', False))):
                         self.condition.wait(self.settings['repeat_seconds'])
                         if self.version == handled:
                             break
@@ -104,7 +105,7 @@ class ExpressionPlayer:
             try:
                 plan = ({'steps': cue['steps']} if cue is not None else
                         self.request(self.config['network']['voice_url'], '/expression/plan',
-                                     {'phase': state[0], 'emotion': state[1]}, timeout=self.config['timeouts']['http']))
+                                     {'phase': state[0], 'emotion': state[1], 'variant': variant % 10000}, timeout=self.config['timeouts']['http']))
                 with self.condition:
                     stale = self.version != version
                 if not stale and plan.get('steps'):
@@ -114,6 +115,7 @@ class ExpressionPlayer:
                                              'gesture': cue.get('gesture', 'auto'), 'phoneme': cue.get('phoneme', '')}
                                             if cue is not None else {'phase': state[0], 'emotion': state[1]})
                 self.last_error = None
+                variant += 1
             except Exception as exc:
                 self.last_error = str(exc)
                 LOG.warning('expression_unavailable phase=%s error=%s', state[0], exc)

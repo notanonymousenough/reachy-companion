@@ -19,3 +19,6 @@ companion = "reachy_companion.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+reachy_companion = ["assets/*.json", "assets/*.txt"]

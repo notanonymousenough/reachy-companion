@@ -141,6 +141,17 @@ class Config:
         if sync:
             if not .6 <= sync['min_cue_interval_seconds'] <= 3 or not 1 <= sync['max_cues'] <= 240 or not 0 <= sync['amplitude_degrees'] <= 3:
                 raise ValueError('Invalid speech motion synchronization limits')
+        library = expressions.get('library', {})
+        if library.get('enabled', False):
+            import math
+            from .emotion_library import catalog
+            if not isinstance(library['strength'], (int, float)) or not math.isfinite(library['strength']) or not 0 <= library['strength'] <= 1:
+                raise ValueError('Invalid emotion animation strength')
+            clips = catalog(library['name'])
+            for group in ('emotions', 'phases'):
+                for names in library[group].values():
+                    if not isinstance(names, list) or not 1 <= len(names) <= 4 or any(name not in clips for name in names):
+                        raise ValueError('Unknown recorded emotion clip')
         if expressions.get('enabled', False):
             from .expressions import EMOTIONS, PHASES, plan
             if not 0 < expressions['max_head_degrees'] <= 15 or not 0 < expressions['max_antenna_degrees'] <= 35:
