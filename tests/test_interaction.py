@@ -39,6 +39,13 @@ class InteractionTests(unittest.TestCase):
         self.addCleanup(a.stopping.set)
         return a
 
+    def test_existing_model_storage_symlink_is_compatible_with_config_migration(self):
+        shared = self.root/'shared-model-storage'
+        shared.mkdir()
+        (self.root/'models').symlink_to(shared, target_is_directory=True)
+        updated = Config(self.config.filename)
+        self.assertEqual(updated['conversation']['recognition']['path'], 'models/whisper-small')
+
     def test_stop_is_direct_command_and_does_not_mute_or_match_a_quotation(self):
         settings = self.config['conversation']['interaction']
         for text in ('Замолчи!', 'Ричи, замолчи, пожалуйста.', 'Заткнись', 'Хватит говорить'):

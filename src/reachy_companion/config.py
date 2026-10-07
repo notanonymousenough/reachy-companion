@@ -86,7 +86,7 @@ class Config:
                 raise ValueError('Invalid speech recognition backend or device')
             if not 1 <= recognition['beam_size'] <= 5 or not 1 <= recognition['cpu_threads'] <= 32:
                 raise ValueError('Invalid speech recognition limits')
-            if Path(recognition['path']).is_absolute() or not self.path(recognition['path']).resolve().is_relative_to(self.root):
+            if Path(recognition['path']).is_absolute() or '..' in Path(recognition['path']).parts:
                 raise ValueError('Recognition model must stay inside the repository')
         interaction = self.data['conversation'].get('interaction', {})
         if interaction:
