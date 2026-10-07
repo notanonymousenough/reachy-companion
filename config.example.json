@@ -1,0 +1,242 @@
+{
+  "version": 1,
+  "network": {
+    "hub_url": "http://reachy-hub.lan:8080",
+    "voice_url": "http://reachy-hub.lan:8081",
+    "agent_url": "http://reachy-mini.lan:8090",
+    "robot_url": "http://reachy-mini.lan:8000",
+    "llm_base_url": "http://lm-studio.lan:1234/v1",
+    "compute_url": "http://compute.lan:8082"
+  },
+  "servers": {
+    "hub": {
+      "listen": "0.0.0.0",
+      "port": 8080
+    },
+    "voice": {
+      "listen": "0.0.0.0",
+      "port": 8081
+    },
+    "agent": {
+      "listen": "0.0.0.0",
+      "port": 8090
+    },
+    "worker": {
+      "listen": "0.0.0.0",
+      "port": 8082
+    }
+  },
+  "paths": {
+    "data_dir": "data",
+    "scenarios_dir": "scenarios",
+    "token_file": "secrets/token"
+  },
+  "deployment": {
+    "hub": {
+      "host": "reachy-hub.lan",
+      "user": "deploy",
+      "identity_file": "",
+      "root": "/home/deploy/reachy-companion",
+      "venv_dir": ".venv-router",
+      "python": "python3",
+      "apt_packages": [
+        "python3-venv"
+      ],
+      "services": [
+        "reachy-hub",
+        "reachy-voice"
+      ]
+    },
+    "robot": {
+      "host": "reachy-mini.lan",
+      "user": "pollen",
+      "identity_file": "",
+      "root": "/home/pollen/reachy-companion",
+      "venv_dir": ".venv",
+      "python": "python3",
+      "apt_packages": [
+        "python3-venv",
+        "alsa-utils",
+        "nftables"
+      ],
+      "services": [
+        "reachy-voice-agent"
+      ]
+    },
+    "worker": {
+      "host": "compute.lan",
+      "user": "worker",
+      "identity_file": "",
+      "root": "/home/worker/reachy-companion",
+      "venv_dir": ".venv",
+      "python": "python3",
+      "apt_packages": [
+        "python3-venv",
+        "sox",
+        "libgomp1",
+        "libatomic1"
+      ],
+      "services": [
+        "reachy-compute"
+      ]
+    }
+  },
+  "security": {
+    "robot": {
+      "restrict_to_hub": true,
+      "hub_source_ipv4": "",
+      "hub_source_ipv6": [],
+      "nft_table": "reachy_companion",
+      "service": "reachy-companion-firewall",
+      "allow_dhcp": true,
+      "rollback_seconds": 180
+    }
+  },
+  "timeouts": {
+    "robot": 5,
+    "http": 10,
+    "client": 300,
+    "llm": 240,
+    "move": 25,
+    "wake": 40,
+    "pitch": 60,
+    "manual_audio_lock": 2,
+    "playback_margin": 15,
+    "process_stop": 3,
+    "ssh_connect": 10
+  },
+  "motion": {
+    "poll_seconds": 15,
+    "move_poll_seconds": 0.15,
+    "antenna_tolerance": 0.15,
+    "max_antenna_offset": 0.35,
+    "min_step_seconds": 0.5,
+    "max_step_seconds": 3
+  },
+  "models": {
+    "stt": {
+      "path": "models/vosk-model-small-ru-0.22",
+      "archive_root": "vosk-model-small-ru-0.22",
+      "download_url": "https://huggingface.co/localstack/vosk-models/resolve/main/vosk-model-small-ru-0.22.zip",
+      "sha256": ""
+    },
+    "tts": {
+      "path": "models/ru_RU-ruslan-medium.onnx",
+      "download_url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/ru/ru_RU/ruslan/medium/ru_RU-ruslan-medium.onnx",
+      "config_url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/ru/ru_RU/ruslan/medium/ru_RU-ruslan-medium.onnx.json",
+      "sha256": ""
+    }
+  },
+  "tts": {
+    "pitch_cents": 300,
+    "synthesis": {
+      "volume": 0.65,
+      "length_scale": 1.0,
+      "noise_scale": 0.35,
+      "noise_w_scale": 0.65,
+      "normalize_audio": true
+    }
+  },
+  "llm": {
+    "model": "qwen3.5-9b-uncensored-hauhaucs-aggressive",
+    "api_path": "/completions",
+    "mode": "completion",
+    "temperature": 0.6,
+    "max_tokens": 8192,
+    "history_messages": 12,
+    "history_ttl_seconds": 1800,
+    "max_sessions": 16,
+    "message_template": "<|im_start|>{role}\n{content}<|im_end|>\n",
+    "assistant_prefix": "<|im_start|>assistant\n<think>\n\n</think>\n\n",
+    "stop": [
+      "<|im_end|>",
+      "<|im_start|>"
+    ],
+    "system_prompt": "Ты Ричи, робот-компаньон Reachy Mini. Твой характер — молодой парень с острым языком, любопытством и собственным мнением. Общайся как близкий приятель: на «ты», естественно, непринуждённо, с сухим юмором, иронией и меткими подколами. Не играй ребёнка, не сюсюкай и не изображай услужливого консультанта. Не лебези и не соглашайся автоматически: если человек несёт чушь, принимает плохое решение или противоречит себе, скажи прямо и объясни почему. Можешь ответить резко, огрызнуться и употребить разговорную грубость или мат, если это уместно для ситуации; не вставляй ругань в каждую фразу. Подкалывай конкретные слова и поступки, а не превращай общение в постоянное унижение. С близким человеком держись по-свойски; если ему действительно тяжело, убери показную язвительность и поддержи без сладких штампов. Не избегай сложных, спорных или чувствительных тем только потому, что они неудобные. Обсуждай их открыто, содержательно и без морализаторства; различай факты, мнения и догадки. Честность важнее эффектной колкости: не придумывай факты, не притворяйся уверенным, когда не знаешь, и спокойно исправляй ошибки. Обычно отвечай по-русски одним-двумя короткими предложениями, как в живом разговоре; если вопрос сложный, дай столько пояснений, сколько нужно. Твой ответ произносится вслух: без Markdown, списков и озвучивания внутренних рассуждений. Не повторяй постоянно «бро», «кореш» и другие словечки; дружеский тон передавай манерой разговора. У тебя есть микрофон и динамик. Камера и управление движениями в этот разговор пока не подключены: не утверждай, что видишь человека, и не обещай физические действия. Если речь распознана непонятно, коротко попроси повторить."
+  },
+  "conversation": {
+    "session": "robot",
+    "greeting": "Ну привет. Я Ричи. Давай, рассказывай, что у тебя.",
+    "wake_on_start": true,
+    "greet_on_start": true,
+    "listen_on_start": true,
+    "retry_seconds": 5,
+    "reset_phrases": [
+      "забудь разговор",
+      "начни новый разговор",
+      "сбрось разговор"
+    ],
+    "reset_reply": "Ладно, начинаем с чистого листа.",
+    "pause_phrases": [
+      "перестань слушать",
+      "не слушай",
+      "выключи микрофон"
+    ],
+    "pause_reply": "Окей, замолкаю и не слушаю."
+  },
+  "audio": {
+    "capture_device": "plug:reachymini_audio_src",
+    "playback_device": "plug:reachymini_audio_sink",
+    "sample_rate": 16000,
+    "chunk_ms": 100,
+    "vad_frame_ms": 20,
+    "vad_mode": 2,
+    "min_speech_frames": 3,
+    "pre_roll_chunks": 5,
+    "calibration_chunks": 10,
+    "noise_multiplier": 1.8,
+    "rms_floor": 500,
+    "silence_chunks": 10,
+    "min_voiced_chunks": 4,
+    "max_recording_seconds": 25,
+    "max_input_seconds": 30,
+    "echo_tail_seconds": 0.4
+  },
+  "limits": {
+    "max_text_chars": 4000,
+    "max_speech_chars": 5000,
+    "max_request_bytes": 1400000,
+    "max_agent_request_bytes": 20000,
+    "max_session_chars": 80
+  },
+  "logging": {
+    "level": "INFO",
+    "max_bytes": 2000000,
+    "backup_count": 3,
+    "log_transcripts": true
+  },
+  "voice": {
+    "mode": "remote"
+  },
+  "streaming": {
+    "enabled": true,
+    "relay_chunk_bytes": 4096,
+    "max_event_bytes": 1048576,
+    "sample_rate": 16000,
+    "max_output_seconds": 180,
+    "pcm_chunk_bytes": 3200
+  },
+  "brains": {
+    "provider": "lm_studio",
+    "openclaw": {
+      "base_url": "http://openclaw.lan:18789/v1",
+      "api_path": "/chat/completions",
+      "model": "openclaw/default",
+      "api_key_env": "OPENCLAW_API_KEY"
+    },
+    "hermes": {
+      "base_url": "http://hermes.lan:8642/v1",
+      "api_path": "/chat/completions",
+      "model": "hermes-agent",
+      "api_key_env": "HERMES_API_KEY"
+    }
+  },
+  "container": {
+    "image": "reachy-compute:local",
+    "name": "reachy-compute",
+    "publish_address": "0.0.0.0",
+    "cpu_threads": 4,
+    "desktop_llm_base_url": "http://host.docker.internal:1234/v1",
+    "windows_firewall_rule": "Reachy Companion compute from hub"
+  }
+}

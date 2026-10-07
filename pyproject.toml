@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "reachy-companion"
+version = "0.2.0"
+description = "Reachy voice companion with an inference-free hub and a remote compute worker"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+hub = []
+worker = ["vosk==0.3.45", "piper-tts==1.8.0"]
+robot = ["webrtcvad-wheels==2.0.14.post1"]
+
+[project.scripts]
+companion = "reachy_companion.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

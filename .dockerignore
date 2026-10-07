@@ -1,0 +1,13 @@
+.git
+.venv
+models
+data
+secrets
+config.local.json
+config.*.local.json
+.env
+.env.*
+__pycache__
+**/__pycache__
+work
+outputs
