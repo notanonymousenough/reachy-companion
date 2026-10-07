@@ -188,7 +188,7 @@ def serve(hub):
                     return
                 try:
                     value = hub.agent('/status')
-                    self.reply(200, {key: value.get(key) for key in ('microphone_enabled', 'capture_active', 'phase', 'expression', 'expression_error')})
+                    self.reply(200, {key: value.get(key) for key in ('microphone_enabled', 'capture_active', 'phase', 'expression', 'expression_error', 'volume_percent', 'volume_control_enabled')})
                 except Exception:
                     self.reply(503, {'error': 'Robot agent unavailable'})
                 return
@@ -207,7 +207,7 @@ def serve(hub):
             if not hmac.compare_digest(token, 'Bearer ' + hub.config.token):
                 self.reply(401, {'error': 'Bearer token required'})
                 return
-            if self.path in ('/actions/expression', '/control/microphone'):
+            if self.path in ('/actions/expression', '/control/microphone', '/control/volume'):
                 try:
                     size = int(self.headers.get('Content-Length', 0))
                     if not 0 < size <= hub.config['limits']['max_agent_request_bytes']:
@@ -215,7 +215,13 @@ def serve(hub):
                     payload = json.loads(self.rfile.read(size))
                     if not isinstance(payload, dict):
                         raise ValueError('Expected JSON object')
-                    if self.path == '/control/microphone':
+                    if self.path == '/control/volume':
+                        from .volume import validate_percent
+                        if set(payload) != {'volume_percent'}:
+                            raise ValueError('Expected volume_percent')
+                        validate_percent(payload['volume_percent'])
+                        value = hub.agent('/volume', payload)
+                    elif self.path == '/control/microphone':
                         if set(payload) != {'enabled'} or not isinstance(payload['enabled'], bool):
                             raise ValueError('enabled must be boolean')
                         value = hub.agent('/microphone', payload)

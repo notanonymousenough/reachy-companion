@@ -41,7 +41,7 @@ class RoutingTests(unittest.TestCase):
         with patch('reachy_companion.agent.subprocess.run') as run:
             agent.configure_playback()
         self.assertEqual(run.call_args.args[0],
-                         ['amixer', '-c', 'Audio', 'sset', 'PCM,0', '95%'])
+                         ['amixer', '-c', 'Audio', 'sset', 'PCM,0', '95%', 'unmute'])
         self.assertTrue(run.call_args.kwargs['check'])
         self.config.data['audio']['playback_mixer']['enabled'] = False
         with patch('reachy_companion.agent.subprocess.run') as run:

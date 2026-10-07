@@ -354,3 +354,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\control.ps1
 Распознанная команда «перестань слушать» также сохраняет выключение; включить голосом уже выключенный микрофон нельзя, для этого служит кнопка или CLI. `voice pause/resume` оставлены для временной паузы диагностики и не перезаписывают сохранённый переключатель. `resume` не может обойти постоянное выключение.
 
 Обновление всех компонентов остаётся прежним: Windows `scripts/start.ps1`, hub `scripts/update.sh hub`, Reachy `scripts/update.sh robot`. Новые зависимости не нужны.
+
+
+### Громкость на панели
+
+На `/control` есть ползунок «Громкость динамика», 0–100%. Уровень применяется после отпускания ползунка через authenticated `/control/volume` → hub → robot agent `/volume`. Меняется только `audio.playback_mixer.card/control` (сейчас PCM,0), микрофон и EQ не меняются. 0% отключает playback switch; ненулевое значение снова включает звук. Выбранный уровень сохраняется на Reachy в `paths.data_dir/volume-state.json` (0600), восстанавливается при старте агента, в том числе при выключенном микрофоне. До первого изменения используется `audio.playback_mixer.volume_percent` из конфигурации. При `audio.playback_mixer.enabled=false` ползунок недоступен.

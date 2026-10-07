@@ -89,6 +89,20 @@ class ExpressionTests(unittest.TestCase):
         self.assertEqual(spoken_expression('<emotion=joy> Отлично!</emotion=joy>'), ('Отлично!','joy'))
         self.assertEqual(spoken_expression('<emotion=joy> Отлично!</emotion>'), ('Отлично!','joy'))
 
+    def test_volume_changes_only_speaker_and_persists_zero_and_restoration(self):
+        from reachy_companion.volume import PlaybackVolume
+        a = self.agent()
+        for percent, switch in [(0, 'mute'), (65, 'unmute')]:
+            with patch('reachy_companion.agent.subprocess.run') as run:
+                a.set_volume(percent)
+            self.assertEqual(run.call_args.args[0], ['amixer', '-c', 'Audio', 'sset', 'PCM,0', str(percent)+'%', switch])
+            self.assertEqual(PlaybackVolume(a.volume.path, 95).percent, percent)
+            self.assertTrue(a.microphone.enabled)
+        for bad in [-1, 101, True, 42.5, '50']:
+            with patch('reachy_companion.agent.subprocess.run') as run:
+                with self.assertRaises(ValueError): a.set_volume(bad)
+                run.assert_not_called()
+
     def test_mute_persists_and_invalid_saved_state_stays_muted(self):
         a = self.agent()
         a.set_microphone(False)

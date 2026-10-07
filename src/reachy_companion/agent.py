@@ -49,6 +49,10 @@ class Agent:
         self.turns = 0
         self.calibrated = False
         self.playback_configured = False
+        from .volume import PlaybackVolume
+        self.volume = PlaybackVolume(config.path(config['paths']['data_dir']) / 'volume-state.json',
+                                     self.audio.get('playback_mixer', {}).get('volume_percent', 95))
+        self.volume_lock = threading.Lock()
         self.vad = webrtcvad.Vad(self.audio['vad_mode'])
         from .expression_player import ExpressionPlayer
         self.expressions = ExpressionPlayer(config, self.request, self.stopping)
@@ -71,15 +75,27 @@ class Agent:
                 self.listening.set()
         return {'ok': True, 'microphone_enabled': enabled, 'capture_active': self.capture_active}
 
-    def configure_playback(self):
+    def set_volume(self, percent):
+        from .volume import validate_percent
+        validate_percent(percent)
+        if not self.audio.get('playback_mixer', {}).get('enabled', False):
+            raise ValueError('Playback mixer control is disabled in configuration')
+        with self.volume_lock:
+            self.configure_playback(percent)
+            self.volume.save(percent)
+            self.playback_configured = True
+        return {'ok': True, 'volume_percent': self.volume.percent}
+
+    def configure_playback(self, percent=None):
         settings = self.audio.get('playback_mixer', {})
         if not settings.get('enabled', False):
             return
+        percent = self.volume.percent if percent is None else percent
         subprocess.run(['amixer', '-c', str(settings['card']), 'sset',
-                        settings['control'], str(settings['volume_percent']) + '%'],
+                        settings['control'], str(percent) + '%', 'mute' if percent == 0 else 'unmute'],
                        capture_output=True, check=True, timeout=self.config['timeouts']['http'])
         LOG.info('playback_mixer card=%s control=%s volume=%s%%', settings['card'],
-                 settings['control'], settings['volume_percent'])
+                 settings['control'], percent)
 
     def request(self, base, path, payload=None, timeout=None):
         request = Request(base + path, data=None if payload is None else json.dumps(payload).encode(),
@@ -388,6 +404,11 @@ class Agent:
 def main(config, test_speaker=False):
     logging.basicConfig(level=config['logging']['level'], format='%(asctime)s %(levelname)s %(message)s')
     agent = Agent(config)
+    try:
+        agent.configure_playback()
+        agent.playback_configured = True
+    except Exception:
+        LOG.exception('initial_playback_configuration_failed')
     if test_speaker:
         response = agent.request(config['network']['voice_url'], '/text',
                                  {'text': 'Поздоровайся и скажи, что разговор через локальную модель работает.',
@@ -422,6 +443,8 @@ def main(config, test_speaker=False):
                              'threshold_rms': agent.threshold, 'last_error': agent.last_error,
                              'last_transcript': agent.last_transcript, 'turns': agent.turns,
                              'microphone_enabled': agent.microphone.enabled,
+                             'volume_percent': agent.volume.percent,
+                             'volume_control_enabled': agent.audio.get('playback_mixer', {}).get('enabled', False),
                              'capture_active': agent.capture_active,
                              'microphone_state_error': agent.microphone.error,
                              'expression': agent.expressions.last_expression,
@@ -439,6 +462,11 @@ def main(config, test_speaker=False):
                         raise RuntimeError('Microphone is muted; enable it with the microphone switch')
                     agent.listening.set()
                     value = {'ok': True, 'listening': True}
+                elif self.path == '/volume':
+                    size = int(self.headers.get('Content-Length', 0))
+                    if not 0 < size <= config['limits']['max_agent_request_bytes']:
+                        raise ValueError('Invalid request size')
+                    value = agent.set_volume(json.loads(self.rfile.read(size))['volume_percent'])
                 elif self.path == '/microphone':
                     size = int(self.headers.get('Content-Length', 0))
                     if not 0 < size <= config['limits']['max_agent_request_bytes']:
