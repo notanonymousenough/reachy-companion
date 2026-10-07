@@ -86,6 +86,8 @@ class ExpressionTests(unittest.TestCase):
         self.assertEqual(result['emotion'], 'joy')
         self.assertEqual(updated['messages'][-1]['content'], 'Отлично!')
         self.assertEqual(spoken_expression('<emotion=unknown> Привет'), ('Привет','neutral'))
+        self.assertEqual(spoken_expression('<emotion=joy> Отлично!</emotion=joy>'), ('Отлично!','joy'))
+        self.assertEqual(spoken_expression('<emotion=joy> Отлично!</emotion>'), ('Отлично!','joy'))
 
     def test_mute_persists_and_invalid_saved_state_stays_muted(self):
         a = self.agent()

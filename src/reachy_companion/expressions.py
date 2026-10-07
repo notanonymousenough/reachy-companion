@@ -9,10 +9,11 @@ TAG = re.compile(r'^\s*<emotion=([a-z]+)>\s*', re.I)
 
 def spoken_expression(reply):
     match = TAG.match(reply)
-    if not match:
-        return reply, 'neutral'
-    emotion = match.group(1).lower()
-    return reply[match.end():].strip(), emotion if emotion in EMOTIONS else 'neutral'
+    emotion = match.group(1).lower() if match else 'neutral'
+    # Some local models close a prefix tag as if it were XML. Neither the
+    # opening nor the closing control markup may reach Piper or history.
+    text = re.sub(r'</?emotion(?:=[a-z]+)?>', '', reply, flags=re.I).strip()
+    return text, emotion if emotion in EMOTIONS else 'neutral'
 
 
 def plan(settings, phase, emotion='neutral'):
