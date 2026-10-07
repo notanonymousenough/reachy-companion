@@ -270,3 +270,5 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install-startup.ps1
 Локальный config.local.json и общий secrets/token выдаются при первоначальной настройке, а не скачиваются из Git. На Linux настройка systemd производится install; затем можно просто git pull --ff-only и update.sh ROLE --no-pull. Автозапуск hub/robot — существующие systemd units.
 
 Команды lms проверены по локальному --help и [официальной CLI-документации](https://lmstudio.ai/docs/cli). Сервер запускается с [явным bind и port](https://lmstudio.ai/docs/cli/serve/server-start).
+
+Docker CLI worker использует собственный data/docker-client/config.json без credential helper и фактический endpoint текущего Docker context. Это позволяет собирать публичный базовый образ через SSH Windows, где Desktop helper не имеет доступа к Windows Credential Manager. Пользовательский ~/.docker/config.json не изменяется.

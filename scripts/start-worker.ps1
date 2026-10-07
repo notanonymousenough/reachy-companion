@@ -8,7 +8,7 @@ if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
 }
 function Invoke-WorkerDocker {
     param([string[]]$DockerArguments)
-    & docker @DockerArguments
+    & docker @workerDockerPrefix @DockerArguments
     if ($LASTEXITCODE -ne 0) { throw "Docker command failed: $($DockerArguments[0])" }
 }
 $workerDockerOS = & docker info --format '{{.OSType}}'
@@ -27,6 +27,16 @@ $workerConfigFile = "config.worker.local.json"
 $workerConfigPath = Join-Path $workerRepo $workerConfigFile
 $workerJSON = $workerSettings | ConvertTo-Json -Depth 32
 [System.IO.File]::WriteAllText($workerConfigPath, $workerJSON, [System.Text.UTF8Encoding]::new($false))
+# Public base images do not need the Desktop credential helper, which cannot
+# access the Windows credential vault from an OpenSSH logon session.
+$workerContext = & docker context show
+if ($LASTEXITCODE -ne 0) { throw "Cannot read Docker context." }
+$workerDockerEndpoint = & docker context inspect $workerContext --format '{{.Endpoints.docker.Host}}'
+if ($LASTEXITCODE -ne 0 -or -not $workerDockerEndpoint) { throw "Cannot resolve Docker engine endpoint." }
+$workerClientDirectory = Join-Path $workerRepo ([string]$workerSettings.paths.data_dir + "/docker-client")
+New-Item -ItemType Directory -Force $workerClientDirectory | Out-Null
+[System.IO.File]::WriteAllText((Join-Path $workerClientDirectory "config.json"), '{"auths":{}}', [System.Text.UTF8Encoding]::new($false))
+$workerDockerPrefix = @("--config", $workerClientDirectory, "--host", $workerDockerEndpoint.Trim())
 $workerImage = [string]$workerSettings.container.image
 $workerName = [string]$workerSettings.container.name
 $workerPort = [int]$workerSettings.servers.worker.port
