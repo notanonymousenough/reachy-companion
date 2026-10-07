@@ -46,6 +46,37 @@ class Hub:
         self.robot('/api/move/stop', task)
         raise RuntimeError('Movement timed out; stop requested')
 
+    def agent(self, path, payload=None):
+        request = Request(self.config['network']['agent_url'] + path,
+                          data=None if payload is None else json.dumps(payload).encode(),
+                          headers={'Content-Type': 'application/json',
+                                   'Authorization': 'Bearer ' + self.config.token})
+        with self.http.open(request, timeout=self.config['timeouts']['http']) as response:
+            return json.load(response)
+
+    def expression(self, payload):
+        from .motion_limits import validate_steps
+        settings = self.config['conversation'].get('expressions', {})
+        if not settings.get('enabled', False):
+            return {'ok': True, 'skipped': 'expressions_disabled'}
+        steps = validate_steps(payload['steps'], settings)
+        if not self.lock.acquire(blocking=False):
+            raise RuntimeError('Hub is busy')
+        try:
+            for step in steps:
+                state = self.status()
+                daemon = state['daemon']
+                if daemon['state'] != 'running' or not (daemon.get('backend_status') or {}).get('ready'):
+                    raise RuntimeError('Robot is not ready')
+                if state['ownership']['state'] != 'free' or self.robot('/api/move/running'):
+                    raise RuntimeError('Robot is controlled by another app or movement')
+                if state['robot']['control_mode'] != 'enabled':
+                    raise RuntimeError('Expressions require enabled motors')
+                self.move('/api/move/goto', step)
+            return {'ok': True, 'steps_completed': len(steps)}
+        finally:
+            self.lock.release()
+
     def action(self, name):
         if name not in ('hello', 'wake', 'sleep'):
             raise ValueError('Unknown action')
@@ -139,6 +170,28 @@ def serve(hub):
             self.wfile.write(body)
 
         def do_GET(self):
+            if self.path == '/control':
+                from .control_page import PAGE
+                body = PAGE.encode()
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/html; charset=utf-8')
+                self.send_header('Content-Length', str(len(body)))
+                self.send_header('Cache-Control', 'no-store')
+                self.send_header('Referrer-Policy', 'no-referrer')
+                self.send_header('Content-Security-Policy', "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'")
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if self.path == '/control/status':
+                if not hmac.compare_digest(self.headers.get('Authorization', ''), 'Bearer ' + hub.config.token):
+                    self.reply(401, {'error': 'Bearer token required'})
+                    return
+                try:
+                    value = hub.agent('/status')
+                    self.reply(200, {key: value.get(key) for key in ('microphone_enabled', 'capture_active', 'phase', 'expression', 'expression_error')})
+                except Exception:
+                    self.reply(503, {'error': 'Robot agent unavailable'})
+                return
             if self.path == '/health':
                 self.reply(200, {'ok': True, 'service': 'reachy-hub'})
             elif self.path == '/status':
@@ -153,6 +206,26 @@ def serve(hub):
             token = self.headers.get('Authorization', '')
             if not hmac.compare_digest(token, 'Bearer ' + hub.config.token):
                 self.reply(401, {'error': 'Bearer token required'})
+                return
+            if self.path in ('/actions/expression', '/control/microphone'):
+                try:
+                    size = int(self.headers.get('Content-Length', 0))
+                    if not 0 < size <= hub.config['limits']['max_agent_request_bytes']:
+                        raise ValueError('Invalid request size')
+                    payload = json.loads(self.rfile.read(size))
+                    if not isinstance(payload, dict):
+                        raise ValueError('Expected JSON object')
+                    if self.path == '/control/microphone':
+                        if set(payload) != {'enabled'} or not isinstance(payload['enabled'], bool):
+                            raise ValueError('enabled must be boolean')
+                        value = hub.agent('/microphone', payload)
+                    else:
+                        value = hub.expression(payload)
+                    self.reply(200, value)
+                except (ValueError, KeyError, TypeError) as exc:
+                    self.reply(400, {'error': str(exc)})
+                except Exception as exc:
+                    self.reply(409, {'error': str(exc)})
                 return
             actions = {'/actions/hello': 'hello', '/actions/wake': 'wake', '/actions/sleep': 'sleep'}
             if self.path not in actions:

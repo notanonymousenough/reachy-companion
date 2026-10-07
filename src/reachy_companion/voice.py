@@ -153,7 +153,13 @@ class Pipeline:
         else:
             self.phase = 'thinking'
             reply, pending = self.answer(text, session)
-        return {'transcript': text, 'reply': reply, 'command': command}, session, pending
+        from .expressions import spoken_expression
+        reply, emotion = spoken_expression(reply)
+        if pending is not None and not reply:
+            raise RuntimeError('Backend returned an expression without spoken text')
+        if pending is not None:
+            pending['messages'][-1]['content'] = reply
+        return {'transcript': text, 'reply': reply, 'command': command, 'emotion': emotion}, session, pending
 
     def completed(self, result, session, pending, started):
         if pending is not None:
@@ -256,13 +262,25 @@ def main(config, worker=False):
         def do_POST(self):
             if not self.authorized():
                 return
+            if self.path == '/expression/plan':
+                try:
+                    from .expressions import plan
+                    size = int(self.headers.get('Content-Length', 0))
+                    if not 0 < size <= config['limits']['max_agent_request_bytes']:
+                        raise ValueError('Invalid expression request size')
+                    payload = json.loads(self.rfile.read(size))
+                    self.reply(200, plan(config['conversation'].get('expressions', {}),
+                                         payload['phase'], payload.get('emotion', 'neutral')))
+                except (ValueError, KeyError, TypeError) as exc:
+                    self.reply(400, {'error': str(exc)})
+                return
             if self.path in ('/stream/turn', '/stream/text', '/stream/say'):
                 self.stream_reply()
                 return
-            if worker and self.path in ('/pause', '/resume', '/robot/ask', '/robot/say'):
+            if worker and self.path in ('/pause', '/resume', '/microphone', '/robot/ask', '/robot/say'):
                 self.reply(404, {'error': 'Robot control is available through hub only'})
                 return
-            if self.path not in ('/turn', '/text', '/say', '/reset', '/pause', '/resume', '/robot/ask', '/robot/say'):
+            if self.path not in ('/turn', '/text', '/say', '/reset', '/pause', '/resume', '/microphone', '/robot/ask', '/robot/say'):
                 self.reply(404, {'error': 'Not found'})
                 return
             try:
@@ -273,8 +291,8 @@ def main(config, worker=False):
                 payload = json.loads(self.rfile.read(size))
                 if self.path in ('/robot/ask', '/robot/say'):
                     value = pipeline.request(pipeline.config['network']['agent_url'] + self.path.removeprefix('/robot'), payload, True, timeout=config['timeouts']['client'])
-                elif self.path in ('/pause', '/resume'):
-                    value = pipeline.request(pipeline.config['network']['agent_url'] + self.path, {}, True)
+                elif self.path in ('/pause', '/resume', '/microphone'):
+                    value = pipeline.request(pipeline.config['network']['agent_url'] + self.path, payload if self.path == '/microphone' else {}, True)
                 elif self.path == '/reset':
                     if not pipeline.lock.acquire(blocking=False):
                         raise RuntimeError('Conversation pipeline is busy')

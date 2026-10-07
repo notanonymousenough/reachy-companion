@@ -102,7 +102,7 @@ def handler_for(router):
             if not self.authorized():
                 return
             if self.path not in ('/turn', '/text', '/say', '/reset', '/pause', '/resume',
-                                 '/robot/ask', '/robot/say', '/stream/turn', '/stream/text', '/stream/say'):
+                                 '/robot/ask', '/robot/say', '/microphone', '/expression/plan', '/stream/turn', '/stream/text', '/stream/say'):
                 self.close_connection = True
                 self.reply(404, {'error': 'Not found'})
                 return
@@ -119,7 +119,7 @@ def handler_for(router):
                 self.close_connection = True
                 self.reply(400, {'error': 'Invalid request body'})
                 return
-            if self.path in ('/pause', '/resume', '/robot/ask', '/robot/say'):
+            if self.path in ('/pause', '/resume', '/microphone', '/robot/ask', '/robot/say'):
                 self.relay(config['network']['agent_url'], self.path.removeprefix('/robot'), body)
             else:
                 self.relay(config['network']['compute_url'], self.path, body)

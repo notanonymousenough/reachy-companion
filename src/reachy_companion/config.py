@@ -23,6 +23,8 @@ class Config:
             # Existing private configs can predate the optional speaker EQ.
             if 'playback_eq' in values.get('tts', {}) and 'playback_eq' not in self.data['tts']:
                 self.data['tts']['playback_eq'] = dict(values['tts']['playback_eq'])
+            if 'expressions' in values.get('conversation', {}) and 'expressions' not in self.data['conversation']:
+                self.data['conversation']['expressions'] = values['conversation']['expressions']
             def merge(target, patch):
                 for key, value in patch.items():
                     if key not in target:
@@ -95,6 +97,19 @@ class Config:
                     raise ValueError('Invalid speaker EQ gain')
             if not 0 <= eq['headroom_db'] <= 12:
                 raise ValueError('Invalid speaker EQ headroom')
+        expressions = self.data['conversation'].get('expressions', {})
+        if expressions.get('enabled', False):
+            from .expressions import EMOTIONS, PHASES, plan
+            if not 0 < expressions['max_head_degrees'] <= 15 or not 0 < expressions['max_antenna_degrees'] <= 35:
+                raise ValueError('Expression angle limits are too large')
+            if not .5 <= expressions['duration_seconds'] <= 1.5 or not .1 <= expressions['settle_seconds'] <= 2:
+                raise ValueError('Invalid expression timing')
+            if not 2 <= expressions['repeat_seconds'] <= 10 or not 1 <= expressions['max_steps'] <= 4 or not 1 <= expressions['max_total_seconds'] <= 4:
+                raise ValueError('Invalid expression sequence limits')
+            from .motion_limits import validate_steps
+            for phase in PHASES:
+                for emotion in EMOTIONS:
+                    validate_steps(plan(expressions, phase, emotion)['steps'], expressions)
         for role in ('hub', 'robot', 'worker'):
             item = self.data['deployment'][role]
             if not Path(item['root']).is_absolute() or '\n' in item['root']:

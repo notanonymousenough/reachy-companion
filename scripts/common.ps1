@@ -25,6 +25,9 @@ function Read-CompanionSettings {
         if ($profile.PSObject.Properties['tts'] -and $profile.tts.PSObject.Properties['playback_eq'] -and -not $settings.tts.PSObject.Properties['playback_eq']) {
             $settings.tts | Add-Member -NotePropertyName playback_eq -NotePropertyValue $profile.tts.playback_eq
         }
+        if ($profile.PSObject.Properties['conversation'] -and $profile.conversation.PSObject.Properties['expressions'] -and -not $settings.conversation.PSObject.Properties['expressions']) {
+            $settings.conversation | Add-Member -NotePropertyName expressions -NotePropertyValue $profile.conversation.expressions
+        }
         Merge-CompanionSettings $settings $profile
     }
     return $settings

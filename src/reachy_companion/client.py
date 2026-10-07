@@ -13,6 +13,13 @@ def request(config, url, payload=None, timeout=None):
 
 def control(config, role, command, text=None):
     network = config['network']
+    if role == 'hub' and command == 'control':
+        import webbrowser
+        from urllib.parse import quote
+        webbrowser.open(network['hub_url'] + '/control#' + quote(config.token, safe=''))
+        print('Control page opened: ' + network['hub_url'] + '/control')
+        return 0
+
     if role == 'hub':
         base = network['hub_url']
         path = '/status' if command == 'status' else '/actions/' + command
@@ -21,6 +28,8 @@ def control(config, role, command, text=None):
         base = network['voice_url']
         path = ('/robot/' if command in ('ask', 'say') else '/') + command
         payload = None if command == 'status' else {'text': text, 'session': config['conversation']['session']}
+        if command in ('microphone-on', 'microphone-off'):
+            path, payload = '/microphone', {'enabled': command == 'microphone-on'}
     else:
         raise ValueError('Unknown client role')
     try:

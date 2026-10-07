@@ -24,6 +24,9 @@ foreach ($characterFile in ($characterFiles | Select-Object -Unique)) {
     if ($characterPatch.PSObject.Properties['tts'] -and $characterPatch.tts.PSObject.Properties['playback_eq'] -and -not $characterSettings.tts.PSObject.Properties['playback_eq']) {
         $characterSettings.tts | Add-Member -NotePropertyName playback_eq -NotePropertyValue $characterPatch.tts.playback_eq
     }
+    if ($characterPatch.PSObject.Properties['conversation'] -and $characterPatch.conversation.PSObject.Properties['expressions'] -and -not $characterSettings.conversation.PSObject.Properties['expressions']) {
+        $characterSettings.conversation | Add-Member -NotePropertyName expressions -NotePropertyValue $characterPatch.conversation.expressions
+    }
     Merge-CharacterSettings -Target $characterSettings -Patch $characterPatch
     $characterPlans += [pscustomobject]@{ Path = $characterFile; Settings = $characterSettings }
 }

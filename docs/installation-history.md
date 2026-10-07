@@ -191,3 +191,10 @@ Windows: powershell -ExecutionPolicy Bypass -File scripts/start.ps1. Скрип�
 Пользователь подтвердил: native-проба стала чистой, Reachy тоже чище, но динамик звучит глухо «как из банки». Добавлен настраиваемый EQ только для output stream на ПК: highpass 100 Hz, 250 Hz -3 dB, 2500 Hz +3 dB, treble +2 dB, peak headroom 3 dB. Native WAV и микрофон не меняются. Настройки в tts.playback_eq общего конфига и profiles/friend.json. Совместимость со старым локальным конфигом обеспечена в Python и Windows reader.
 
 Проверены 17 тестов и реальный SoX на двух тонах: отношение уровня 2,5 kHz к 250 Hz увеличилось на 6,83 dB, пик нормализован до 0,708 полной шкалы. Это проверка DSP, а не измерение акустики динамика.
+
+
+## Эмоции и переключатель микрофона, 2026-10-07
+
+Добавлены `expressions.py` (worker), `expression_player.py` (robot transport), `motion_limits.py` (проверка маршрутизируемых команд) и `microphone.py` (сохранённое состояние). Worker готовит позы и очищает emotion tags до TTS. Hub получил authenticated маршрут последовательностей и мобильную `/control`; robot agent связывает фазы разговора с движениями и прекращает захват/озвучивание при mute. Скрипт `control.ps1` и CLI `hub control` открывают страницу с автоматическим входом.
+
+Настройки добавлены в версионируемый профиль, совместимость private configs реализована в Python и PowerShell. Пакеты, factory daemon, .asoundrc, firewall и SSH-конфигурация не меняются. Для развёртывания используются только git pull и прежние update/start scripts. Переключатель переживает перезапуск агента и хранится только в data на самом Reachy.
