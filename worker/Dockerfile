@@ -3,7 +3,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends sox libgomp1 li
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY requirements/worker.lock /app/requirements/worker.lock
-RUN pip install --no-cache-dir -r /app/requirements/worker.lock
+RUN --mount=type=cache,target=/root/.cache/pip \
+    for attempt in 1 2 3; do \
+      pip install --retries 5 --resume-retries 5 -r /app/requirements/worker.lock && exit 0; \
+    done; exit 1
 COPY pyproject.toml /app/
 COPY src /app/src
 RUN pip install --no-cache-dir --no-deps /app
