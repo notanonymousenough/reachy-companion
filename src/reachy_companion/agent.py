@@ -314,8 +314,9 @@ class Agent:
         greeted = False
         while not self.stopping.is_set():
             if not self.listening.wait(timeout=1):
-                self.phase = 'paused'
-                self.expressions.set('neutral')
+                if not self.audio_lock.locked():
+                    self.phase = 'paused'
+                    self.expressions.set('neutral')
                 continue
             try:
                 with self.audio_lock:
