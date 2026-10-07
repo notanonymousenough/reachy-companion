@@ -139,13 +139,13 @@
     "playback_eq": {
       "enabled": true,
       "highpass_hz": 100,
-      "bass_hz": 250,
-      "bass_width_q": 1.0,
-      "bass_db": -3.0,
-      "presence_hz": 2500,
+      "bass_hz": 400,
+      "bass_width_q": 0.8,
+      "bass_db": -4.5,
+      "presence_hz": 3000,
       "presence_width_q": 1.0,
       "presence_db": 3.0,
-      "treble_db": 2.0,
+      "treble_db": 4.0,
       "headroom_db": 3.0
     }
   },
