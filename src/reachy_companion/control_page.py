@@ -5,7 +5,7 @@ PAGE = '''<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewp
 <div id="controls" hidden><div id="status" role="status" aria-live="polite">Подключение…</div><button id="switch" disabled>Проверяем микрофон…</button><p><small>При выключении Ричи перестаёт записывать и отвечать. Настройка сохраняется после перезапуска.</small></p><button id="share">Ссылка для телефона</button><input id="sharelink" readonly hidden aria-label="Ссылка для управления"><button id="logout">Закрыть доступ на этом устройстве</button></div></main>
 <script>
 let token='',state=null,busy=false;
-try{token=decodeURIComponent(location.hash.slice(1))||sessionStorage.getItem('reachy-control-token')||''}catch(e){}
+try{const fragment=decodeURIComponent(location.hash.slice(1));token=fragment||sessionStorage.getItem('reachy-control-token')||'';if(fragment)sessionStorage.setItem('reachy-control-token',token)}catch(e){}
 history.replaceState(null,'',location.pathname);
 const el=id=>document.getElementById(id);
 function show(){el('login').hidden=!!token;el('controls').hidden=!token}
