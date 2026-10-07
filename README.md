@@ -272,3 +272,5 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install-startup.ps1
 Команды lms проверены по локальному --help и [официальной CLI-документации](https://lmstudio.ai/docs/cli). Сервер запускается с [явным bind и port](https://lmstudio.ai/docs/cli/serve/server-start).
 
 Docker CLI worker использует собственный data/docker-client/config.json без credential helper и фактический endpoint текущего Docker context. Это позволяет собирать публичный базовый образ через SSH Windows, где Desktop helper не имеет доступа к Windows Credential Manager. Пользовательский ~/.docker/config.json не изменяется.
+
+При запуске start.ps1 через SSH Windows весь стек запускается задачей Task Scheduler вне дерева процессов OpenSSH: LM Studio продолжает работать после выхода из SSH. Тот же task запускается при входе User; пароль не сохраняется. Журнал запуска — data/startup.log с ограничением из logging.max_bytes; статус/код последнего запуска — Get-ScheduledTaskInfo.

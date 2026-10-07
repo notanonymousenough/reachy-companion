@@ -8,8 +8,12 @@ if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
 }
 function Invoke-WorkerDocker {
     param([string[]]$DockerArguments)
-    & docker @workerDockerPrefix @DockerArguments
-    if ($LASTEXITCODE -ne 0) { throw "Docker command failed: $($DockerArguments[0])" }
+    $previousDockerConfig = $env:DOCKER_CONFIG
+    try {
+        $env:DOCKER_CONFIG = $workerClientDirectory
+        & docker @workerDockerPrefix @DockerArguments
+        if ($LASTEXITCODE -ne 0) { throw "Docker command failed: $($DockerArguments[0])" }
+    } finally { $env:DOCKER_CONFIG = $previousDockerConfig }
 }
 $workerDockerOS = & docker info --format '{{.OSType}}'
 if ($LASTEXITCODE -ne 0 -or $workerDockerOS.Trim() -ne "linux") {
@@ -35,7 +39,7 @@ $workerDockerEndpoint = & docker context inspect $workerContext --format '{{.End
 if ($LASTEXITCODE -ne 0 -or -not $workerDockerEndpoint) { throw "Cannot resolve Docker engine endpoint." }
 $workerClientDirectory = Join-Path $workerRepo ([string]$workerSettings.paths.data_dir + "/docker-client")
 New-Item -ItemType Directory -Force $workerClientDirectory | Out-Null
-[System.IO.File]::WriteAllText((Join-Path $workerClientDirectory "config.json"), '{"auths":{}}', [System.Text.UTF8Encoding]::new($false))
+[System.IO.File]::WriteAllText((Join-Path $workerClientDirectory "config.json"), '{"auths":{"https://index.docker.io/v1/":{}}}', [System.Text.UTF8Encoding]::new($false))
 $workerDockerPrefix = @("--config", $workerClientDirectory, "--host", $workerDockerEndpoint.Trim())
 $workerImage = [string]$workerSettings.container.image
 $workerName = [string]$workerSettings.container.name

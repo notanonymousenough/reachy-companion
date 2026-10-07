@@ -6,7 +6,7 @@ Set-Location $startupRepo
 . "$PSScriptRoot/common.ps1"
 $startupSettings = Read-CompanionSettings $Configuration
 $startupUser = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-$startupArguments = '-NoProfile -ExecutionPolicy Bypass -File "' + "$PSScriptRoot/start.ps1" + '" -Configuration "' + $Configuration + '" -NoPull'
+$startupArguments = '-NoProfile -ExecutionPolicy Bypass -File "' + "$PSScriptRoot/start.ps1" + '" -Configuration "' + $Configuration + '" -NoPull -InTask'
 $startupAction = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $startupArguments -WorkingDirectory $startupRepo
 $startupTrigger = New-ScheduledTaskTrigger -AtLogOn -User $startupUser
 $startupPrincipal = New-ScheduledTaskPrincipal -UserId $startupUser -LogonType Interactive -RunLevel Limited

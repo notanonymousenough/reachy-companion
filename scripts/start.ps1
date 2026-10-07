@@ -1,4 +1,4 @@
-param([string]$Configuration = 'config.local.json', [switch]$NoPull)
+param([string]$Configuration = 'config.local.json', [switch]$NoPull, [switch]$InTask)
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $companionRepo = Split-Path -Parent $PSScriptRoot
@@ -16,6 +16,34 @@ if (-not $NoPull) {
     if ($LASTEXITCODE -ne 0) { throw 'Startup failed after pull.' }
     exit 0
 }
+if ($env:SSH_CONNECTION -and -not $InTask) {
+    # Task Scheduler starts outside the OpenSSH process job, so LM Studio
+    # survives when the SSH session disconnects. No password is stored.
+    & "$PSScriptRoot/install-startup.ps1" -Configuration $Configuration
+    $taskName = [string]$settings.runtime.windows.startup_task
+    $taskStarted = Get-Date
+    Start-ScheduledTask -TaskName $taskName
+    $taskDeadline = $taskStarted.AddSeconds([int]$settings.runtime.windows.startup_timeout)
+    while ((Get-Date) -lt $taskDeadline) {
+        $task = Get-ScheduledTask -TaskName $taskName
+        $info = Get-ScheduledTaskInfo -TaskName $taskName
+        if ($info.LastRunTime -ge $taskStarted.AddSeconds(-2) -and $task.State -ne 'Running') {
+            if ($info.LastTaskResult -ne 0) { throw "Startup task failed ($($info.LastTaskResult)); see data/startup.log." }
+            Write-Host 'Reachy stack ready; processes will survive SSH disconnect.'
+            exit 0
+        }
+        Start-Sleep -Seconds 2
+    }
+    throw 'Startup task timeout; see data/startup.log and Task Scheduler.'
+}
+$startupData = Join-Path $companionRepo ([string]$settings.paths.data_dir)
+New-Item -ItemType Directory -Force $startupData | Out-Null
+$startupLog = Join-Path $startupData 'startup.log'
+if ((Test-Path $startupLog) -and (Get-Item $startupLog).Length -gt $settings.logging.max_bytes) {
+    Move-Item -Force $startupLog ($startupLog + '.1')
+}
+Start-Transcript -Path $startupLog -Append | Out-Null
+try {
 $deadline = (Get-Date).AddSeconds([int]$settings.runtime.windows.startup_timeout)
 $initialDockerReady = $false
 try {
@@ -54,3 +82,5 @@ $probe = Invoke-RestMethod -Uri "http://127.0.0.1:$($llmURL.Port)/v1/completions
 if (-not $probe.choices) { throw 'LLM did not return a completion.' }
 & "$PSScriptRoot/start-worker.ps1" -Configuration $Configuration
 Write-Host 'Reachy stack ready: LLM + compute worker.'
+
+} finally { Stop-Transcript | Out-Null }
