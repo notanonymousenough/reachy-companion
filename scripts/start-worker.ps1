@@ -46,12 +46,14 @@ $workerName = [string]$workerSettings.container.name
 $workerPort = [int]$workerSettings.servers.worker.port
 $workerHubAddress = [System.Net.IPAddress]::Parse([string]$workerSettings.security.robot.hub_source_ipv4).ToString()
 $workerMount = "type=bind,source=$workerRepo,target=/config"
+$workerGPU = @()
+if ($workerSettings.conversation.recognition.device -eq 'cuda') { $workerGPU = @('--gpus', [string]$workerSettings.container.gpu) }
 $workerEnv = @("-e", "OMP_NUM_THREADS=$($workerSettings.container.cpu_threads)")
 foreach ($workerProvider in @("openclaw", "hermes")) {
     $workerEnv += @("-e", [string]$workerSettings.brains.$workerProvider.api_key_env)
 }
 Invoke-WorkerDocker -DockerArguments @("build", "-f", "worker/Dockerfile", "-t", $workerImage, ".")
-Invoke-WorkerDocker -DockerArguments (@("run", "--rm", "--mount", $workerMount, "--read-only", "--tmpfs", "/tmp") + $workerEnv + @($workerImage, "--config", "/config/$workerConfigFile", "worker", "prepare"))
+Invoke-WorkerDocker -DockerArguments (@("run", "--rm", "--mount", $workerMount, "--read-only", "--tmpfs", "/tmp") + $workerGPU + $workerEnv + @($workerImage, "--config", "/config/$workerConfigFile", "worker", "prepare"))
 # Only replace our named container. Model files and configuration stay on disk.
 $workerExisting = & docker ps -a --filter "name=^/$workerName$" --format '{{.Names}}'
 if ($LASTEXITCODE -ne 0) { throw "Cannot list Docker containers." }
@@ -59,7 +61,7 @@ if ($workerExisting -contains $workerName) {
     Invoke-WorkerDocker -DockerArguments @("rm", "-f", $workerName)
 }
 $workerBinding = "$($workerSettings.container.publish_address):${workerPort}:${workerPort}"
-Invoke-WorkerDocker -DockerArguments (@("run", "-d", "--name", $workerName, "--restart", "unless-stopped", "-p", $workerBinding, "--mount", $workerMount, "--read-only", "--tmpfs", "/tmp") + $workerEnv + @($workerImage, "--config", "/config/$workerConfigFile", "worker", "serve"))
+Invoke-WorkerDocker -DockerArguments (@("run", "-d", "--name", $workerName, "--restart", "unless-stopped", "-p", $workerBinding, "--mount", $workerMount, "--read-only", "--tmpfs", "/tmp") + $workerGPU + $workerEnv + @($workerImage, "--config", "/config/$workerConfigFile", "worker", "serve"))
 $workerPrincipal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
 $workerRuleName = [string]$workerSettings.container.windows_firewall_rule
 if ($workerPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {

@@ -79,8 +79,10 @@ def fetch(url, target, expected=''):
 
 def download_models(config):
     stt, tts = config['models']['stt'], config['models']['tts']
+    from .recognition import prepare
+    prepare(config)
     destination = config.path(stt['path'])
-    if not destination.exists():
+    if config['conversation'].get('recognition', {}).get('backend') != 'faster_whisper' and not destination.exists():
         with tempfile.TemporaryDirectory() as temporary:
             archive = Path(temporary) / 'model.zip'
             fetch(stt['download_url'], archive, stt['sha256'])

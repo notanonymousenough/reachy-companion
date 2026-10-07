@@ -189,7 +189,7 @@
       "enabled": true,
       "repeat_seconds": 2.4,
       "settle_seconds": 0.35,
-      "duration_seconds": 0.65,
+      "duration_seconds": 0.55,
       "max_head_degrees": 12,
       "max_antenna_degrees": 30,
       "max_steps": 3,
@@ -268,14 +268,131 @@
             -24,
             24
           ]
+        },
+        "confident": {
+          "pitch": -2,
+          "roll": 0,
+          "yaw": 3,
+          "antennas": [
+            -15,
+            15
+          ]
+        },
+        "amused": {
+          "pitch": -2,
+          "roll": -5,
+          "yaw": 0,
+          "antennas": [
+            -18,
+            12
+          ]
+        },
+        "concerned": {
+          "pitch": 3,
+          "roll": 3,
+          "yaw": 0,
+          "antennas": [
+            10,
+            -10
+          ]
+        },
+        "thoughtful": {
+          "pitch": 2,
+          "roll": 6,
+          "yaw": -2,
+          "antennas": [
+            -12,
+            -12
+          ]
+        },
+        "apologetic": {
+          "pitch": 5,
+          "roll": -3,
+          "yaw": 0,
+          "antennas": [
+            12,
+            -12
+          ]
+        },
+        "excited": {
+          "pitch": -5,
+          "roll": 2,
+          "yaw": 0,
+          "antennas": [
+            -24,
+            24
+          ]
         }
+      },
+      "speech_sync": {
+        "enabled": true,
+        "phoneme_alignments": true,
+        "min_cue_interval_seconds": 0.75,
+        "max_cues": 160,
+        "amplitude_degrees": 2,
+        "gestures": [
+          "auto",
+          "nod",
+          "shake",
+          "tilt",
+          "perk",
+          "settle"
+        ]
       }
     },
     "barge_in": {
       "enabled": true,
-      "min_voiced_chunks": 6,
-      "threshold_multiplier": 2.0,
-      "warmup_chunks": 9
+      "min_voiced_chunks": 4,
+      "threshold_multiplier": 1.4,
+      "warmup_chunks": 6,
+      "confirm_with_stt": true,
+      "echo_word_overlap": 0.75
+    },
+    "recognition": {
+      "backend": "faster_whisper",
+      "repository": "Systran/faster-whisper-small",
+      "revision": "536b0662742c02347bc0e980a01041f333bce120",
+      "path": "models/whisper-small",
+      "device": "cuda",
+      "compute_type": "int8_float16",
+      "language": "ru",
+      "beam_size": 3,
+      "cpu_threads": 4,
+      "initial_prompt": "Разговор по-русски с роботом Ричи, Reachy Mini.",
+      "no_speech_threshold": 0.6,
+      "log_prob_threshold": -1.0,
+      "vad_filter": true,
+      "sha256": "3e305921506d8872816023e4c273e75d2419fb89b24da97b4fe7bce14170d671"
+    },
+    "interaction": {
+      "resume_after_empty_seconds": 3.0,
+      "stop_phrases": [
+        "замолчи",
+        "молчи",
+        "заткнись",
+        "хватит говорить",
+        "перестань говорить",
+        "не говори",
+        "помолчи",
+        "тишина",
+        "стоп"
+      ],
+      "acknowledgements": {
+        "enabled": true,
+        "delay_seconds": 0.8,
+        "phrases": {
+          "question": "Секунду.",
+          "request": "Сейчас разберёмся.",
+          "support": "Я слушаю.",
+          "chat": "Угу."
+        }
+      },
+      "classifier": {
+        "provider": "rules",
+        "model": "",
+        "timeout_seconds": 2,
+        "max_tokens": 100
+      }
     }
   },
   "audio": {
@@ -347,7 +464,9 @@
     "publish_address": "0.0.0.0",
     "cpu_threads": 4,
     "desktop_llm_base_url": "http://host.docker.internal:1234/v1",
-    "windows_firewall_rule": "Reachy Companion compute from hub"
+    "windows_firewall_rule": "Reachy Companion compute from hub",
+    "gpu": "all",
+    "startup_timeout_seconds": 900
   },
   "runtime": {
     "profile": "profiles/friend.json",
@@ -365,5 +484,10 @@
       "startup_timeout": 180,
       "startup_task": "Reachy Companion"
     }
+  },
+  "power": {
+    "reminder_enabled": true,
+    "remind_after_minutes": 120,
+    "state_file": "data/charge-reminder.json"
   }
 }

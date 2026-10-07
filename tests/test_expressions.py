@@ -34,6 +34,7 @@ class ExpressionTests(unittest.TestCase):
             from reachy_companion.agent import Agent
         self.config.data['conversation']['expressions']['enabled'] = False
         self.config.data['conversation']['barge_in']['enabled'] = False
+        self.config.data['conversation']['barge_in']['confirm_with_stt'] = False
         a = Agent(self.config)
         self.addCleanup(a.stopping.set)
         return a
@@ -131,7 +132,7 @@ class ExpressionTests(unittest.TestCase):
         triggered = []
         with patch('reachy_companion.agent.subprocess.Popen', return_value=process), \
              patch('reachy_companion.agent.selectors.DefaultSelector', return_value=selector):
-            pcm = a.capture(during_reply=True, on_speech=lambda: triggered.append(len(reads)))
+            pcm = a.capture(during_reply=True, on_speech=lambda pcm: triggered.append(len(reads)))
         self.assertEqual(triggered, [18])
         self.assertTrue(pcm)
         process.terminate.assert_called_once()

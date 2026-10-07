@@ -29,6 +29,8 @@ def main():
                         '-p', settings['publish_address'] + ':' + str(port) + ':' + str(port)]
         else:
             command += ['--rm']
+        if config['conversation'].get('recognition', {}).get('device') == 'cuda':
+            command += ['--gpus', settings['gpu']]
         command += ['--mount', 'type=bind,source=' + str(config.root) + ',target=/config',
                     '--read-only', '--tmpfs', '/tmp', '-e', 'OMP_NUM_THREADS=' + str(settings['cpu_threads'])]
         # Pass named variables without exposing their VALUES on the command line.

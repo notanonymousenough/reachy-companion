@@ -198,3 +198,10 @@ Windows: powershell -ExecutionPolicy Bypass -File scripts/start.ps1. Скрип�
 Добавлены `expressions.py` (worker), `expression_player.py` (robot transport), `motion_limits.py` (проверка маршрутизируемых команд) и `microphone.py` (сохранённое состояние). Worker готовит позы и очищает emotion tags до TTS. Hub получил authenticated маршрут последовательностей и мобильную `/control`; robot agent связывает фазы разговора с движениями и прекращает захват/озвучивание при mute. Скрипт `control.ps1` и CLI `hub control` открывают страницу с автоматическим входом.
 
 Настройки добавлены в версионируемый профиль, совместимость private configs реализована в Python и PowerShell. Пакеты, factory daemon, .asoundrc, firewall и SSH-конфигурация не меняются. Для развёртывания используются только git pull и прежние update/start scripts. Переключатель переживает перезапуск агента и хранится только в data на самом Reachy.
+
+
+### Распознавание Whisper и выразительная речь (2026-10-07)
+
+Добавлены GPU-зависимости CTranslate2/CUDA/cuDNN и Faster Whisper в `requirements/worker.lock`, Docker получает GPU через `--gpus all`. Команда обновления Windows остаётся `powershell -ExecutionPolicy Bypass -File .\scripts\start.ps1`: она подтягивает Git, пересобирает worker, проверяет/скачивает Whisper и прогревает CUDA. Основная Qwen и её контекст 32768 сохраняются. На хабе выполняется `./scripts/update.sh hub`, на роботе — `./scripts/update.sh robot`. Заводской daemon, прошивка, AEC-параметры, ALSA и firewall этим обновлением не меняются.
+
+Код робота дополнен буфером непрозвучавшего PCM, подтверждением перебивания через STT на ПК и продолжением после пустой фразы. Голосовая команда «замолчи» не выключает микрофон; выключение микрофона отменяет буфер. Речевые движения приходят от worker по таймингам Piper, параметры и дополнительные эмоции хранятся в профиле. На панели хаба добавлен таймер напоминания о зарядке; он не измеряет батарею.

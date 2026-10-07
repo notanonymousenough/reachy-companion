@@ -3,6 +3,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $characterRepo = Split-Path -Parent $PSScriptRoot
 Set-Location $characterRepo
+. "$PSScriptRoot/common.ps1"
 $characterPatch = Get-Content -Raw -Encoding UTF8 $Profile | ConvertFrom-Json
 function Merge-CharacterSettings {
     param($Target, $Patch)
@@ -21,18 +22,8 @@ if (Test-Path "config.worker.local.json") { $characterFiles += "config.worker.lo
 $characterPlans = @()
 foreach ($characterFile in ($characterFiles | Select-Object -Unique)) {
     $characterSettings = Get-Content -Raw -Encoding UTF8 $characterFile | ConvertFrom-Json
-    if ($characterPatch.PSObject.Properties['tts'] -and $characterPatch.tts.PSObject.Properties['playback_eq'] -and -not $characterSettings.tts.PSObject.Properties['playback_eq']) {
-        $characterSettings.tts | Add-Member -NotePropertyName playback_eq -NotePropertyValue $characterPatch.tts.playback_eq
-    }
-    if ($characterPatch.PSObject.Properties['conversation'] -and $characterPatch.conversation.PSObject.Properties['expressions'] -and -not $characterSettings.conversation.PSObject.Properties['expressions']) {
-        $characterSettings.conversation | Add-Member -NotePropertyName expressions -NotePropertyValue $characterPatch.conversation.expressions
-    }
-    if ($characterPatch.PSObject.Properties['conversation'] -and $characterPatch.conversation.PSObject.Properties['barge_in'] -and -not $characterSettings.conversation.PSObject.Properties['barge_in']) {
-        $characterSettings.conversation | Add-Member -NotePropertyName barge_in -NotePropertyValue $characterPatch.conversation.barge_in
-    }
-    if ($characterPatch.PSObject.Properties['conversation'] -and $characterPatch.conversation.PSObject.Properties['barge_in'] -and $characterPatch.conversation.barge_in.PSObject.Properties['warmup_chunks'] -and -not $characterSettings.conversation.barge_in.PSObject.Properties['warmup_chunks']) {
-        $characterSettings.conversation.barge_in | Add-Member -NotePropertyName warmup_chunks -NotePropertyValue $characterPatch.conversation.barge_in.warmup_chunks
-    }
+    $defaults = Get-Content -Raw -Encoding UTF8 (Join-Path $PSScriptRoot '../config.example.json') | ConvertFrom-Json
+    Add-CompanionDefaults $characterSettings $defaults
     Merge-CharacterSettings -Target $characterSettings -Patch $characterPatch
     $characterPlans += [pscustomobject]@{ Path = $characterFile; Settings = $characterSettings }
 }

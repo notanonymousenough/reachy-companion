@@ -12,6 +12,24 @@ class Config:
                                                        'config.local.json')).expanduser().resolve()
         self.root = self.filename.parent
         self.data = json.loads(self.filename.read_text())
+        # Only known optional settings may be introduced by a newer profile.
+        def fill(target, defaults):
+            import copy
+            for key, value in defaults.items():
+                if key not in target:
+                    target[key] = copy.deepcopy(value)
+                elif isinstance(value, dict) and isinstance(target[key], dict):
+                    fill(target[key], value)
+        example_path = self.root / 'config.example.json'
+        defaults = json.loads(example_path.read_text()) if example_path.exists() else {}
+        for section, optional in [('tts', ('playback_eq',)),
+                                  ('conversation', ('expressions', 'barge_in', 'recognition', 'interaction'))]:
+            for key in optional:
+                if key in defaults.get(section, {}):
+                    fill(self.data[section], {key: defaults[section][key]})
+        for section in ('power', 'container'):
+            if section in defaults:
+                fill(self.data, {section: defaults[section]})
         profile = self.data.get('runtime', {}).get('profile', '')
         if profile:
             profile_path = (self.root / profile).resolve()
@@ -20,15 +38,6 @@ class Config:
             values = json.loads(profile_path.read_text())
             if not isinstance(values, dict) or set(values) - {'llm', 'tts', 'conversation'}:
                 raise ValueError('Profile may only change llm, tts and conversation')
-            # Existing private configs can predate the optional speaker EQ.
-            if 'playback_eq' in values.get('tts', {}) and 'playback_eq' not in self.data['tts']:
-                self.data['tts']['playback_eq'] = dict(values['tts']['playback_eq'])
-            if 'expressions' in values.get('conversation', {}) and 'expressions' not in self.data['conversation']:
-                self.data['conversation']['expressions'] = values['conversation']['expressions']
-            if 'barge_in' in values.get('conversation', {}) and 'barge_in' not in self.data['conversation']:
-                self.data['conversation']['barge_in'] = values['conversation']['barge_in']
-            if 'warmup_chunks' in values.get('conversation', {}).get('barge_in', {}):
-                self.data['conversation']['barge_in'].setdefault('warmup_chunks', values['conversation']['barge_in']['warmup_chunks'])
             def merge(target, patch):
                 for key, value in patch.items():
                     if key not in target:
@@ -71,6 +80,26 @@ class Config:
             server = self.data['servers'][role]
             if not isinstance(server['port'], int) or not 1 <= server['port'] <= 65535:
                 raise ValueError('Invalid server port: ' + role)
+        recognition = self.data['conversation'].get('recognition', {})
+        if recognition:
+            if recognition['backend'] not in ('vosk', 'faster_whisper') or recognition['device'] not in ('cuda', 'cpu'):
+                raise ValueError('Invalid speech recognition backend or device')
+            if not 1 <= recognition['beam_size'] <= 5 or not 1 <= recognition['cpu_threads'] <= 32:
+                raise ValueError('Invalid speech recognition limits')
+            if Path(recognition['path']).is_absolute() or not self.path(recognition['path']).resolve().is_relative_to(self.root):
+                raise ValueError('Recognition model must stay inside the repository')
+        interaction = self.data['conversation'].get('interaction', {})
+        if interaction:
+            if not 0 <= interaction['resume_after_empty_seconds'] <= 10:
+                raise ValueError('Invalid empty interruption timeout')
+            if interaction['classifier']['provider'] not in ('rules', 'lm_studio'):
+                raise ValueError('Invalid action classifier provider')
+            ack = interaction['acknowledgements']
+            if not 0 <= ack['delay_seconds'] <= 5 or any(not isinstance(v, str) or len(v) > 100 for v in ack['phrases'].values()):
+                raise ValueError('Invalid acknowledgement settings')
+        power = self.data.get('power', {})
+        if power and not 1 <= power['remind_after_minutes'] <= 1440:
+            raise ValueError('Invalid charge reminder interval')
         mixer = self.data['audio'].get('playback_mixer', {})
         if mixer.get('enabled', False) and not 0 <= mixer['volume_percent'] <= 100:
             raise ValueError('Playback mixer volume must be between 0 and 100')
@@ -108,6 +137,10 @@ class Config:
             if not 3 <= barge['min_voiced_chunks'] <= 10 or not 1 <= barge['threshold_multiplier'] <= 4:
                 raise ValueError('Invalid speech interruption settings')
         expressions = self.data['conversation'].get('expressions', {})
+        sync = expressions.get('speech_sync', {})
+        if sync:
+            if not .6 <= sync['min_cue_interval_seconds'] <= 3 or not 1 <= sync['max_cues'] <= 240 or not 0 <= sync['amplitude_degrees'] <= 3:
+                raise ValueError('Invalid speech motion synchronization limits')
         if expressions.get('enabled', False):
             from .expressions import EMOTIONS, PHASES, plan
             if not 0 < expressions['max_head_degrees'] <= 15 or not 0 < expressions['max_antenna_degrees'] <= 35:

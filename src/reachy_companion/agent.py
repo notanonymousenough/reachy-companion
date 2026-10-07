@@ -39,6 +39,9 @@ class Agent:
         self.playback_process = None
         self.voice_response = None
         self.pending_pcm = None
+        self.resume_audio = None
+        self.last_voice_at = None
+        self.current_reply_text = ''
         self.interruptions = 0
         self.barge_in_error = None
         self.capture_active = False
@@ -63,13 +66,13 @@ class Agent:
         self.chunk_bytes = self.audio['sample_rate'] * 2 * self.audio['chunk_ms'] // 1000
         self.vad_bytes = self.audio['sample_rate'] * 2 * self.audio['vad_frame_ms'] // 1000
 
-    def stop_speaker(self):
+    def stop_speaker(self, abort_stream=True):
         process = self.playback_process
         if process is not None and process.poll() is None:
             process.terminate()
         # Wake a blocked urllib reader as well as stopping physical playback.
         response = self.voice_response
-        if response is not None:
+        if abort_stream and response is not None:
             try:
                 import socket
                 response.fp.raw._sock.shutdown(socket.SHUT_RDWR)
@@ -85,6 +88,7 @@ class Agent:
             if not enabled:
                 self.expressions.set('neutral')
                 self.pending_pcm = None
+                self.resume_audio = None
                 self.stop_speaker()
             self.microphone.save(enabled)
             if enabled:
@@ -123,11 +127,11 @@ class Agent:
         except HTTPError as exc:
             raise RuntimeError('Hub HTTP %s: %s' % (exc.code, exc.read().decode()[:600])) from exc
 
-    def capture(self, during_reply=False, on_speech=None, stop_event=None):
+    def capture(self, during_reply=False, on_speech=None, stop_event=None, idle_deadline=None, skip_expression=False):
         epoch = self.microphone_epoch
         def active():
             return (self.microphone.enabled if during_reply else self.listening.is_set()) and not self.stopping.is_set() and epoch == self.microphone_epoch and not (stop_event and stop_event.is_set())
-        if not during_reply:
+        if not during_reply and not skip_expression:
             self.expressions.set('listening', wait=True)
             self.phase = 'listening'
         if not active():
@@ -150,6 +154,8 @@ class Agent:
             calibrating = not self.calibrated
             try:
                 while active():
+                    if idle_deadline is not None and time.monotonic() >= idle_deadline and not frames:
+                        return None
                     if not selector.select(timeout=1):
                         if process.poll() is not None:
                             raise RuntimeError(process.stderr.read().decode()[:500])
@@ -187,14 +193,19 @@ class Agent:
                         continue
                     frames.append(chunk)
                     if loud:
+                        self.last_voice_at = time.monotonic()
                         voiced += 1
                         silent = 0
                     else:
                         silent += 1
                     if during_reply and not confirmed and loud and barge_voiced >= barge['min_voiced_chunks']:
-                        confirmed = True
-                        if on_speech:
-                            on_speech()
+                        accepted = on_speech(b''.join(frames)) if on_speech else True
+                        confirmed = accepted is not False
+                        if not confirmed:
+                            barge_voiced = 0
+                            frames = []
+                            voiced = silent = 0
+                            continue
                     if silent >= self.audio['silence_chunks'] or len(frames) >= self.audio['max_recording_seconds'] * 1000 / self.audio['chunk_ms']:
                         if voiced >= self.audio['min_voiced_chunks'] and (not during_reply or confirmed):
                             return b''.join(frames) if active() else None
@@ -237,11 +248,14 @@ class Agent:
                     process.wait()
         time.sleep(self.audio['echo_tail_seconds'])
 
-    def voice(self, path, payload, expected_epoch=None, allow_barge_in=True):
+    def voice(self, path, payload, expected_epoch=None, allow_barge_in=True, replay=None):
         epoch = self.microphone_epoch if expected_epoch is None else expected_epoch
         monitor = None
+        self.current_reply_text = replay.get('spoken_text', '') if replay else ''
         def cancelled():
-            return epoch != self.microphone_epoch or self.stopping.is_set() or bool(monitor and monitor.interrupted.is_set())
+            return epoch != self.microphone_epoch or self.stopping.is_set()
+        def interrupted():
+            return bool(monitor and monitor.interrupted.is_set())
         def cancelled_result():
             return {'ok': True, 'cancelled': True, 'interrupted': bool(monitor and monitor.interrupted.is_set())}
         if cancelled():
@@ -270,8 +284,15 @@ class Agent:
         maximum = settings['sample_rate'] * 2 * settings['max_output_seconds']
         deadline = None
         selector = None
+        from .speech_clock import SpeechClock
+        clock = SpeechClock(settings['sample_rate'])
+        full_pcm = bytearray()
+        all_cues = []
+        cursor = None
+        from .replay import ReplayResponse
+        response_context = self.http.open(item, timeout=self.config['timeouts']['client']) if replay is None else ReplayResponse(replay, settings)
         try:
-            with self.http.open(item, timeout=self.config['timeouts']['client']) as response:
+            with response_context as response:
                 self.voice_response = response
                 if response.headers.get_content_type() != 'application/x-ndjson':
                     raise RuntimeError('Expected an audio event stream')
@@ -286,6 +307,13 @@ class Agent:
                     event = json.loads(line)
                     if event['type'] == 'reply':
                         result = event
+                        self.current_reply_text += ' ' + event.get('reply', '')
+                    elif event['type'] == 'motion':
+                        if len(all_cues) + len(event['cues']) > self.config['conversation']['expressions']['speech_sync']['max_cues']:
+                            raise ValueError('Too many speech motion cues')
+                        all_cues.extend(event['cues'])
+                        if not interrupted():
+                            self.expressions.timeline(event['cues'], clock)
                     elif event['type'] == 'audio':
                         if cancelled():
                             return cancelled_result()
@@ -295,9 +323,15 @@ class Agent:
                         total += len(pcm)
                         if len(pcm) % 2 or total > maximum:
                             raise ValueError('Invalid stream audio length')
+                        full_pcm.extend(pcm)
+                        if interrupted():
+                            if cursor is None:
+                                cursor = clock.position()
+                            continue
                         if process is None:
                             self.phase = 'speaking'
-                            self.expressions.set('speaking', (result or {}).get('emotion', 'neutral'))
+                            if not all_cues:
+                                self.expressions.set('speaking', (result or {}).get('emotion', 'neutral'))
                             process = subprocess.Popen(['aplay', '-q', '-D', self.audio['playback_device'],
                                 '-t', 'raw', '-f', 'S16_LE', '-r', str(settings['sample_rate']), '-c', '1'],
                                 stdin=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
@@ -314,6 +348,10 @@ class Agent:
                             deadline = time.monotonic() + settings['max_output_seconds'] + self.config['timeouts']['playback_margin']
                         remaining = memoryview(pcm)
                         while remaining:
+                            if interrupted():
+                                if cursor is None:
+                                    cursor = clock.position()
+                                break
                             if cancelled():
                                 return cancelled_result()
                             if time.monotonic() > deadline:
@@ -323,7 +361,11 @@ class Agent:
                             if selector.select(timeout=0.2):
                                 try:
                                     written = os.write(process.stdin.fileno(), remaining)
+                                    clock.feed(written)
                                     remaining = remaining[written:]
+                                except BrokenPipeError:
+                                    if not interrupted():
+                                        raise
                                 except BlockingIOError:
                                     pass
                     elif event['type'] == 'done':
@@ -343,12 +385,23 @@ class Agent:
                 process.wait(timeout=max(1, deadline - time.monotonic()))
                 if cancelled():
                     return cancelled_result()
-                if process.returncode:
+                if process.returncode and not interrupted():
                     raise RuntimeError('Streaming playback failed')
-                time.sleep(self.audio['echo_tail_seconds'])
+                if not interrupted():
+                    time.sleep(self.audio['echo_tail_seconds'])
+            if interrupted():
+                if cursor is None:
+                    cursor = clock.position()
+                self.resume_audio = {'pcm': bytes(full_pcm), 'cursor': min(cursor, len(full_pcm)),
+                                     'result': {key: value for key, value in result.items() if key != 'type'},
+                                     'cues': all_cues, 'epoch': epoch, 'spoken_text': self.current_reply_text,
+                                     'deadline': (self.last_voice_at or time.monotonic()) + self.config['conversation']['interaction']['resume_after_empty_seconds']}
+                return {**self.resume_audio['result'], **cancelled_result()}
+            self.resume_audio = None
             return {key: value for key, value in result.items() if key != 'type'}
         except Exception:
-            if cancelled():
+            if cancelled() or interrupted():
+                self.resume_audio = None
                 return cancelled_result()
             raise
         finally:
@@ -368,10 +421,14 @@ class Agent:
                 process.stderr.close()
             self.playback_process = None
             try:
+                if epoch != self.microphone_epoch or not self.microphone.enabled:
+                    self.resume_audio = None
                 if monitor is not None:
                     pcm = monitor.finish()
                     if pcm:
                         self.pending_pcm = (epoch, pcm)
+                    if self.resume_audio is not None:
+                        self.resume_audio['deadline'] = (self.last_voice_at or time.monotonic()) + self.config['conversation']['interaction']['resume_after_empty_seconds']
             finally:
                 self.expressions.set('neutral')
 
@@ -419,15 +476,43 @@ class Agent:
                         continue
                     self.phase = 'processing'
                     LOG.info('phrase captured seconds=%.2f', len(pcm) / 32000)
-                    response = self.voice('/turn',
-                                            {'pcm_base64': base64.b64encode(pcm).decode(),
-                                             'session': self.config['conversation']['session'],
-                                             'previous_reply_interrupted': interrupted_input}, expected_epoch=epoch)
+                    if interrupted_input:
+                        recognized = self.request(self.config['network']['voice_url'], '/transcribe',
+                                                  {'pcm_base64': base64.b64encode(pcm).decode()})
+                        text = recognized['transcript']
+                        if not text and self.resume_audio is not None:
+                            saved = self.resume_audio
+                            self.phase = 'waiting_to_resume'
+                            if time.monotonic() < saved['deadline']:
+                                more = self.capture(idle_deadline=saved['deadline'], skip_expression=True)
+                                if more:
+                                    self.pending_pcm = (epoch, more)
+                                    continue
+                            if self.microphone.enabled and self.listening.is_set() and epoch == self.microphone_epoch:
+                                LOG.info('empty_interruption_resume')
+                                self.voice('/say', {}, expected_epoch=epoch, replay=saved)
+                            continue
+                        self.resume_audio = None
+                        if not text:
+                            continue
+                        if recognized['decision']['action'] == 'stop':
+                            self.last_transcript = text
+                            LOG.info('spoken_stop')
+                            self.expressions.set('neutral')
+                            continue
+                        response = self.voice('/text', {'text': text, 'session': self.config['conversation']['session'],
+                                                       'previous_reply_interrupted': True}, expected_epoch=epoch)
+                        response['transcript'] = text
+                    else:
+                        response = self.voice('/turn', {'pcm_base64': base64.b64encode(pcm).decode(),
+                                                       'session': self.config['conversation']['session']}, expected_epoch=epoch)
                     self.last_transcript = response.get('transcript', '')
                     if self.last_transcript:
                         self.turns += 1
                         if self.config['logging']['log_transcripts']:
                             LOG.info('turn transcript=%r reply=%r', self.last_transcript, response.get('reply'))
+                    if response.get('command') == 'stop':
+                        self.resume_audio = None
                     if response.get('command') == 'pause':
                         self.set_microphone(False)
                     self.last_error = None
@@ -499,7 +584,7 @@ def main(config, test_speaker=False):
                              'threshold_rms': agent.threshold, 'last_error': agent.last_error,
                              'last_transcript': agent.last_transcript, 'turns': agent.turns,
                              'microphone_enabled': agent.microphone.enabled,
-                             'interruptions': agent.interruptions, 'barge_in_error': agent.barge_in_error,
+                             'interruptions': agent.interruptions, 'resumable_reply': agent.resume_audio is not None, 'barge_in_error': agent.barge_in_error,
                              'volume_percent': agent.volume.percent,
                              'volume_control_enabled': agent.audio.get('playback_mixer', {}).get('enabled', False),
                              'capture_active': agent.capture_active,

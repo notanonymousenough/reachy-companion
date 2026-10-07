@@ -9,6 +9,14 @@ function Merge-CompanionSettings {
         } else { $existing.Value = $property.Value }
     }
 }
+function Add-CompanionDefaults {
+    param($Target, $Defaults)
+    foreach ($property in $Defaults.PSObject.Properties) {
+        $existing = $Target.PSObject.Properties[$property.Name]
+        if ($null -eq $existing) { $Target | Add-Member -NotePropertyName $property.Name -NotePropertyValue $property.Value }
+        elseif ($property.Value -is [System.Management.Automation.PSCustomObject] -and $existing.Value -is [System.Management.Automation.PSCustomObject]) { Add-CompanionDefaults $existing.Value $property.Value }
+    }
+}
 function Read-CompanionSettings {
     param([string]$Path)
     $settings = Get-Content -Raw -Encoding UTF8 $Path | ConvertFrom-Json
@@ -21,19 +29,8 @@ function Read-CompanionSettings {
         foreach ($property in $profile.PSObject.Properties) {
             if ($property.Name -notin @('llm','tts','conversation')) { throw 'Profile may only change llm, tts and conversation.' }
         }
-        # Optional speaker EQ can be added by a newer profile after git pull.
-        if ($profile.PSObject.Properties['tts'] -and $profile.tts.PSObject.Properties['playback_eq'] -and -not $settings.tts.PSObject.Properties['playback_eq']) {
-            $settings.tts | Add-Member -NotePropertyName playback_eq -NotePropertyValue $profile.tts.playback_eq
-        }
-        if ($profile.PSObject.Properties['conversation'] -and $profile.conversation.PSObject.Properties['expressions'] -and -not $settings.conversation.PSObject.Properties['expressions']) {
-            $settings.conversation | Add-Member -NotePropertyName expressions -NotePropertyValue $profile.conversation.expressions
-        }
-        if ($profile.PSObject.Properties['conversation'] -and $profile.conversation.PSObject.Properties['barge_in'] -and -not $settings.conversation.PSObject.Properties['barge_in']) {
-            $settings.conversation | Add-Member -NotePropertyName barge_in -NotePropertyValue $profile.conversation.barge_in
-        }
-        if ($profile.PSObject.Properties['conversation'] -and $profile.conversation.PSObject.Properties['barge_in'] -and $profile.conversation.barge_in.PSObject.Properties['warmup_chunks'] -and -not $settings.conversation.barge_in.PSObject.Properties['warmup_chunks']) {
-            $settings.conversation.barge_in | Add-Member -NotePropertyName warmup_chunks -NotePropertyValue $profile.conversation.barge_in.warmup_chunks
-        }
+        $defaults = Get-Content -Raw -Encoding UTF8 (Join-Path $PSScriptRoot '../config.example.json') | ConvertFrom-Json
+        Add-CompanionDefaults $settings $defaults
         Merge-CompanionSettings $settings $profile
     }
     return $settings

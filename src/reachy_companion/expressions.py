@@ -2,18 +2,41 @@
 import math
 import re
 
-EMOTIONS = ('neutral', 'joy', 'curious', 'skeptical', 'empathetic', 'surprised')
+EMOTIONS = ('neutral', 'joy', 'curious', 'skeptical', 'empathetic', 'surprised', 'confident', 'amused', 'concerned', 'thoughtful', 'apologetic', 'excited')
 PHASES = ('neutral', 'listening', 'processing', 'speaking')
 TAG = re.compile(r'^\s*<emotion=([a-z]+)>\s*', re.I)
 
 
+CONTROL = re.compile(r'</?(emotion|gesture)(?:=([a-z]+))?>', re.I)
+
+
+def spoken_segments(reply):
+    from .speech_motion import GESTURES
+    emotion, gesture = 'neutral', 'auto'
+    segments = []
+    previous = 0
+    for tag in CONTROL.finditer(reply):
+        text = reply[previous:tag.start()].strip()
+        if text:
+            segments.append({'text': text, 'emotion': emotion, 'gesture': gesture})
+        name, value = tag.group(1).lower(), (tag.group(2) or '').lower()
+        if not tag.group().startswith('</'):
+            if name == 'emotion': emotion = value if value in EMOTIONS else 'neutral'
+            elif name == 'gesture': gesture = value if value in GESTURES else 'auto'
+        previous = tag.end()
+    text = reply[previous:].strip()
+    if text:
+        segments.append({'text': text, 'emotion': emotion, 'gesture': gesture})
+    if len(segments) > 8:
+        segments[7]['text'] = ' '.join(s['text'] for s in segments[7:])
+        segments = segments[:8]
+    return segments
+
+
 def spoken_expression(reply):
-    match = TAG.match(reply)
-    emotion = match.group(1).lower() if match else 'neutral'
-    # Some local models close a prefix tag as if it were XML. Neither the
-    # opening nor the closing control markup may reach Piper or history.
-    text = re.sub(r'</?emotion(?:=[a-z]+)?>', '', reply, flags=re.I).strip()
-    return text, emotion if emotion in EMOTIONS else 'neutral'
+    segments = spoken_segments(reply)
+    return (' '.join(segment['text'] for segment in segments),
+            segments[0]['emotion'] if segments else 'neutral')
 
 
 def plan(settings, phase, emotion='neutral'):

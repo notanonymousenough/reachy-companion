@@ -32,6 +32,7 @@ class RoutingTests(unittest.TestCase):
         self.config = Config(root / 'config.local.json')
         self.config.data['conversation']['expressions']['enabled'] = False
         self.config.data['conversation']['barge_in']['enabled'] = False
+        self.config.data['conversation']['barge_in']['confirm_with_stt'] = False
 
     def test_playback_mixer_only_changes_selected_playback_control(self):
         # The microphone capture control must not be modified by voice volume.
@@ -196,7 +197,7 @@ class RoutingTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
 
-    def test_barge_in_cancels_blocked_stream_and_queues_new_phrase(self):
+    def test_barge_in_pauses_speaker_buffers_remaining_audio_and_queues_new_phrase(self):
         import base64, time, types
         with patch.dict(sys.modules, {'webrtcvad': types.SimpleNamespace(Vad=lambda mode: None)}):
             from reachy_companion.agent import Agent
@@ -215,6 +216,10 @@ class RoutingTests(unittest.TestCase):
                     self.wfile.write((json.dumps(event)+'\n').encode())
                 self.wfile.flush()
                 release.wait(5)
+                for event in [{'type':'audio','format':'S16_LE','sample_rate':16000,'channels':1,
+                               'pcm_base64':base64.b64encode(pcm).decode()}, {'type':'done','ok':True,'reply':'old answer'}]:
+                    self.wfile.write((json.dumps(event)+'\n').encode())
+                self.wfile.flush()
             def log_message(self, *args): pass
         server = ThreadingHTTPServer(('127.0.0.1',0), Worker)
         threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -224,6 +229,7 @@ class RoutingTests(unittest.TestCase):
         def capture(**kwargs):
             time.sleep(.05)
             kwargs['on_speech']()
+            release.set()
             time.sleep(.02)
             return new_phrase
         agent.capture = capture
@@ -238,6 +244,8 @@ class RoutingTests(unittest.TestCase):
             self.assertTrue(reply['interrupted'])
             self.assertTrue(reply['cancelled'])
             self.assertEqual(agent.pending_pcm, (agent.microphone_epoch, new_phrase))
+            self.assertEqual(agent.resume_audio['pcm'], pcm*2)
+            self.assertLess(agent.resume_audio['cursor'], len(pcm)*2)
             self.assertIsNone(agent.playback_process)
             self.assertIsNone(agent.voice_response)
             self.assertTrue(agent.microphone.enabled)

@@ -31,7 +31,8 @@ if ($env:SSH_CONNECTION -and -not $InTask) {
     $taskName = [string]$settings.runtime.windows.startup_task
     $taskStarted = Get-Date
     Start-ScheduledTask -TaskName $taskName
-    $taskDeadline = $taskStarted.AddSeconds([int]$settings.runtime.windows.startup_timeout)
+    $taskTimeout = [Math]::Max([int]$settings.runtime.windows.startup_timeout, [int]$settings.container.startup_timeout_seconds)
+    $taskDeadline = $taskStarted.AddSeconds($taskTimeout)
     while ((Get-Date) -lt $taskDeadline) {
         $task = Get-ScheduledTask -TaskName $taskName
         $info = Get-ScheduledTaskInfo -TaskName $taskName

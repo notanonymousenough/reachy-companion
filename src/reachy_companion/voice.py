@@ -41,9 +41,10 @@ class Pipeline:
         self.agent_sessions = {}
         self.phase = 'loading'
         self.last_turn = None
-        SetLogLevel(-1)
-        self.stt = Model(str(config.path(config['models']['stt']['path'])))
-        self.tts = PiperVoice.load(config.path(config['models']['tts']['path']))
+        from .recognition import Recognizer
+        self.stt = Recognizer(config)
+        self.tts = PiperVoice.load(config.path(config['models']['tts']['path']),
+                                   include_alignments=config['conversation']['expressions'].get('speech_sync', {}).get('phoneme_alignments', False))
         self.tts_settings = SynthesisConfig(**config['tts']['synthesis'])
         self.phase = 'idle'
         LOG.info('models_ready')
@@ -67,15 +68,13 @@ class Pipeline:
             raise RuntimeError('Robot is controlled by another application')
 
     def transcribe(self, pcm):
-        if not pcm or len(pcm) % 2 or len(pcm) > self.config['audio']['max_input_seconds'] * self.config['audio']['sample_rate'] * 2:
-            raise ValueError('Expected up to 30 seconds of mono 16 kHz signed 16-bit PCM')
-        recognizer = KaldiRecognizer(self.stt, 16000)
-        parts = []
-        for offset in range(0, len(pcm), 8000):
-            if recognizer.AcceptWaveform(pcm[offset:offset+8000]):
-                parts.append(json.loads(recognizer.Result()).get('text', ''))
-        parts.append(json.loads(recognizer.FinalResult()).get('text', ''))
-        return ' '.join(p for p in parts if p).strip()
+        return self.stt.transcribe(pcm)
+
+    def classify(self, text):
+        from .intents import classify, classify_with_model
+        decision = classify(text, self.config['conversation']['interaction'],
+                        self.config['conversation']['pause_phrases'], self.config['conversation']['reset_phrases'])
+        return classify_with_model(self.config, text, decision)
 
     def synthesize(self, text):
         text = re.sub(r'<think>.*?</think>', '', text, flags=re.S)
@@ -127,41 +126,47 @@ class Pipeline:
         self.sessions.pop(session, None)
         self.agent_sessions.pop(session, None)
 
-    def prepare(self, payload, path):
+    def prepare(self, payload, path, recognized_text=None, answer_result=None):
         session = payload.get('session', self.config['conversation']['session'])
         if not isinstance(session, str) or not 1 <= len(session) <= self.config['limits']['max_session_chars']:
             raise ValueError('Invalid session')
         self.check_robot()
         if path == '/turn':
             self.phase = 'recognizing'
-            text = self.transcribe(base64.b64decode(payload['pcm_base64'], validate=True))
+            text = (recognized_text if recognized_text is not None else
+                    self.transcribe(base64.b64decode(payload['pcm_base64'], validate=True)))
         else:
             text = payload['text'].strip()
             if not text or len(text) > self.config['limits']['max_text_chars']:
                 raise ValueError('Invalid text length')
         pending = None
         command = None
-        normalized = text.lower().strip(' .!?')
+        decision = self.classify(text)
         if not text:
             reply = ''
-        elif path != '/say' and normalized in self.config['conversation']['reset_phrases']:
+        elif path != '/say' and decision['action'] == 'stop':
+            reply = ''
+            command = 'stop'
+        elif path != '/say' and decision['action'] == 'reset':
             self.reset(session)
             reply = self.config['conversation']['reset_reply']
-        elif path != '/say' and normalized in self.config['conversation']['pause_phrases']:
+        elif path != '/say' and decision['action'] == 'pause':
             reply = self.config['conversation']['pause_reply']
             command = 'pause'
         elif path == '/say':
             reply = text
         else:
             self.phase = 'thinking'
-            reply, pending = self.answer(text, session, payload.get('previous_reply_interrupted', False))
-        from .expressions import spoken_expression
+            reply, pending = (answer_result if answer_result is not None else
+                              self.answer(text, session, payload.get('previous_reply_interrupted', False)))
+        from .expressions import spoken_expression, spoken_segments
+        segments = spoken_segments(reply)
         reply, emotion = spoken_expression(reply)
         if pending is not None and not reply:
             raise RuntimeError('Backend returned an expression without spoken text')
         if pending is not None:
             pending['messages'][-1]['content'] = reply
-        return {'transcript': text, 'reply': reply, 'command': command, 'emotion': emotion}, session, pending
+        return {'transcript': text, 'reply': reply, 'command': command, 'emotion': emotion, 'segments': segments, 'decision': decision}, session, pending
 
     def completed(self, result, session, pending, started):
         if pending is not None:
@@ -186,39 +191,85 @@ class Pipeline:
             self.phase = 'idle'
             self.lock.release()
 
-    def stream(self, payload, path):
-        if not self.lock.acquire(blocking=False):
-            raise RuntimeError('Conversation pipeline is busy')
-        started = time.monotonic()
-        try:
-            result, session, pending = self.prepare(payload, path)
-            yield {'type': 'reply', **result}
-            self.phase = 'speaking'
-            rate = self.config['streaming']['sample_rate']
-            maximum = rate * 2 * self.config['streaming']['max_output_seconds']
-            total = 0
-            text = re.sub(r'[*#`]', '', result['reply']).strip()
-            for chunk in self.tts.synthesize(text, syn_config=self.tts_settings):
-                # Convert each Piper sentence on the COMPUTE worker, preserving
-                # the configured voice. Hub forwards bytes without decoding/resampling.
+    def audio_events(self, segments, initial_bytes=0):
+        rate = self.config['streaming']['sample_rate']
+        maximum = rate * 2 * self.config['streaming']['max_output_seconds']
+        total = initial_bytes
+        beat_offset = 0
+        from .speech_motion import cues
+        for segment in segments:
+            text = re.sub(r'[*#`]', '', segment['text']).strip()
+            if not text:
+                continue
+            for chunk in self.tts.synthesize(text, syn_config=self.tts_settings,
+                                             include_alignments=self.config['conversation']['expressions'].get('speech_sync', {}).get('phoneme_alignments', False)):
                 command = ['sox', '-t', 'raw', '-e', 'signed-integer', '-b', '16',
                            '-L', '-c', str(chunk.sample_channels), '-r', str(chunk.sample_rate), '-',
-                           '-t', 'raw', '-e', 'signed-integer', '-b', '16', '-L',
-                           '-c', '1', '-r', str(rate), '-']
+                           '-t', 'raw', '-e', 'signed-integer', '-b', '16', '-L', '-c', '1', '-r', str(rate), '-']
                 if self.config['tts']['pitch_cents']:
                     command += ['pitch', str(self.config['tts']['pitch_cents'])]
                 command += speaker_eq_effects(self.config)
                 pcm = subprocess.run(command, input=chunk.audio_int16_bytes, capture_output=True,
                                      timeout=self.config['timeouts']['pitch'], check=True).stdout
-                total += len(pcm)
-                if total > maximum:
+                if total + len(pcm) > maximum:
                     raise RuntimeError('Streaming answer exceeds duration limit')
+                motion = cues(self.config['conversation']['expressions'], chunk, segment,
+                              total / (rate * 2), rate, len(pcm), beat_offset)
+                motion = motion[:max(0, self.config['conversation']['expressions']['speech_sync']['max_cues'] - beat_offset)]
+                if motion:
+                    yield {'type': 'motion', 'cues': motion}
+                    beat_offset += len(motion)
                 size = self.config['streaming']['pcm_chunk_bytes']
                 for offset in range(0, len(pcm), size):
                     yield {'type': 'audio', 'format': 'S16_LE', 'sample_rate': rate,
                            'channels': 1, 'pcm_base64': base64.b64encode(pcm[offset:offset+size]).decode()}
+                total += len(pcm)
+
+    def stream(self, payload, path):
+        if not self.lock.acquire(blocking=False):
+            raise RuntimeError('Conversation pipeline is busy')
+        started = time.monotonic()
+        future = executor = None
+        try:
+            recognized = answer_result = None
+            intro_bytes = 0
+            acknowledgements = self.config['conversation'].get('interaction', {}).get('acknowledgements', {})
+            if path != '/say' and acknowledgements.get('enabled', False):
+                self.check_robot()
+                recognized = (self.transcribe(base64.b64decode(payload['pcm_base64'], validate=True))
+                              if path == '/turn' else payload['text'].strip())
+                if not isinstance(recognized, str) or len(recognized) > self.config['limits']['max_text_chars']:
+                    raise ValueError('Invalid text length')
+                decision = self.classify(recognized)
+                if decision['action'] == 'answer':
+                    import concurrent.futures
+                    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                    session = payload.get('session', self.config['conversation']['session'])
+                    if not isinstance(session, str) or not 1 <= len(session) <= self.config['limits']['max_session_chars']:
+                        raise ValueError('Invalid session')
+                    self.phase = 'thinking'
+                    future = executor.submit(self.answer, recognized, session, payload.get('previous_reply_interrupted', False))
+                    try:
+                        answer_result = future.result(timeout=acknowledgements['delay_seconds'])
+                    except concurrent.futures.TimeoutError:
+                        intro = acknowledgements['phrases'][decision['intent']]
+                        yield {'type': 'reply', 'transcript': recognized, 'reply': intro, 'emotion': decision['emotion'],
+                               'command': None, 'acknowledgement': True}
+                        for event in self.audio_events([{'text': intro, 'emotion': decision['emotion'], 'gesture': 'auto'}]):
+                            if event['type'] == 'audio':
+                                intro_bytes += len(base64.b64decode(event['pcm_base64']))
+                            yield event
+                        answer_result = future.result()
+            result, session, pending = (self.prepare(payload, path, recognized, answer_result)
+                                        if recognized is not None else self.prepare(payload, path))
+            yield {'type': 'reply', **result}
+            self.phase = 'speaking'
+            segments = result.get('segments') or [{'text': result['reply'], 'emotion': result.get('emotion', 'neutral'), 'gesture': 'auto'}]
+            yield from self.audio_events(segments, intro_bytes)
             yield {'type': 'done', 'ok': True, **self.completed(result, session, pending, started)}
         finally:
+            if executor is not None:
+                executor.shutdown(wait=True)
             self.phase = 'idle'
             self.lock.release()
 
@@ -263,6 +314,20 @@ def main(config, worker=False):
 
         def do_POST(self):
             if not self.authorized():
+                return
+            if self.path == '/transcribe':
+                try:
+                    size = int(self.headers.get('Content-Length', 0))
+                    if not 0 < size <= config['limits']['max_request_bytes']:
+                        raise ValueError('Invalid audio request size')
+                    payload = json.loads(self.rfile.read(size))
+                    text = pipeline.transcribe(base64.b64decode(payload['pcm_base64'], validate=True))
+                    self.reply(200, {'ok': True, 'transcript': text, 'decision': pipeline.classify(text)})
+                except (ValueError, KeyError, TypeError) as exc:
+                    self.reply(400, {'error': str(exc)})
+                except Exception:
+                    LOG.exception('transcription_failed')
+                    self.reply(503, {'error': 'Transcription failed'})
                 return
             if self.path == '/expression/plan':
                 try:

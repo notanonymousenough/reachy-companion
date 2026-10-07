@@ -12,6 +12,8 @@ class ExpressionPlayer:
         self.settings = config['conversation'].get('expressions', {})
         self.condition = threading.Condition()
         self.state = None
+        self.cues = []
+        self.clock = None
         self.version = self.completed = 0
         self.last_error = None
         self.last_expression = None
@@ -24,6 +26,8 @@ class ExpressionPlayer:
             return
         with self.condition:
             if self.state != (phase, emotion):
+                self.cues = []
+                self.clock = None
                 self.state = (phase, emotion)
                 self.version += 1
                 self.condition.notify_all()
@@ -38,18 +42,51 @@ class ExpressionPlayer:
         if wait:
             self.stopping.wait(self.settings['settle_seconds'])
 
+    def timeline(self, cues, clock):
+        if not self.settings.get('enabled', False):
+            return
+        from .motion_limits import validate_steps
+        valid = []
+        maximum = self.settings['speech_sync']['max_cues']
+        for cue in cues:
+            if not isinstance(cue.get('at'), (int, float)) or not 0 <= cue['at'] <= self.config['streaming']['max_output_seconds']:
+                raise ValueError('Invalid motion timestamp')
+            validate_steps(cue['steps'], self.settings)
+            valid.append(cue)
+        with self.condition:
+            if self.state != ('timeline', 'neutral') or self.clock is not clock:
+                self.state = ('timeline', 'neutral')
+                self.version += 1
+                self.cues = []
+                self.clock = clock
+            self.cues = sorted((self.cues + valid)[:maximum], key=lambda cue: cue['at'])
+            self.condition.notify_all()
+
     def hold(self):
         with self.condition:
             self.state = None
+            self.cues = []
+            self.clock = None
             self.version += 1
             self.condition.notify_all()
 
     def run(self):
         handled = 0
         while not self.stopping.is_set():
+            cue = None
             with self.condition:
-                while self.version == handled and not self.stopping.is_set():
-                    if self.state and self.state[0] == 'speaking':
+                while not self.stopping.is_set():
+                    if self.state == ('timeline', 'neutral'):
+                        if self.cues and self.cues[0]['at'] <= self.clock.seconds():
+                            cue = self.cues.pop(0)
+                            # Late cues are merged into the current target, never queued as a backlog.
+                            while self.cues and self.cues[0]['at'] <= self.clock.seconds():
+                                cue = self.cues.pop(0)
+                            break
+                        self.condition.wait(.05)
+                    elif self.version != handled:
+                        break
+                    elif self.state and self.state[0] == 'speaking':
                         self.condition.wait(self.settings['repeat_seconds'])
                         if self.version == handled:
                             break
@@ -65,17 +102,19 @@ class ExpressionPlayer:
                     self.condition.notify_all()
                 continue
             try:
-                plan = self.request(self.config['network']['voice_url'], '/expression/plan',
-                                    {'phase': state[0], 'emotion': state[1]}, timeout=self.config['timeouts']['http'])
+                plan = ({'steps': cue['steps']} if cue is not None else
+                        self.request(self.config['network']['voice_url'], '/expression/plan',
+                                     {'phase': state[0], 'emotion': state[1]}, timeout=self.config['timeouts']['http']))
                 with self.condition:
                     stale = self.version != version
                 if not stale and plan.get('steps'):
                     self.request(self.config['network']['hub_url'], '/actions/expression',
                                  {'steps': plan['steps']}, timeout=self.config['timeouts']['http'])
-                    self.last_expression = {'phase': state[0], 'emotion': state[1]}
+                    self.last_expression = ({'phase': 'speaking', 'emotion': cue.get('emotion', 'neutral'),
+                                             'gesture': cue.get('gesture', 'auto'), 'phoneme': cue.get('phoneme', '')}
+                                            if cue is not None else {'phase': state[0], 'emotion': state[1]})
                 self.last_error = None
             except Exception as exc:
-                # Cosmetic failures never prevent a spoken answer.
                 self.last_error = str(exc)
                 LOG.warning('expression_unavailable phase=%s error=%s', state[0], exc)
             finally:
