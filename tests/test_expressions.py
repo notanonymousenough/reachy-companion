@@ -103,6 +103,7 @@ class ExpressionTests(unittest.TestCase):
         a.capture = capture
         monitor = BargeInMonitor(a)
         monitor.start()
+        self.assertTrue(monitor.interrupted.wait(1))
         self.assertEqual(monitor.finish(), expected)
         self.assertEqual(a.interruptions, 1)
         a.stop_speaker.assert_called_once()
@@ -146,6 +147,7 @@ class ExpressionTests(unittest.TestCase):
             return b'private audio'
         a.capture = capture
         monitor.start()
+        self.assertTrue(monitor.interrupted.wait(1))
         self.assertIsNone(monitor.finish())
         self.assertFalse(a.microphone.enabled)
 

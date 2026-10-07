@@ -196,6 +196,57 @@ class RoutingTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
 
+    def test_barge_in_cancels_blocked_stream_and_queues_new_phrase(self):
+        import base64, time, types
+        with patch.dict(sys.modules, {'webrtcvad': types.SimpleNamespace(Vad=lambda mode: None)}):
+            from reachy_companion.agent import Agent
+        self.config.data['conversation']['barge_in']['enabled'] = True
+        release = threading.Event()
+        pcm = b'\x00\x01' * 1600
+        class Worker(BaseHTTPRequestHandler):
+            def do_POST(self):
+                self.rfile.read(int(self.headers['Content-Length']))
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/x-ndjson')
+                self.end_headers()
+                for event in [{'type':'reply','reply':'old answer'},
+                              {'type':'audio','format':'S16_LE','sample_rate':16000,'channels':1,
+                               'pcm_base64':base64.b64encode(pcm).decode()}]:
+                    self.wfile.write((json.dumps(event)+'\n').encode())
+                self.wfile.flush()
+                release.wait(5)
+            def log_message(self, *args): pass
+        server = ThreadingHTTPServer(('127.0.0.1',0), Worker)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.config.data['network']['voice_url'] = 'http://127.0.0.1:' + str(server.server_port)
+        agent = Agent(self.config)
+        new_phrase = b'complete near-end phrase'
+        def capture(**kwargs):
+            time.sleep(.05)
+            kwargs['on_speech']()
+            time.sleep(.02)
+            return new_phrase
+        agent.capture = capture
+        real_popen = subprocess.Popen
+        def player(command, **kwargs):
+            return real_popen([sys.executable, '-c', 'import sys; sys.stdin.buffer.read()'], **kwargs)
+        try:
+            with patch('reachy_companion.agent.subprocess.Popen', side_effect=player):
+                started = time.monotonic()
+                reply = agent.voice('/say', {'text':'old answer'})
+                self.assertLess(time.monotonic()-started, 2)
+            self.assertTrue(reply['interrupted'])
+            self.assertTrue(reply['cancelled'])
+            self.assertEqual(agent.pending_pcm, (agent.microphone_epoch, new_phrase))
+            self.assertIsNone(agent.playback_process)
+            self.assertIsNone(agent.voice_response)
+            self.assertTrue(agent.microphone.enabled)
+        finally:
+            agent.stopping.set()
+            release.set()
+            server.shutdown()
+            server.server_close()
+
     def test_cancelled_worker_stream_releases_lock_without_committing_history(self):
         import types
         piper = types.ModuleType('piper')
