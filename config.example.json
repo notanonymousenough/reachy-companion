@@ -128,7 +128,7 @@
     }
   },
   "tts": {
-    "pitch_cents": 300,
+    "pitch_cents": 150,
     "synthesis": {
       "volume": 0.65,
       "length_scale": 1.0,
@@ -238,5 +238,22 @@
     "cpu_threads": 4,
     "desktop_llm_base_url": "http://host.docker.internal:1234/v1",
     "windows_firewall_rule": "Reachy Companion compute from hub"
+  },
+  "runtime": {
+    "profile": "profiles/friend.json",
+    "git": {
+      "remote": "origin",
+      "branch": "main"
+    },
+    "windows": {
+      "docker_desktop_path": "C:\\Program Files\\Docker\\Docker\\Docker Desktop.exe",
+      "lms_command": "lms",
+      "model_key": "qwen3.5-9b-uncensored-hauhaucs-aggressive",
+      "gpu": "max",
+      "context_length": 8192,
+      "llm_bind": "0.0.0.0",
+      "startup_timeout": 180,
+      "startup_task": "Reachy Companion"
+    }
   }
 }

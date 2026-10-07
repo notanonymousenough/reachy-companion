@@ -3,7 +3,7 @@
 > **Живая установка переведена на новую архитектуру:** hub только маршрутизирует, STT/TTS работают в Docker на Windows ПК, LLM — в LM Studio. Включены `voice.mode=remote` и `streaming.enabled=true`; проверены ответ через динамик Reachy и полный STT → LLM → поток PCM через хаб. Инструкция с нуля: [маршрутизатор и worker](docs/router-architecture.md).
 
 
-Русскоязычный голосовой компаньон для Reachy Mini Wireless. Робот слушает через собственный микрофон и отвечает через динамик голосом молодого парня с мягким, слегка феминным оттенком. Ричи — язвительный приятель: говорит прямо, умеет подколоть и не избегает неудобных разговоров. Текущая архитектура: Raspberry Pi 3B+ (reachy-hub) маршрутизирует запросы и допустимые движения; STT/TTS и бесплатная локальная модель LM Studio работают на ПК с RTX 5070. Первый этап с local voice на хабе и команды перехода сохранены в истории установки; текущий режим описан ниже.
+Русскоязычный голосовой компаньон для Reachy Mini Wireless. Робот слушает через собственный микрофон и отвечает через динамик голосом обычного молодого парня. Ричи — язвительный приятель: говорит прямо, умеет подколоть и не избегает неудобных разговоров. Текущая архитектура: Raspberry Pi 3B+ (reachy-hub) маршрутизирует запросы и допустимые движения; STT/TTS и бесплатная локальная модель LM Studio работают на ПК с RTX 5070. Первый этап с local voice на хабе и команды перехода сохранены в истории установки; текущий режим описан ниже.
 
 ```text
 Mac ── HTTP / SSH ── reachy-hub ── REST / SSH ── Reachy Mini
@@ -145,7 +145,7 @@ ROBOT_ROOT=$(./scripts/companion config value deployment.robot.root)
 | `motion` | Поллинг, допустимые движения антенн, длительности шагов |
 | `timeouts`, `limits`, `logging`, `paths` | Таймауты, размеры запросов, журналы и каталоги |
 
-Текущий голос — Piper Ruslan medium, поднятый SoX на 300 cents (3 полутона). `volume=0.65`, `length_scale=1.0`, `noise_scale=0.35`, `noise_w_scale=0.65`, нормализация включена. Это настройка для более взрослого молодого тембра со слегка феминным оттенком; субъективное звучание оценивается по аудиопробе. Чтобы сделать его взрослее, уменьшить `tts.pitch_cents`; темп регулируется `length_scale` (больше — медленнее). Новую модель менять вместе с её ONNX JSON. [Карточка Ruslan](https://huggingface.co/rhasspy/piper-voices/blob/main/ru/ru_RU/ruslan/medium/MODEL_CARD) указывает русский голос 22 050 Hz и лицензию корпуса CC BY-NC-SA 4.0; учитывать условия при дальнейшем использовании.
+Текущий голос — Piper Ruslan medium, поднятый SoX на 150 cents (1,5 полутона). `volume=0.65`, `length_scale=1.0`, `noise_scale=0.35`, `noise_w_scale=0.65`, нормализация включена. Это настройка для обычного молодого мужского тембра; субъективное звучание оценивается по аудиопробе. Чтобы сделать его взрослее, уменьшить `tts.pitch_cents`; темп регулируется `length_scale` (больше — медленнее). Новую модель менять вместе с её ONNX JSON. [Карточка Ruslan](https://huggingface.co/rhasspy/piper-voices/blob/main/ru/ru_RU/ruslan/medium/MODEL_CARD) указывает русский голос 22 050 Hz и лицензию корпуса CC BY-NC-SA 4.0; учитывать условия при дальнейшем использовании.
 
 Persona задаётся в `llm.system_prompt`: маленький любознательный компаньон, короткие точные ответы по-русски, дружелюбный тон без сюсюканья. Голос и persona — отдельные настройки.
 
@@ -236,3 +236,37 @@ powershell -ExecutionPolicy Bypass -File .\scripts\apply-character.ps1
 ```
 
 Скрипт читает profiles/friend.json, делает резервные копии, обновляет config.local.json и config.worker.local.json и перезапускает только контейнер worker. LM Studio, модели и токен не меняются. Перезапуск worker очищает прежний контекст разговора LM Studio backend. Если config.worker.local.json ещё отсутствует, сначала применить профиль, затем start-worker.ps1.
+
+
+## Обновление из Git и единый запуск
+
+Основной репозиторий: https://github.com/notanonymousenough/reachy-companion, ветка main. На всех устройствах сохраняется настоящий Git checkout. Токен, локальные IP, модели, данные и venv исключены из Git. `runtime.profile` подключает версионируемый profiles/friend.json при загрузке конфигурации; поэтому pull меняет персонажа/голос, сохраняя сеть и секреты. Чтобы отключить профиль и использовать собственные локальные llm/tts/conversation, задать runtime.profile пустой строкой.
+
+Windows, PowerShell из каталога repo:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\start.ps1
+```
+
+Это одна команда: git pull --ff-only → Docker Desktop/Linux engine → lms daemon up → загрузка модели, если нужный identifier ещё не загружен → HTTP server LM Studio → проверочная генерация → Docker build/prepare/start worker → health. Повторный запуск безопасен: используются уже загруженная модель и веса, контейнер worker заменяется. Профиль применится автоматически. Для запуска без сети и pull добавить -NoPull; первая загрузка зависимостей/моделей всё равно требует интернета. Модель/CLI/путь Docker/context/GPU/bind/timeouts задаются runtime.windows, API identifier — llm.model, порт — container.desktop_llm_base_url. Скрипт не выгружает чужие модели.
+
+Для запуска при входе пользователя Windows:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install-startup.ps1
+```
+
+Задача запускает тот же start.ps1 с -NoPull. Требуется вход пользователя и работающий Docker Desktop; это не служба до входа в Windows. Снять автозапуск: `Unregister-ScheduledTask -TaskName` со значением runtime.windows.startup_task. Если регистрация требует повышения прав, выполнить установку задачи из PowerShell администратора.
+
+На хабе / Reachy, из каталога checkout:
+
+```sh
+./scripts/update.sh hub
+./scripts/update.sh robot
+```
+
+Выбрать только роль данного устройства. update.sh делает fast-forward pull, проверяет конфиг и перезапускает systemd через sudo. Зависимости устанавливаются только при изменении lock-файла; код берётся из src через PYTHONPATH, без повторной сборки wheel. Firewall при обычном update не переустанавливается, таймер rollback не запускается. Для новых apt-пакетов или первой установки использовать install. Если pull не удался или есть изменения tracked-файлов, скрипт остановится до restart. Уже выполненный pull не откатывается при ошибке запуска; для отката выбрать прежний commit и update.sh ROLE --no-pull.
+
+Локальный config.local.json и общий secrets/token выдаются при первоначальной настройке, а не скачиваются из Git. На Linux настройка systemd производится install; затем можно просто git pull --ff-only и update.sh ROLE --no-pull. Автозапуск hub/robot — существующие systemd units.
+
+Команды lms проверены по локальному --help и [официальной CLI-документации](https://lmstudio.ai/docs/cli). Сервер запускается с [явным bind и port](https://lmstudio.ai/docs/cli/serve/server-start).

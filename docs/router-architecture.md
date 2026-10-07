@@ -4,7 +4,7 @@
 
 Живая установка переведена на `voice.mode=remote`, `streaming.enabled=true`. Пользователь запустил Docker worker на Windows 11; health и Bearer-аутентификация проверены с хаба. Hub использует отдельную `.venv-router` без Vosk/Piper/ONNX, две службы занимают примерно по 25 MiB RSS. Reachy обновлён до пакета 0.2.0 и проигрывает PCM из одного непрерывного aplay. Полный STT → LM Studio → TTS проверен на настоящем Windows worker через хаб. Автоматического fallback к вычислениям на хабе нет.
 
-SSH и Docker API Windows удалённо не настроены; запуск контейнера выполнен пользователем через PowerShell. OpenClaw/Hermes пока не установлены: добавлены адаптеры и конфиг для будущего подключения. Автозапуск самой LM Studio через CLI отложен по просьбе пользователя.
+SSH и Docker API Windows удалённо не настроены; запуск контейнера выполнен пользователем через PowerShell. OpenClaw/Hermes пока не установлены: добавлены адаптеры и конфиг для будущего подключения. Теперь добавлен единый scripts/start.ps1: запускает LM Studio через CLI вместе с Docker worker; настройка задачи входа — scripts/install-startup.ps1.
 ## Распределение задач
 
 ```text
@@ -33,7 +33,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\start-worker.ps1
 
 Python на Windows для этого не нужен. Скрипт проверяет Linux Docker engine, собирает образ, скачивает модели, запускает контейнер с restart policy, разрешает TCP-порт worker с IPv4 хаба и ждёт health. Ранее существовавшие широкие правила Docker Firewall он не меняет; worker endpoints всё равно требуют Bearer-токен, кроме health.
 
-LM Studio на этом же ПК подключается из контейнера по `container.desktop_llm_base_url` через [host.docker.internal](https://docs.docker.com/desktop/features/networking/networking-how-tos/). Скрипт создаёт отдельный `config.worker.local.json` в UTF-8 без BOM и подставляет этот URL; основной конфиг Mac не меняется. Все ports, image/name, CPU threads, адрес хаба и имя firewall rule читаются из JSON. Скрипт не запускает OpenClaw/Hermes и не меняет работающую LM Studio.
+LM Studio на этом же ПК подключается из контейнера по `container.desktop_llm_base_url` через [host.docker.internal](https://docs.docker.com/desktop/features/networking/networking-how-tos/). Скрипт создаёт отдельный `config.worker.local.json` в UTF-8 без BOM и подставляет этот URL; основной конфиг Mac не меняется. Все ports, image/name, CPU threads, адрес хаба и имя firewall rule читаются из JSON. Этот низкоуровневый скрипт запускает только worker. Для всего стека и pull использовать scripts/start.ps1; OpenClaw/Hermes не запускаются.
 
 При новой установке после строки `Worker ready` проверить доступ с hub и установить службы по разделу ниже. В этой установке проверка и переключение уже выполнены. Для первоначального скачивания моделей пользователю понадобился VPN; после загрузки веса хранятся в каталоге models. При ошибках TLS проверить доступ к download_url из контейнера; проверку сертификатов не отключать.
 

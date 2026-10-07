@@ -35,6 +35,8 @@ def main():
     ssh.add_argument('command', nargs=argparse.REMAINDER)
     download = commands.add_parser('models')
     download.add_argument('action', choices=('download',))
+    update = commands.add_parser('update')
+    update.add_argument('role', choices=('hub', 'robot', 'worker'))
     args = parser.parse_args()
     if args.group == 'config' and args.action == 'init':
         print(initialize(Path.cwd()))
@@ -82,6 +84,9 @@ def main():
     elif args.group == 'deploy':
         from .deployment import deploy as run
         run(config, args.role, dry_run=args.dry_run)
+    elif args.group == 'update':
+        from .deployment import update as run
+        run(config, args.role)
     elif args.group == 'install':
         from .deployment import install as run
         run(config, args.role, skip_models=args.skip_model_download)

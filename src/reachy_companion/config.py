@@ -12,6 +12,23 @@ class Config:
                                                        'config.local.json')).expanduser().resolve()
         self.root = self.filename.parent
         self.data = json.loads(self.filename.read_text())
+        profile = self.data.get('runtime', {}).get('profile', '')
+        if profile:
+            profile_path = (self.root / profile).resolve()
+            if not profile_path.is_relative_to(self.root):
+                raise ValueError('Profile must be inside the repository')
+            values = json.loads(profile_path.read_text())
+            if not isinstance(values, dict) or set(values) - {'llm', 'tts', 'conversation'}:
+                raise ValueError('Profile may only change llm, tts and conversation')
+            def merge(target, patch):
+                for key, value in patch.items():
+                    if key not in target:
+                        raise ValueError('Unknown profile field: ' + key)
+                    if isinstance(value, dict):
+                        merge(target[key], value)
+                    else:
+                        target[key] = value
+            merge(self.data, values)
         self.validate()
         self.token = ''
         if require_token:

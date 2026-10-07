@@ -1,5 +1,6 @@
 import copy
 import json
+import shutil
 from pathlib import Path
 import sys
 import tempfile
@@ -23,8 +24,50 @@ class ConfigurationTests(unittest.TestCase):
         self.data = json.loads((ROOT / 'config.example.json').read_text())
         self.data['security']['robot']['hub_source_ipv4'] = '192.0.2.10'
         (self.root / 'config.example.json').write_text(json.dumps(self.data))
+        shutil.copytree(ROOT / "profiles", self.root / "profiles")
         initialize(self.root)
         self.config = Config(self.root / 'config.local.json')
+
+    def test_profile_changes_voice_without_overwriting_local_network_or_token(self):
+        token = self.config.token
+        profile = self.root / 'profiles/friend.json'
+        data = json.loads(profile.read_text())
+        data['tts']['pitch_cents'] = 175
+        profile.write_text(json.dumps(data))
+        configured = Config(self.config.filename)
+        self.assertEqual(configured['tts']['pitch_cents'], 175)
+        self.assertEqual(configured['security']['robot']['hub_source_ipv4'], '192.0.2.10')
+        self.assertEqual(configured.token, token)
+        data['network'] = {'hub_url': 'http://wrong-host:1'}
+        profile.write_text(json.dumps(data))
+        with self.assertRaises(ValueError):
+            Config(self.config.filename)
+
+    def test_update_preserves_firewall_and_skips_unchanged_dependencies(self):
+        from reachy_companion.deployment import update
+        import hashlib
+        self.config.data['deployment']['robot']['root'] = str(self.root)
+        venv = self.root / self.config['deployment']['robot']['venv_dir'] / 'bin'
+        venv.mkdir(parents=True)
+        (venv / 'python').touch()
+        locks = self.root / 'requirements'
+        locks.mkdir()
+        (locks / 'robot.lock').write_text('webrtcvad-wheels==2.0.14.post1\n')
+        with patch('reachy_companion.deployment.os.geteuid', return_value=0), \
+             patch('reachy_companion.deployment.subprocess.run') as run, \
+             patch('pathlib.Path.write_text'):
+            update(self.config, 'robot')
+        commands = [call.args[0] for call in run.call_args_list]
+        self.assertFalse(any('apt-get' in c or 'nft' in c for c in commands))
+        self.assertIn(['systemctl', 'restart', 'reachy-voice-agent'], commands)
+        data = self.config.path(self.config['paths']['data_dir'])
+        marker = data / 'robot-dependencies.sha256'
+        marker.write_text(hashlib.sha256((locks / 'robot.lock').read_bytes()).hexdigest())
+        with patch('reachy_companion.deployment.os.geteuid', return_value=0), \
+             patch('reachy_companion.deployment.subprocess.run') as run, \
+             patch('pathlib.Path.write_text'):
+            update(self.config, 'robot')
+        self.assertFalse(any('pip' in ' '.join(call.args[0]) for call in run.call_args_list))
 
     def test_secret_and_config_are_private_and_not_overwritten(self):
         token = self.config.token

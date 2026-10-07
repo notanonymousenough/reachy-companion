@@ -16,7 +16,8 @@ if ($LASTEXITCODE -ne 0 -or $workerDockerOS.Trim() -ne "linux") {
     throw "Start Docker Desktop with Linux containers before running this script."
 }
 $workerConfigSource = Join-Path $workerRepo $Configuration
-$workerSettings = Get-Content -Raw -Encoding UTF8 $workerConfigSource | ConvertFrom-Json
+. "$PSScriptRoot/common.ps1"
+$workerSettings = Read-CompanionSettings $workerConfigSource
 $workerTokenFile = Join-Path $workerRepo $workerSettings.paths.token_file
 if (-not (Test-Path $workerTokenFile)) { throw "Copy the existing secrets/token from your Mac repository." }
 if ((Get-Content -Raw $workerTokenFile).Trim().Length -lt 32) { throw "Invalid companion token." }
@@ -65,4 +66,4 @@ if (-not $workerReady) {
     Invoke-WorkerDocker -DockerArguments @("logs", "--tail", "30", $workerName)
     throw "Worker did not become ready. Check the log above."
 }
-Write-Host "Worker ready. Tell Codex to check it from reachy-hub and switch voice.mode to remote."
+Write-Host "Worker ready."

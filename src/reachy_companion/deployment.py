@@ -163,3 +163,36 @@ def install(config, role, skip_models=False):
     if role == 'robot' and config['security']['robot']['restrict_to_hub']:
         from .firewall import main
         main(config, 'install')
+
+
+def update(config, role):
+    """Update dependencies and units after git pull; preserve robot firewall."""
+    if os.geteuid() != 0:
+        raise PermissionError('Run update with sudo on the device')
+    target = config['deployment'][role]
+    if config.root != Path(target['root']).resolve():
+        raise ValueError('Configuration directory must match deployment root')
+    venv = config.root / target['venv_dir']
+    if not (venv / 'bin/python').exists():
+        raise ValueError('Run install first to create the device environment')
+    selected = 'worker' if role == 'hub' and config['voice']['mode'] == 'local' else role
+    lock = config.root / 'requirements' / (selected + '.lock')
+    data = config.path(config['paths']['data_dir'])
+    data.mkdir(parents=True, exist_ok=True)
+    marker = data / (role + '-dependencies.sha256')
+    digest = hashlib.sha256(lock.read_bytes()).hexdigest()
+    if not marker.exists() or marker.read_text().strip() != digest:
+        subprocess.run([str(venv / 'bin/pip'), 'install', '-r', str(lock)], check=True)
+        marker.write_text(digest + '\n')
+    groups = ('hub', 'voice') if role == 'hub' else (('worker',) if role == 'worker' else ('agent',))
+    if len(groups) != len(target['services']):
+        raise ValueError('Invalid service list')
+    for name, group in zip(target['services'], groups):
+        if not name.replace('-', '').isalnum():
+            raise ValueError('Invalid service name')
+        (Path('/etc/systemd/system') / (name + '.service')).write_text(service_unit(config, role, group))
+    # Units use PYTHONPATH=src: pulled code is used without rebuilding the wheel.
+    subprocess.run(['systemctl', 'daemon-reload'], check=True)
+    subprocess.run(['systemctl', 'restart', *target['services']], check=True)
+    subprocess.run(['systemctl', 'is-active', *target['services']], check=True)
+    print('Updated services; firewall was preserved.')

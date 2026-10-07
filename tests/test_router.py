@@ -1,5 +1,6 @@
 import io
 import json
+import shutil
 import os
 from pathlib import Path
 import subprocess
@@ -26,6 +27,7 @@ class RoutingTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         root = Path(self.temp.name)
         (root / 'config.example.json').write_bytes((ROOT / 'config.example.json').read_bytes())
+        shutil.copytree(ROOT / "profiles", root / "profiles")
         initialize(root)
         self.config = Config(root / 'config.local.json')
 
