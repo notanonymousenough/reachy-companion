@@ -177,3 +177,8 @@ Windows: powershell -ExecutionPolicy Bypass -File scripts/start.ps1. Скрип�
 ## Голос чуть серьёзнее
 
 По просьбе пользователя голос молодого парня сделан немного ниже и спокойнее: pitch +50 cents вместо +150, length_scale=1.04 вместо 1.0. Изменены profiles/friend.json, example и основной локальный конфиг. Персонаж сохранён. Через SSH проверено: загружена Qwen3.5-9B-Uncensored-HauhauCS-Aggressive Q6_K, context 8192. Профиль применяется после Git pull и перезапуска worker.
+
+
+## Диагностика глухого и шумного звука
+
+В текущем WAV найден корректный PCM 16 kHz без клиппинга; RMS примерно 0.087 полной шкалы. На Reachy PCM,0 был 49/60, 82%, -11 dB. Подготовлена контрольная Piper-проба 22 050 Hz без pitch/resample. После жалобы убран pitch-shift, восстановлены штатные noise 0.667/0.8 и length 1.0, TTS volume поднят до 0.9. Добавлено audio.playback_mixer (Audio, PCM,0, 95%) и установка только playback gain при запуске агента. Capture Headset и PCM,1 сохранены. Проверка программного тракта не заменяет оценку шума человеком у динамика.

@@ -62,6 +62,9 @@ class Config:
             server = self.data['servers'][role]
             if not isinstance(server['port'], int) or not 1 <= server['port'] <= 65535:
                 raise ValueError('Invalid server port: ' + role)
+        mixer = self.data['audio'].get('playback_mixer', {})
+        if mixer.get('enabled', False) and not 0 <= mixer['volume_percent'] <= 100:
+            raise ValueError('Playback mixer volume must be between 0 and 100')
         if self.data['audio']['sample_rate'] != 16000 or self.data['audio']['vad_frame_ms'] != 20:
             raise ValueError('The current protocol uses mono S16_LE at 16000 Hz and 20 ms VAD frames')
         if self.data['audio']['chunk_ms'] % self.data['audio']['vad_frame_ms']:

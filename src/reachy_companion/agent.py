@@ -41,9 +41,20 @@ class Agent:
         self.last_transcript = None
         self.turns = 0
         self.calibrated = False
+        self.playback_configured = False
         self.vad = webrtcvad.Vad(self.audio['vad_mode'])
         self.chunk_bytes = self.audio['sample_rate'] * 2 * self.audio['chunk_ms'] // 1000
         self.vad_bytes = self.audio['sample_rate'] * 2 * self.audio['vad_frame_ms'] // 1000
+
+    def configure_playback(self):
+        settings = self.audio.get('playback_mixer', {})
+        if not settings.get('enabled', False):
+            return
+        subprocess.run(['amixer', '-c', str(settings['card']), 'sset',
+                        settings['control'], str(settings['volume_percent']) + '%'],
+                       capture_output=True, check=True, timeout=self.config['timeouts']['http'])
+        LOG.info('playback_mixer card=%s control=%s volume=%s%%', settings['card'],
+                 settings['control'], settings['volume_percent'])
 
     def request(self, base, path, payload=None, timeout=None):
         request = Request(base + path, data=None if payload is None else json.dumps(payload).encode(),
@@ -241,6 +252,9 @@ class Agent:
                     if status['ownership']['state'] != 'free':
                         raise RuntimeError('Robot is controlled by another application')
                     self.last_error = None
+                    if not self.playback_configured:
+                        self.configure_playback()
+                        self.playback_configured = True
                     if not greeted:
                         if self.config['conversation']['wake_on_start']:
                             self.request(self.config['network']['hub_url'], '/actions/wake', {}, timeout=self.config['timeouts']['wake'])

@@ -31,6 +31,22 @@ class RoutingTests(unittest.TestCase):
         initialize(root)
         self.config = Config(root / 'config.local.json')
 
+    def test_playback_mixer_only_changes_selected_playback_control(self):
+        # The microphone capture control must not be modified by voice volume.
+        import types
+        with patch.dict(sys.modules, {'webrtcvad': types.SimpleNamespace(Vad=lambda mode: None)}):
+            from reachy_companion.agent import Agent
+            agent = Agent(self.config)
+        with patch('reachy_companion.agent.subprocess.run') as run:
+            agent.configure_playback()
+        self.assertEqual(run.call_args.args[0],
+                         ['amixer', '-c', 'Audio', 'sset', 'PCM,0', '95%'])
+        self.assertTrue(run.call_args.kwargs['check'])
+        self.config.data['audio']['playback_mixer']['enabled'] = False
+        with patch('reachy_companion.agent.subprocess.run') as run:
+            agent.configure_playback()
+        run.assert_not_called()
+
     def test_router_import_requires_no_inference_packages(self):
         result = subprocess.run([sys.executable, '-c',
             "import sys; sys.modules['piper']=None; sys.modules['vosk']=None; "

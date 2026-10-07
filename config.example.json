@@ -128,12 +128,12 @@
     }
   },
   "tts": {
-    "pitch_cents": 50,
+    "pitch_cents": 0,
     "synthesis": {
-      "volume": 0.65,
-      "length_scale": 1.04,
-      "noise_scale": 0.35,
-      "noise_w_scale": 0.65,
+      "volume": 0.9,
+      "length_scale": 1.0,
+      "noise_scale": 0.667,
+      "noise_w_scale": 0.8,
       "normalize_audio": true
     }
   },
@@ -190,7 +190,13 @@
     "min_voiced_chunks": 4,
     "max_recording_seconds": 25,
     "max_input_seconds": 30,
-    "echo_tail_seconds": 0.4
+    "echo_tail_seconds": 0.4,
+    "playback_mixer": {
+      "enabled": true,
+      "card": "Audio",
+      "control": "PCM,0",
+      "volume_percent": 95
+    }
   },
   "limits": {
     "max_text_chars": 4000,
