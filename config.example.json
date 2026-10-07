@@ -273,8 +273,9 @@
     },
     "barge_in": {
       "enabled": true,
-      "min_voiced_chunks": 4,
-      "threshold_multiplier": 1.4
+      "min_voiced_chunks": 6,
+      "threshold_multiplier": 2.0,
+      "warmup_chunks": 9
     }
   },
   "audio": {

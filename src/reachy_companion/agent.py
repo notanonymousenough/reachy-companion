@@ -133,6 +133,8 @@ class Agent:
         if not active():
             return None
         confirmed = False
+        barge_voiced = 0
+        chunks_seen = 0
         barge = self.config['conversation'].get('barge_in', {})
         command = ['arecord', '-q', '-D', self.audio['capture_device'], '-f', 'S16_LE',
                    '-r', str(self.audio['sample_rate']), '-c', '1', '-t', 'raw']
@@ -155,6 +157,7 @@ class Agent:
                     chunk = process.stdout.read(self.chunk_bytes)
                     if len(chunk) != self.chunk_bytes:
                         raise RuntimeError('Microphone stream ended: ' + process.stderr.read().decode()[:500])
+                    chunks_seen += 1
                     samples = array.array('h', chunk)
                     rms = math.sqrt(sum(s*s for s in samples) / len(samples))
                     if calibrating:
@@ -171,6 +174,9 @@ class Agent:
                                         for i in range(0, len(chunk), self.vad_bytes))
                     threshold = self.threshold * (barge.get('threshold_multiplier', 1) if during_reply else 1)
                     loud = rms >= threshold and speech_frames >= self.audio['min_speech_frames']
+                    if during_reply and not confirmed:
+                        eligible = chunks_seen > barge.get('warmup_chunks', 9)
+                        barge_voiced = barge_voiced + 1 if loud and eligible else 0
                     if not frames:
                         pre.append(chunk)
                         if loud:
@@ -185,7 +191,7 @@ class Agent:
                         silent = 0
                     else:
                         silent += 1
-                    if during_reply and not confirmed and loud and voiced >= barge['min_voiced_chunks']:
+                    if during_reply and not confirmed and loud and barge_voiced >= barge['min_voiced_chunks']:
                         confirmed = True
                         if on_speech:
                             on_speech()

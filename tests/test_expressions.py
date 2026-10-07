@@ -109,6 +109,32 @@ class ExpressionTests(unittest.TestCase):
         self.assertTrue(a.microphone.enabled)
         self.assertTrue(a.listening.is_set())
 
+    def test_barge_in_requires_continuous_speech_not_separated_echo_spikes(self):
+        a = self.agent()
+        a.calibrated = True
+        a.config.data['conversation']['barge_in'].update(min_voiced_chunks=6, warmup_chunks=0)
+        a.vad = types.SimpleNamespace(is_speech=lambda *args: True)
+        loud = b'\x10\x27' * (a.chunk_bytes // 2)
+        quiet = b'\x00\x00' * (a.chunk_bytes // 2)
+        chunks = ([loud] * 3 + [quiet]) * 3 + [loud] * 6 + [quiet] * a.audio['silence_chunks']
+        reads = []
+        def read(*args):
+            reads.append(len(reads) + 1)
+            return chunks[len(reads)-1]
+        process = Mock()
+        process.__enter__ = Mock(return_value=process)
+        process.__exit__ = Mock(return_value=False)
+        process.stdout.read.side_effect = read
+        selector = Mock()
+        selector.select.return_value = [True]
+        triggered = []
+        with patch('reachy_companion.agent.subprocess.Popen', return_value=process), \
+             patch('reachy_companion.agent.selectors.DefaultSelector', return_value=selector):
+            pcm = a.capture(during_reply=True, on_speech=lambda: triggered.append(len(reads)))
+        self.assertEqual(triggered, [18])
+        self.assertTrue(pcm)
+        process.terminate.assert_called_once()
+
     def test_mute_drops_pending_barge_in_phrase(self):
         from reachy_companion.barge_in import BargeInMonitor
         a = self.agent()

@@ -27,6 +27,8 @@ class Config:
                 self.data['conversation']['expressions'] = values['conversation']['expressions']
             if 'barge_in' in values.get('conversation', {}) and 'barge_in' not in self.data['conversation']:
                 self.data['conversation']['barge_in'] = values['conversation']['barge_in']
+            if 'warmup_chunks' in values.get('conversation', {}).get('barge_in', {}):
+                self.data['conversation']['barge_in'].setdefault('warmup_chunks', values['conversation']['barge_in']['warmup_chunks'])
             def merge(target, patch):
                 for key, value in patch.items():
                     if key not in target:
@@ -100,6 +102,8 @@ class Config:
             if not 0 <= eq['headroom_db'] <= 12:
                 raise ValueError('Invalid speaker EQ headroom')
         barge = self.data['conversation'].get('barge_in', {})
+        if not 0 <= barge.get('warmup_chunks', 9) <= 30:
+            raise ValueError('Invalid barge-in warmup')
         if barge.get('enabled', False):
             if not 3 <= barge['min_voiced_chunks'] <= 10 or not 1 <= barge['threshold_multiplier'] <= 4:
                 raise ValueError('Invalid speech interruption settings')

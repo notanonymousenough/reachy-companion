@@ -31,6 +31,9 @@ function Read-CompanionSettings {
         if ($profile.PSObject.Properties['conversation'] -and $profile.conversation.PSObject.Properties['barge_in'] -and -not $settings.conversation.PSObject.Properties['barge_in']) {
             $settings.conversation | Add-Member -NotePropertyName barge_in -NotePropertyValue $profile.conversation.barge_in
         }
+        if ($profile.PSObject.Properties['conversation'] -and $profile.conversation.PSObject.Properties['barge_in'] -and $profile.conversation.barge_in.PSObject.Properties['warmup_chunks'] -and -not $settings.conversation.barge_in.PSObject.Properties['warmup_chunks']) {
+            $settings.conversation.barge_in | Add-Member -NotePropertyName warmup_chunks -NotePropertyValue $profile.conversation.barge_in.warmup_chunks
+        }
         Merge-CompanionSettings $settings $profile
     }
     return $settings

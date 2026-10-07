@@ -30,6 +30,9 @@ foreach ($characterFile in ($characterFiles | Select-Object -Unique)) {
     if ($characterPatch.PSObject.Properties['conversation'] -and $characterPatch.conversation.PSObject.Properties['barge_in'] -and -not $characterSettings.conversation.PSObject.Properties['barge_in']) {
         $characterSettings.conversation | Add-Member -NotePropertyName barge_in -NotePropertyValue $characterPatch.conversation.barge_in
     }
+    if ($characterPatch.PSObject.Properties['conversation'] -and $characterPatch.conversation.PSObject.Properties['barge_in'] -and $characterPatch.conversation.barge_in.PSObject.Properties['warmup_chunks'] -and -not $characterSettings.conversation.barge_in.PSObject.Properties['warmup_chunks']) {
+        $characterSettings.conversation.barge_in | Add-Member -NotePropertyName warmup_chunks -NotePropertyValue $characterPatch.conversation.barge_in.warmup_chunks
+    }
     Merge-CharacterSettings -Target $characterSettings -Patch $characterPatch
     $characterPlans += [pscustomobject]@{ Path = $characterFile; Settings = $characterSettings }
 }
