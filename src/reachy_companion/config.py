@@ -22,12 +22,12 @@ class Config:
                     fill(target[key], value)
         example_path = self.root / 'config.example.json'
         defaults = json.loads(example_path.read_text()) if example_path.exists() else {}
-        for section, optional in [('tts', ('playback_eq',)),
-                                  ('conversation', ('expressions', 'barge_in', 'recognition', 'interaction'))]:
+        for section, optional in [('streaming', ('playback_buffer_us', 'playback_period_us', 'playback_latency_seconds')), ('tts', ('playback_eq',)),
+                                  ('conversation', ('expressions', 'barge_in', 'recognition', 'interaction', 'sound_reactions'))]:
             for key in optional:
                 if key in defaults.get(section, {}):
                     fill(self.data[section], {key: defaults[section][key]})
-        for section in ('power', 'container'):
+        for section in ('container',):
             if section in defaults:
                 fill(self.data, {section: defaults[section]})
         profile = self.data.get('runtime', {}).get('profile', '')
@@ -97,9 +97,18 @@ class Config:
             ack = interaction['acknowledgements']
             if not 0 <= ack['delay_seconds'] <= 5 or any(not isinstance(v, str) or len(v) > 100 for v in ack['phrases'].values()):
                 raise ValueError('Invalid acknowledgement settings')
-        power = self.data.get('power', {})
-        if power and not 1 <= power['remind_after_minutes'] <= 1440:
-            raise ValueError('Invalid charge reminder interval')
+        sounds = self.data['conversation'].get('sound_reactions', {})
+        if sounds.get('enabled'):
+            if not 1 <= sounds['window_seconds'] <= 5 or not .5 <= sounds['interval_seconds'] <= 3:
+                raise ValueError('Invalid sound analysis timing')
+            if not 0 < sounds['music_threshold'] < 1 or not 0 < sounds['speech_threshold'] < 1:
+                raise ValueError('Invalid sound event threshold')
+            if not 1 <= sounds['music_enter_windows'] <= 5 or not 1 <= sounds['music_exit_windows'] <= 8:
+                raise ValueError('Invalid music mode hysteresis')
+            if not 60 <= sounds['min_bpm'] < sounds['max_bpm'] <= 180:
+                raise ValueError('Invalid rhythm range')
+            if Path(sounds['model_path']).is_absolute() or '..' in Path(sounds['model_path']).parts:
+                raise ValueError('Sound model must stay inside model storage')
         mixer = self.data['audio'].get('playback_mixer', {})
         if mixer.get('enabled', False) and not 0 <= mixer['volume_percent'] <= 100:
             raise ValueError('Playback mixer volume must be between 0 and 100')
@@ -177,6 +186,9 @@ class Config:
             raise ValueError('Unsupported brains.provider')
         if not 2 <= self.data['streaming']['pcm_chunk_bytes'] <= 65536 or self.data['streaming']['pcm_chunk_bytes'] % 2:
             raise ValueError('Invalid PCM stream chunk size')
+        stream = self.data['streaming']
+        if not 40000 <= stream['playback_buffer_us'] <= 300000 or not 5000 <= stream['playback_period_us'] <= stream['playback_buffer_us']//2 or not 0 <= stream['playback_latency_seconds'] <= .5:
+            raise ValueError('Invalid speaker buffering')
         if self.data['streaming']['sample_rate'] != 16000:
             raise ValueError('Streaming protocol requires mono S16_LE at 16000 Hz')
         if not 1 <= self.data['streaming']['relay_chunk_bytes'] <= 65536:

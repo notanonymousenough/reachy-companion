@@ -14,6 +14,9 @@ class ExpressionPlayer:
         self.state = None
         self.cues = []
         self.clock = None
+        self.dance_program = None
+        self.dance_at = 0
+        self.dance_index = 0
         self.version = self.completed = 0
         self.last_error = None
         self.last_expression = None
@@ -21,11 +24,11 @@ class ExpressionPlayer:
         if self.settings.get('enabled', False):
             self.thread.start()
 
-    def set(self, phase, emotion='neutral', wait=False):
+    def set(self, phase, emotion='neutral', wait=False, force=False):
         if not self.settings.get('enabled', False):
             return
         with self.condition:
-            if self.state != (phase, emotion):
+            if force or self.state != (phase, emotion):
                 self.cues = []
                 self.clock = None
                 self.state = (phase, emotion)
@@ -62,6 +65,33 @@ class ExpressionPlayer:
             self.cues = sorted((self.cues + valid)[:maximum], key=lambda cue: cue['at'])
             self.condition.notify_all()
 
+    def wait_timeline(self, clock):
+        if not self.settings.get('enabled', False): return
+        with self.condition:
+            version = self.version
+            deadline = time.monotonic()+self.config['timeouts']['http']+self.settings['max_total_seconds']+2
+            while self.clock is clock and self.completed < version and not self.stopping.is_set():
+                if time.monotonic() >= deadline: raise TimeoutError('First speech motion did not start')
+                self.condition.wait(.05)
+
+    def dance(self, result, captured_at):
+        if not self.settings.get('enabled', False): return
+        from .motion_limits import validate_steps
+        for step in result['steps']:validate_steps([step],self.settings)
+        beat=result['beat_seconds']
+        if not .3 <= beat <= 1: raise ValueError('Invalid beat period')
+        import math
+        period=math.ceil((self.settings['duration_seconds']+.2)/beat)*beat
+        at=captured_at+result['next_beat_seconds']
+        now=time.monotonic()
+        at += math.ceil(max(0,now-at)/period)*period
+        with self.condition:
+            if self.state != ('dance','playful'):
+                self.state=('dance','playful');self.version+=1;self.cues=[];self.clock=None
+                self.dance_at=at
+            self.dance_program=(result['steps'],period)
+            self.condition.notify_all()
+
     def hold(self):
         with self.condition:
             self.state = None
@@ -77,7 +107,15 @@ class ExpressionPlayer:
             cue = None
             with self.condition:
                 while not self.stopping.is_set():
-                    if self.state == ('timeline', 'neutral'):
+                    if self.state == ('dance','playful'):
+                        if self.dance_program and time.monotonic() >= self.dance_at:
+                            steps,period=self.dance_program
+                            cue={'steps':[steps[self.dance_index%len(steps)]],'emotion':'playful','gesture':'wiggle','phase':'music'}
+                            self.dance_index+=1
+                            self.dance_at=time.monotonic()+period
+                            break
+                        self.condition.wait(.05)
+                    elif self.state == ('timeline', 'neutral'):
                         if self.cues and self.cues[0]['at'] <= self.clock.seconds():
                             cue = self.cues.pop(0)
                             # Late cues are merged into the current target, never queued as a backlog.
@@ -111,7 +149,7 @@ class ExpressionPlayer:
                 if not stale and plan.get('steps'):
                     self.request(self.config['network']['hub_url'], '/actions/expression',
                                  {'steps': plan['steps']}, timeout=self.config['timeouts']['http'])
-                    self.last_expression = ({'phase': 'speaking', 'emotion': cue.get('emotion', 'neutral'),
+                    self.last_expression = ({'phase': cue.get('phase','speaking'), 'emotion': cue.get('emotion', 'neutral'),
                                              'gesture': cue.get('gesture', 'auto'), 'phoneme': cue.get('phoneme', '')}
                                             if cue is not None else {'phase': state[0], 'emotion': state[1]})
                 self.last_error = None

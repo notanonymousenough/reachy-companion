@@ -81,6 +81,8 @@ def download_models(config):
     stt, tts = config['models']['stt'], config['models']['tts']
     from .recognition import prepare
     prepare(config)
+    from .sound_events import prepare as prepare_sounds
+    prepare_sounds(config)
     destination = config.path(stt['path'])
     if config['conversation'].get('recognition', {}).get('backend') != 'faster_whisper' and not destination.exists():
         with tempfile.TemporaryDirectory() as temporary:

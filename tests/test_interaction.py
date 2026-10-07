@@ -11,7 +11,6 @@ from reachy_companion.config import Config, initialize
 from reachy_companion.intents import classify
 from reachy_companion.expressions import spoken_segments, spoken_expression
 from reachy_companion.replay import ReplayResponse
-from reachy_companion.charge_reminder import ChargeReminder
 from reachy_companion.speech_motion import cues
 from reachy_companion.motion_limits import validate_steps
 
@@ -34,6 +33,7 @@ class InteractionTests(unittest.TestCase):
         self.config.data['conversation']['expressions']['enabled'] = False
         self.config.data['conversation']['greet_on_start'] = False
         self.config.data['conversation']['wake_on_start'] = False
+        self.config.data['conversation']['sound_reactions']['enabled'] = False
         a = Agent(self.config)
         a.playback_configured = True
         self.addCleanup(a.stopping.set)
@@ -46,7 +46,7 @@ class InteractionTests(unittest.TestCase):
         updated = Config(self.config.filename)
         self.assertEqual(updated['conversation']['recognition']['path'], 'models/whisper-small')
 
-    def test_stop_is_direct_command_and_does_not_mute_or_match_a_quotation(self):
+    def test_stop_is_direct_command_and_does_not_match_a_quotation(self):
         settings = self.config['conversation']['interaction']
         for text in ('Замолчи!', 'Ричи, замолчи, пожалуйста.', 'Заткнись', 'Хватит говорить'):
             self.assertEqual(classify(text, settings)['action'], 'stop')
@@ -104,7 +104,7 @@ class InteractionTests(unittest.TestCase):
         self.assertEqual(played, [saved])
         self.assertEqual(a.capture.call_args.kwargs['idle_deadline'], saved['deadline'])
 
-    def test_spoken_stop_drops_saved_reply_without_muting_microphone(self):
+    def test_spoken_stop_drops_saved_reply_and_mutes_microphone(self):
         a = self.agent()
         a.resume_audio = {'pcm':b'old answer'}
         a.pending_pcm = (0, b'\x00\x00'*1600)
@@ -120,24 +120,7 @@ class InteractionTests(unittest.TestCase):
         a.run()
         a.voice.assert_not_called()
         self.assertIsNone(a.resume_audio)
-        self.assertTrue(a.microphone.enabled)
-
-    def test_charge_reminder_counts_only_observed_online_time_and_never_percent(self):
-        clock = [0]
-        with patch('reachy_companion.charge_reminder.time.monotonic', side_effect=lambda:clock[0]):
-            reminder = ChargeReminder(self.root/'charge.json', {'reminder_enabled':True,'remind_after_minutes':1})
-            reminder.observe(True)
-            clock[0]=60
-            reminder.observe(True)
-            self.assertTrue(reminder.status()['charge_reminder_due'])
-            self.assertIsNone(reminder.status()['battery_percent'])
-            reminder.observe(False)
-            clock[0]=600
-            reminder.observe(False)
-            self.assertEqual(reminder.status()['active_minutes'],1)
-            reminder.reset()
-            self.assertFalse(reminder.status()['charge_reminder_due'])
-            self.assertEqual(json.loads((self.root/'charge.json').read_text())['active_seconds'],0)
+        self.assertFalse(a.microphone.enabled)
 
     def test_asr_rejects_silence_and_own_reply_before_stopping_speaker(self):
         from reachy_companion.barge_in import BargeInMonitor
@@ -150,4 +133,4 @@ class InteractionTests(unittest.TestCase):
         a.request = Mock(return_value={'transcript':'замолчи','decision':{'action':'stop'}})
         monitor = BargeInMonitor(a)
         self.assertTrue(monitor.trigger(b'audio'))
-        a.stop_speaker.assert_called_once_with(abort_stream=False)
+        a.stop_speaker.assert_called_once_with()

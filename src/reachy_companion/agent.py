@@ -64,6 +64,8 @@ class Agent:
         from .expression_player import ExpressionPlayer
         self.expressions = ExpressionPlayer(config, self.request, self.stopping)
         self.chunk_bytes = self.audio['sample_rate'] * 2 * self.audio['chunk_ms'] // 1000
+        from .sound_monitor import SoundMonitor
+        self.sounds = SoundMonitor(self)
         self.vad_bytes = self.audio['sample_rate'] * 2 * self.audio['vad_frame_ms'] // 1000
 
     def stop_speaker(self, abort_stream=True):
@@ -91,6 +93,7 @@ class Agent:
                 self.resume_audio = None
                 self.stop_speaker()
             self.microphone.save(enabled)
+            self.sounds.reset()
             if enabled:
                 self.listening.set()
         return {'ok': True, 'microphone_enabled': enabled, 'capture_active': self.capture_active}
@@ -132,7 +135,7 @@ class Agent:
         def active():
             return (self.microphone.enabled if during_reply else self.listening.is_set()) and not self.stopping.is_set() and epoch == self.microphone_epoch and not (stop_event and stop_event.is_set())
         if not during_reply and not skip_expression:
-            self.expressions.set('listening', wait=True)
+            self.expressions.set('neutral', wait=True)
             self.phase = 'listening'
         if not active():
             return None
@@ -164,6 +167,13 @@ class Agent:
                     if len(chunk) != self.chunk_bytes:
                         raise RuntimeError('Microphone stream ended: ' + process.stderr.read().decode()[:500])
                     chunks_seen += 1
+                    if not during_reply:
+                        self.sounds.feed(chunk)
+                        if self.sounds.music:
+                            frames = []; voiced = silent = 0
+                            pre.clear()
+                            self.phase = 'music'
+                            continue
                     samples = array.array('h', chunk)
                     rms = math.sqrt(sum(s*s for s in samples) / len(samples))
                     if calibrating:
@@ -190,6 +200,7 @@ class Agent:
                             voiced = 1
                             if not during_reply:
                                 self.phase = 'recording'
+                                self.expressions.set('listening', force=True)
                         continue
                     frames.append(chunk)
                     if loud:
@@ -285,7 +296,7 @@ class Agent:
         deadline = None
         selector = None
         from .speech_clock import SpeechClock
-        clock = SpeechClock(settings['sample_rate'])
+        clock = SpeechClock(settings['sample_rate'], settings['playback_latency_seconds'])
         full_pcm = bytearray()
         all_cues = []
         cursor = None
@@ -329,10 +340,14 @@ class Agent:
                                 cursor = clock.position()
                             continue
                         if process is None:
+                            if all_cues:
+                                self.expressions.wait_timeline(clock)
+                            if cancelled(): return cancelled_result()
                             self.phase = 'speaking'
                             if not all_cues:
                                 self.expressions.set('speaking', (result or {}).get('emotion', 'neutral'))
                             process = subprocess.Popen(['aplay', '-q', '-D', self.audio['playback_device'],
+                                '--buffer-time='+str(settings['playback_buffer_us']), '--period-time='+str(settings['playback_period_us']),
                                 '-t', 'raw', '-f', 'S16_LE', '-r', str(settings['sample_rate']), '-c', '1'],
                                 stdin=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
                             self.playback_process = process
@@ -430,6 +445,7 @@ class Agent:
                     if self.resume_audio is not None:
                         self.resume_audio['deadline'] = (self.last_voice_at or time.monotonic()) + self.config['conversation']['interaction']['resume_after_empty_seconds']
             finally:
+                self.expressions.hold()
                 self.expressions.set('neutral')
 
     def run(self):
@@ -488,6 +504,9 @@ class Agent:
                                 if more:
                                     self.pending_pcm = (epoch, more)
                                     continue
+                            if self.sounds.music:
+                                self.resume_audio = None
+                                continue
                             if self.microphone.enabled and self.listening.is_set() and epoch == self.microphone_epoch:
                                 LOG.info('empty_interruption_resume')
                                 self.voice('/say', {}, expected_epoch=epoch, replay=saved)
@@ -498,7 +517,7 @@ class Agent:
                         if recognized['decision']['action'] == 'stop':
                             self.last_transcript = text
                             LOG.info('spoken_stop')
-                            self.expressions.set('neutral')
+                            self.set_microphone(False)
                             continue
                         response = self.voice('/text', {'text': text, 'session': self.config['conversation']['session'],
                                                        'previous_reply_interrupted': True}, expected_epoch=epoch)
@@ -513,7 +532,7 @@ class Agent:
                             LOG.info('turn transcript=%r reply=%r', self.last_transcript, response.get('reply'))
                     if response.get('command') == 'stop':
                         self.resume_audio = None
-                    if response.get('command') == 'pause':
+                    if response.get('command') in ('pause', 'stop'):
                         self.set_microphone(False)
                     self.last_error = None
             except Exception as exc:
@@ -588,6 +607,7 @@ def main(config, test_speaker=False):
                              'volume_percent': agent.volume.percent,
                              'volume_control_enabled': agent.audio.get('playback_mixer', {}).get('enabled', False),
                              'capture_active': agent.capture_active,
+                             'sound_mode': 'music' if agent.sounds.music else 'conversation', 'sound_error': agent.sounds.last_error,
                              'microphone_state_error': agent.microphone.error,
                              'expression': agent.expressions.last_expression,
                              'expression_error': agent.expressions.last_error})

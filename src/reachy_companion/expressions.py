@@ -3,7 +3,7 @@ import math
 import re
 
 EMOTIONS = ('neutral', 'joy', 'curious', 'skeptical', 'empathetic', 'surprised', 'confident', 'amused', 'concerned', 'thoughtful', 'apologetic', 'excited', 'sad', 'grateful', 'proud', 'confused', 'relieved', 'shy', 'playful', 'frustrated', 'disappointed', 'calm', 'tired', 'disgusted', 'impatient', 'loving', 'uncertain', 'embarrassed')
-PHASES = ('neutral', 'listening', 'processing', 'speaking')
+PHASES = ('neutral', 'listening', 'processing', 'speaking', 'reacting')
 TAG = re.compile(r'^\s*<emotion=([a-z]+)>\s*', re.I)
 
 

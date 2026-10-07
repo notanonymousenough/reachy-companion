@@ -102,7 +102,7 @@ def handler_for(router):
             if not self.authorized():
                 return
             if self.path not in ('/turn', '/text', '/say', '/reset', '/pause', '/resume',
-                                 '/robot/ask', '/robot/say', '/microphone', '/expression/plan', '/transcribe', '/stream/turn', '/stream/text', '/stream/say'):
+                                 '/robot/ask', '/robot/say', '/microphone', '/expression/plan', '/sound/classify', '/transcribe', '/stream/turn', '/stream/text', '/stream/say'):
                 self.close_connection = True
                 self.reply(404, {'error': 'Not found'})
                 return

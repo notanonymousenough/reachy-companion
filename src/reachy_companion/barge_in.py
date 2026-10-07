@@ -30,6 +30,12 @@ class BargeInMonitor:
                 text = recognized['transcript']
                 if not text:
                     return False
+                if recognized['decision']['action'] == 'stop':
+                    self.agent.last_transcript = text
+                    self.interrupted.set()
+                    self.agent.interruptions += 1
+                    self.agent.set_microphone(False)
+                    return True
                 if recognized['decision']['action'] != 'stop':
                     heard = re.findall(r'\w+', text.lower().replace('ё', 'е').replace('reachy', 'ричи'))
                     own = set(re.findall(r'\w+', self.agent.current_reply_text.lower().replace('ё', 'е')))

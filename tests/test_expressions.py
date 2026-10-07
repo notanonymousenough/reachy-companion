@@ -35,6 +35,7 @@ class ExpressionTests(unittest.TestCase):
         self.config.data['conversation']['expressions']['enabled'] = False
         self.config.data['conversation']['barge_in']['enabled'] = False
         self.config.data['conversation']['barge_in']['confirm_with_stt'] = False
+        self.config.data['conversation']['sound_reactions']['enabled'] = False
         a = Agent(self.config)
         self.addCleanup(a.stopping.set)
         return a

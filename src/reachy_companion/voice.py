@@ -43,6 +43,8 @@ class Pipeline:
         self.last_turn = None
         from .recognition import Recognizer
         self.stt = Recognizer(config)
+        from .sound_events import SoundEvents
+        self.sounds = SoundEvents(config)
         self.tts = PiperVoice.load(config.path(config['models']['tts']['path']),
                                    include_alignments=config['conversation']['expressions'].get('speech_sync', {}).get('phoneme_alignments', False))
         self.tts_settings = SynthesisConfig(**config['tts']['synthesis'])
@@ -68,6 +70,8 @@ class Pipeline:
             raise RuntimeError('Robot is controlled by another application')
 
     def transcribe(self, pcm):
+        if hasattr(self, 'sounds') and self.sounds.classify(pcm[-int(self.config['conversation']['sound_reactions']['window_seconds']*32000):])['kind'] == 'music':
+            return ''
         return self.stt.transcribe(pcm)
 
     def classify(self, text):
@@ -314,6 +318,17 @@ def main(config, worker=False):
 
         def do_POST(self):
             if not self.authorized():
+                return
+            if self.path == '/sound/classify':
+                try:
+                    size = int(self.headers.get('Content-Length', 0))
+                    if not 0 < size <= config['limits']['max_request_bytes']: raise ValueError('Invalid audio size')
+                    payload = json.loads(self.rfile.read(size))
+                    result = pipeline.sounds.classify(base64.b64decode(payload['pcm_base64'], validate=True))
+                    self.reply(200, result)
+                except (ValueError, KeyError, TypeError) as exc: self.reply(400, {'error': str(exc)})
+                except Exception:
+                    LOG.exception('sound_classification_failed');self.reply(503, {'error': 'Sound analysis unavailable'})
                 return
             if self.path == '/transcribe':
                 try:

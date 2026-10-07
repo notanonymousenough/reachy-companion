@@ -17,8 +17,6 @@ class Hub:
         self.config = config
         self.http = build_opener(ProxyHandler({}))
         self.lock = threading.Lock()
-        from .charge_reminder import ChargeReminder
-        self.charge = ChargeReminder(config.path(config['power']['state_file']), config['power'])
 
     def robot(self, path, payload=None):
         data = None if payload is None else json.dumps(payload).encode()
@@ -158,10 +156,6 @@ class Hub:
             if current != previous:
                 LOG.info('robot_status %s', json.dumps(current))
                 previous = current
-            try:
-                self.charge.observe(current[0] != 'offline')
-            except OSError:
-                LOG.exception('charge_reminder_state_failed')
             time.sleep(self.config['motion']['poll_seconds'])
 
 
@@ -194,7 +188,7 @@ def serve(hub):
                     return
                 try:
                     value = hub.agent('/status')
-                    self.reply(200, {**{key: value.get(key) for key in ('microphone_enabled', 'capture_active', 'phase', 'expression', 'expression_error', 'volume_percent', 'volume_control_enabled', 'resumable_reply')}, 'power': hub.charge.status()})
+                    self.reply(200, {key: value.get(key) for key in ('microphone_enabled', 'capture_active', 'phase', 'expression', 'expression_error', 'volume_percent', 'volume_control_enabled', 'resumable_reply')})
                 except Exception:
                     self.reply(503, {'error': 'Robot agent unavailable'})
                 return
@@ -212,17 +206,6 @@ def serve(hub):
             token = self.headers.get('Authorization', '')
             if not hmac.compare_digest(token, 'Bearer ' + hub.config.token):
                 self.reply(401, {'error': 'Bearer token required'})
-                return
-            if self.path == '/control/charged':
-                try:
-                    size = int(self.headers.get('Content-Length', 0))
-                    if not 0 < size <= hub.config['limits']['max_agent_request_bytes']:
-                        raise ValueError('Invalid request size')
-                    if json.loads(self.rfile.read(size)) != {}:
-                        raise ValueError('Expected empty request')
-                    self.reply(200, {'ok': True, 'power': hub.charge.reset()})
-                except (ValueError, OSError) as exc:
-                    self.reply(400, {'error': str(exc)})
                 return
             if self.path in ('/actions/expression', '/control/microphone', '/control/volume'):
                 try:
