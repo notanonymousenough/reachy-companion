@@ -182,3 +182,5 @@ Windows: powershell -ExecutionPolicy Bypass -File scripts/start.ps1. Скрип�
 ## Диагностика глухого и шумного звука
 
 В текущем WAV найден корректный PCM 16 kHz без клиппинга; RMS примерно 0.087 полной шкалы. На Reachy PCM,0 был 49/60, 82%, -11 dB. Подготовлена контрольная Piper-проба 22 050 Hz без pitch/resample. После жалобы убран pitch-shift, восстановлены штатные noise 0.667/0.8 и length 1.0, TTS volume поднят до 0.9. Добавлено audio.playback_mixer (Audio, PCM,0, 95%) и установка только playback gain при запуске агента. Capture Headset и PCM,1 сохранены. Проверка программного тракта не заменяет оценку шума человеком у динамика.
+
+После установки: новый профиль подтверждён в config.worker.local.json; Task Scheduler result=0. Контрольный WAV с Windows worker — mono S16_LE 22 050 Hz без pitch/resample; синтез 0,27 s. Тот же текст успешно проигран через streaming/ALSA на Reachy. PCM,0 теперь 57/60, 95%, -3 dB; Headset capture остался 60/60. 16 тестов прошли. Пользователь уточнил, что проблема слышна и в файле, и в динамике; субъективное устранение шума ещё требует его оценки новой пробы.
