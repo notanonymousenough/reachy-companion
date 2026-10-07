@@ -31,6 +31,7 @@ class RoutingTests(unittest.TestCase):
         initialize(root)
         self.config = Config(root / 'config.local.json')
         self.config.data['conversation']['expressions']['enabled'] = False
+        self.config.data['conversation']['barge_in']['enabled'] = False
 
     def test_playback_mixer_only_changes_selected_playback_control(self):
         # The microphone capture control must not be modified by voice volume.

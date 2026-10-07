@@ -38,6 +38,12 @@ class ExpressionPlayer:
         if wait:
             self.stopping.wait(self.settings['settle_seconds'])
 
+    def hold(self):
+        with self.condition:
+            self.state = None
+            self.version += 1
+            self.condition.notify_all()
+
     def run(self):
         handled = 0
         while not self.stopping.is_set():
@@ -53,6 +59,10 @@ class ExpressionPlayer:
                     break
                 state, version = self.state, self.version
             if state is None:
+                with self.condition:
+                    handled = version
+                    self.completed = max(self.completed, version)
+                    self.condition.notify_all()
                 continue
             try:
                 plan = self.request(self.config['network']['voice_url'], '/expression/plan',

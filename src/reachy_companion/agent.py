@@ -37,6 +37,10 @@ class Agent:
         self.microphone_epoch = 0
         self.microphone_lock = threading.Lock()
         self.playback_process = None
+        self.voice_response = None
+        self.pending_pcm = None
+        self.interruptions = 0
+        self.barge_in_error = None
         self.capture_active = False
         if self.microphone.enabled:
             self.listening.set()
@@ -59,6 +63,19 @@ class Agent:
         self.chunk_bytes = self.audio['sample_rate'] * 2 * self.audio['chunk_ms'] // 1000
         self.vad_bytes = self.audio['sample_rate'] * 2 * self.audio['vad_frame_ms'] // 1000
 
+    def stop_speaker(self):
+        process = self.playback_process
+        if process is not None and process.poll() is None:
+            process.terminate()
+        # Wake a blocked urllib reader as well as stopping physical playback.
+        response = self.voice_response
+        if response is not None:
+            try:
+                import socket
+                response.fp.raw._sock.shutdown(socket.SHUT_RDWR)
+            except (AttributeError, OSError):
+                pass
+
     def set_microphone(self, enabled):
         if not isinstance(enabled, bool):
             raise ValueError('enabled must be boolean')
@@ -67,9 +84,8 @@ class Agent:
             self.listening.clear()
             if not enabled:
                 self.expressions.set('neutral')
-                process = self.playback_process
-                if process is not None and process.poll() is None:
-                    process.terminate()
+                self.pending_pcm = None
+                self.stop_speaker()
             self.microphone.save(enabled)
             if enabled:
                 self.listening.set()
@@ -107,12 +123,17 @@ class Agent:
         except HTTPError as exc:
             raise RuntimeError('Hub HTTP %s: %s' % (exc.code, exc.read().decode()[:600])) from exc
 
-    def capture(self):
+    def capture(self, during_reply=False, on_speech=None, stop_event=None):
         epoch = self.microphone_epoch
-        self.expressions.set('listening', wait=True)
-        if not self.listening.is_set() or epoch != self.microphone_epoch:
+        def active():
+            return (self.microphone.enabled if during_reply else self.listening.is_set()) and not self.stopping.is_set() and epoch == self.microphone_epoch and not (stop_event and stop_event.is_set())
+        if not during_reply:
+            self.expressions.set('listening', wait=True)
+            self.phase = 'listening'
+        if not active():
             return None
-        self.phase = 'listening'
+        confirmed = False
+        barge = self.config['conversation'].get('barge_in', {})
         command = ['arecord', '-q', '-D', self.audio['capture_device'], '-f', 'S16_LE',
                    '-r', str(self.audio['sample_rate']), '-c', '1', '-t', 'raw']
         with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
@@ -126,7 +147,7 @@ class Agent:
             silent = 0
             calibrating = not self.calibrated
             try:
-                while self.listening.is_set() and not self.stopping.is_set() and epoch == self.microphone_epoch:
+                while active():
                     if not selector.select(timeout=1):
                         if process.poll() is not None:
                             raise RuntimeError(process.stderr.read().decode()[:500])
@@ -148,13 +169,15 @@ class Agent:
                         continue
                     speech_frames = sum(self.vad.is_speech(chunk[i:i+self.vad_bytes], self.audio['sample_rate'])
                                         for i in range(0, len(chunk), self.vad_bytes))
-                    loud = rms >= self.threshold and speech_frames >= self.audio['min_speech_frames']
+                    threshold = self.threshold * (barge.get('threshold_multiplier', 1) if during_reply else 1)
+                    loud = rms >= threshold and speech_frames >= self.audio['min_speech_frames']
                     if not frames:
                         pre.append(chunk)
                         if loud:
                             frames = list(pre)
                             voiced = 1
-                            self.phase = 'recording'
+                            if not during_reply:
+                                self.phase = 'recording'
                         continue
                     frames.append(chunk)
                     if loud:
@@ -162,12 +185,17 @@ class Agent:
                         silent = 0
                     else:
                         silent += 1
+                    if during_reply and not confirmed and loud and voiced >= barge['min_voiced_chunks']:
+                        confirmed = True
+                        if on_speech:
+                            on_speech()
                     if silent >= self.audio['silence_chunks'] or len(frames) >= self.audio['max_recording_seconds'] * 1000 / self.audio['chunk_ms']:
-                        if voiced >= self.audio['min_voiced_chunks']:
-                            return b''.join(frames) if epoch == self.microphone_epoch and self.listening.is_set() else None
+                        if voiced >= self.audio['min_voiced_chunks'] and (not during_reply or confirmed):
+                            return b''.join(frames) if active() else None
                         frames = []
                         voiced = silent = 0
-                        self.phase = 'listening'
+                        if not during_reply:
+                            self.phase = 'listening'
                 return None
             finally:
                 selector.close()
@@ -203,18 +231,21 @@ class Agent:
                     process.wait()
         time.sleep(self.audio['echo_tail_seconds'])
 
-    def voice(self, path, payload, expected_epoch=None):
+    def voice(self, path, payload, expected_epoch=None, allow_barge_in=True):
         epoch = self.microphone_epoch if expected_epoch is None else expected_epoch
+        monitor = None
         def cancelled():
-            return epoch != self.microphone_epoch or self.stopping.is_set()
+            return epoch != self.microphone_epoch or self.stopping.is_set() or bool(monitor and monitor.interrupted.is_set())
+        def cancelled_result():
+            return {'ok': True, 'cancelled': True, 'interrupted': bool(monitor and monitor.interrupted.is_set())}
         if cancelled():
-            return {'ok': True, 'cancelled': True}
+            return cancelled_result()
         if path in ('/text', '/turn'):
             self.expressions.set('processing')
         if not self.config['streaming']['enabled']:
             response = self.request(self.config['network']['voice_url'], path, payload)
             if cancelled():
-                return {'ok': True, 'cancelled': True}
+                return cancelled_result()
             self.expressions.set('speaking', response.get('emotion', 'neutral'))
             try:
                 self.play(response.get('audio_base64', ''), epoch)
@@ -235,11 +266,12 @@ class Agent:
         selector = None
         try:
             with self.http.open(item, timeout=self.config['timeouts']['client']) as response:
+                self.voice_response = response
                 if response.headers.get_content_type() != 'application/x-ndjson':
                     raise RuntimeError('Expected an audio event stream')
                 while True:
                     if cancelled():
-                        return {'ok': True, 'cancelled': True}
+                        return cancelled_result()
                     line = response.readline(settings['max_event_bytes'] + 1)
                     if not line:
                         break
@@ -250,7 +282,7 @@ class Agent:
                         result = event
                     elif event['type'] == 'audio':
                         if cancelled():
-                            return {'ok': True, 'cancelled': True}
+                            return cancelled_result()
                         if event.get('sample_rate') != settings['sample_rate'] or event.get('format') != 'S16_LE' or event.get('channels') != 1:
                             raise ValueError('Unsupported stream audio format')
                         pcm = base64.b64decode(event['pcm_base64'], validate=True)
@@ -264,8 +296,12 @@ class Agent:
                                 '-t', 'raw', '-f', 'S16_LE', '-r', str(settings['sample_rate']), '-c', '1'],
                                 stdin=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
                             self.playback_process = process
+                            if allow_barge_in and self.microphone.enabled and self.config['conversation'].get('barge_in', {}).get('enabled', False):
+                                from .barge_in import BargeInMonitor
+                                monitor = BargeInMonitor(self)
+                                monitor.start()
                             if cancelled():
-                                return {'ok': True, 'cancelled': True}
+                                return cancelled_result()
                             os.set_blocking(process.stdin.fileno(), False)
                             selector = selectors.DefaultSelector()
                             selector.register(process.stdin, selectors.EVENT_WRITE)
@@ -273,7 +309,7 @@ class Agent:
                         remaining = memoryview(pcm)
                         while remaining:
                             if cancelled():
-                                return {'ok': True, 'cancelled': True}
+                                return cancelled_result()
                             if time.monotonic() > deadline:
                                 raise TimeoutError('Streaming playback stopped or timed out')
                             if process.poll() is not None:
@@ -300,18 +336,17 @@ class Agent:
                 process.stdin.close()
                 process.wait(timeout=max(1, deadline - time.monotonic()))
                 if cancelled():
-                    return {'ok': True, 'cancelled': True}
+                    return cancelled_result()
                 if process.returncode:
                     raise RuntimeError('Streaming playback failed')
                 time.sleep(self.audio['echo_tail_seconds'])
             return {key: value for key, value in result.items() if key != 'type'}
         except Exception:
             if cancelled():
-                return {'ok': True, 'cancelled': True}
+                return cancelled_result()
             raise
         finally:
-            self.playback_process = None
-            self.expressions.set('neutral')
+            self.voice_response = None
             if selector is not None:
                 selector.close()
             if process is not None and process.poll() is None:
@@ -325,6 +360,14 @@ class Agent:
                 if not process.stdin.closed:
                     process.stdin.close()
                 process.stderr.close()
+            self.playback_process = None
+            try:
+                if monitor is not None:
+                    pcm = monitor.finish()
+                    if pcm:
+                        self.pending_pcm = (epoch, pcm)
+            finally:
+                self.expressions.set('neutral')
 
     def run(self):
         greeted = False
@@ -359,14 +402,21 @@ class Agent:
                         greeted = True
                     if not self.listening.is_set() or epoch != self.microphone_epoch:
                         continue
-                    pcm = self.capture()
+                    interrupted_input = False
+                    pending, self.pending_pcm = self.pending_pcm, None
+                    if pending is not None and pending[0] == epoch:
+                        pcm = pending[1]
+                        interrupted_input = True
+                    else:
+                        pcm = self.capture()
                     if not pcm or not self.listening.is_set() or epoch != self.microphone_epoch:
                         continue
                     self.phase = 'processing'
                     LOG.info('phrase captured seconds=%.2f', len(pcm) / 32000)
                     response = self.voice('/turn',
                                             {'pcm_base64': base64.b64encode(pcm).decode(),
-                                             'session': self.config['conversation']['session']}, expected_epoch=epoch)
+                                             'session': self.config['conversation']['session'],
+                                             'previous_reply_interrupted': interrupted_input}, expected_epoch=epoch)
                     self.last_transcript = response.get('transcript', '')
                     if self.last_transcript:
                         self.turns += 1
@@ -392,7 +442,7 @@ class Agent:
             raise RuntimeError('Robot is processing a voice turn; try again when idle')
         try:
             response = self.voice('/text' if path == '/ask' else '/say',
-                                    {'text': payload['text'], 'session': self.config['conversation']['session']})
+                                    {'text': payload['text'], 'session': self.config['conversation']['session']}, allow_barge_in=was_listening)
             return {k: v for k, v in response.items() if k != 'audio_base64'}
         finally:
             self.phase = 'paused'
@@ -443,6 +493,7 @@ def main(config, test_speaker=False):
                              'threshold_rms': agent.threshold, 'last_error': agent.last_error,
                              'last_transcript': agent.last_transcript, 'turns': agent.turns,
                              'microphone_enabled': agent.microphone.enabled,
+                             'interruptions': agent.interruptions, 'barge_in_error': agent.barge_in_error,
                              'volume_percent': agent.volume.percent,
                              'volume_control_enabled': agent.audio.get('playback_mixer', {}).get('enabled', False),
                              'capture_active': agent.capture_active,

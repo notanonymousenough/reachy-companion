@@ -25,6 +25,8 @@ class Config:
                 self.data['tts']['playback_eq'] = dict(values['tts']['playback_eq'])
             if 'expressions' in values.get('conversation', {}) and 'expressions' not in self.data['conversation']:
                 self.data['conversation']['expressions'] = values['conversation']['expressions']
+            if 'barge_in' in values.get('conversation', {}) and 'barge_in' not in self.data['conversation']:
+                self.data['conversation']['barge_in'] = values['conversation']['barge_in']
             def merge(target, patch):
                 for key, value in patch.items():
                     if key not in target:
@@ -97,6 +99,10 @@ class Config:
                     raise ValueError('Invalid speaker EQ gain')
             if not 0 <= eq['headroom_db'] <= 12:
                 raise ValueError('Invalid speaker EQ headroom')
+        barge = self.data['conversation'].get('barge_in', {})
+        if barge.get('enabled', False):
+            if not 3 <= barge['min_voiced_chunks'] <= 10 or not 1 <= barge['threshold_multiplier'] <= 4:
+                raise ValueError('Invalid speech interruption settings')
         expressions = self.data['conversation'].get('expressions', {})
         if expressions.get('enabled', False):
             from .expressions import EMOTIONS, PHASES, plan

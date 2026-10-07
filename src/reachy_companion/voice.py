@@ -104,7 +104,7 @@ class Pipeline:
             audio = fixed.getvalue()
         return base64.b64encode(audio).decode()
 
-    def answer(self, text, session):
+    def answer(self, text, session, interrupted=False):
         now = time.monotonic()
         self.sessions = {k: v for k, v in self.sessions.items() if now - v['used'] < self.config['llm']['history_ttl_seconds']}
         if session not in self.sessions and len(self.sessions) >= self.config['llm']['max_sessions']:
@@ -113,6 +113,8 @@ class Pipeline:
         entry = self.sessions.get(session, {'used': now, 'messages': []})
         messages = [{'role': 'system', 'content': self.config['llm']['system_prompt']}]
         messages += entry['messages'][-self.config['llm']['history_messages']:]
+        if interrupted:
+            messages.append({'role': 'system', 'content': 'Предыдущий ответ был прерван и не прозвучал полностью. Отвечай на новую реплику пользователя, не продолжай старый ответ без просьбы.'})
         messages.append({'role': 'user', 'content': text})
         from .brains import answer
         agent_session = self.agent_sessions.setdefault(session, uuid.uuid4().hex)
@@ -152,7 +154,7 @@ class Pipeline:
             reply = text
         else:
             self.phase = 'thinking'
-            reply, pending = self.answer(text, session)
+            reply, pending = self.answer(text, session, payload.get('previous_reply_interrupted', False))
         from .expressions import spoken_expression
         reply, emotion = spoken_expression(reply)
         if pending is not None and not reply:
@@ -269,8 +271,11 @@ def main(config, worker=False):
                     if not 0 < size <= config['limits']['max_agent_request_bytes']:
                         raise ValueError('Invalid expression request size')
                     payload = json.loads(self.rfile.read(size))
-                    self.reply(200, plan(config['conversation'].get('expressions', {}),
-                                         payload['phase'], payload.get('emotion', 'neutral')))
+                    value = plan(config['conversation'].get('expressions', {}),
+                                 payload['phase'], payload.get('emotion', 'neutral'))
+                    if payload['phase'] == 'speaking' and config['conversation'].get('barge_in', {}).get('enabled', False):
+                        value['steps'] = value['steps'][-1:]
+                    self.reply(200, value)
                 except (ValueError, KeyError, TypeError) as exc:
                     self.reply(400, {'error': str(exc)})
                 return

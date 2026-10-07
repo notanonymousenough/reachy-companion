@@ -155,7 +155,7 @@
     "mode": "completion",
     "temperature": 0.6,
     "max_tokens": 512,
-    "history_messages": 12,
+    "history_messages": 64,
     "history_ttl_seconds": 1800,
     "max_sessions": 16,
     "message_template": "<|im_start|>{role}\n{content}<|im_end|>\n",
@@ -270,6 +270,11 @@
           ]
         }
       }
+    },
+    "barge_in": {
+      "enabled": true,
+      "min_voiced_chunks": 4,
+      "threshold_multiplier": 1.4
     }
   },
   "audio": {
@@ -354,7 +359,7 @@
       "lms_command": "lms",
       "model_key": "qwen3.5-9b-uncensored-hauhaucs-aggressive",
       "gpu": "max",
-      "context_length": 8192,
+      "context_length": 32768,
       "llm_bind": "0.0.0.0",
       "startup_timeout": 180,
       "startup_task": "Reachy Companion"

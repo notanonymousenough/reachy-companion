@@ -33,6 +33,7 @@ class ExpressionTests(unittest.TestCase):
         with patch.dict(sys.modules, {'webrtcvad': types.SimpleNamespace(Vad=lambda mode: None)}):
             from reachy_companion.agent import Agent
         self.config.data['conversation']['expressions']['enabled'] = False
+        self.config.data['conversation']['barge_in']['enabled'] = False
         a = Agent(self.config)
         self.addCleanup(a.stopping.set)
         return a
@@ -88,6 +89,39 @@ class ExpressionTests(unittest.TestCase):
         self.assertEqual(spoken_expression('<emotion=unknown> Привет'), ('Привет','neutral'))
         self.assertEqual(spoken_expression('<emotion=joy> Отлично!</emotion=joy>'), ('Отлично!','joy'))
         self.assertEqual(spoken_expression('<emotion=joy> Отлично!</emotion>'), ('Отлично!','joy'))
+
+    def test_barge_in_stops_speaker_keeps_microphone_and_returns_complete_phrase(self):
+        from reachy_companion.barge_in import BargeInMonitor
+        a = self.agent()
+        a.expressions = Mock()
+        a.stop_speaker = Mock()
+        expected = b'near-end-speech'
+        def capture(**kwargs):
+            kwargs['on_speech']()
+            kwargs['on_speech']()
+            return expected
+        a.capture = capture
+        monitor = BargeInMonitor(a)
+        monitor.start()
+        self.assertEqual(monitor.finish(), expected)
+        self.assertEqual(a.interruptions, 1)
+        a.stop_speaker.assert_called_once()
+        self.assertTrue(a.microphone.enabled)
+        self.assertTrue(a.listening.is_set())
+
+    def test_mute_drops_pending_barge_in_phrase(self):
+        from reachy_companion.barge_in import BargeInMonitor
+        a = self.agent()
+        a.expressions = Mock()
+        monitor = BargeInMonitor(a)
+        def capture(**kwargs):
+            kwargs['on_speech']()
+            a.set_microphone(False)
+            return b'private audio'
+        a.capture = capture
+        monitor.start()
+        self.assertIsNone(monitor.finish())
+        self.assertFalse(a.microphone.enabled)
 
     def test_volume_changes_only_speaker_and_persists_zero_and_restoration(self):
         from reachy_companion.volume import PlaybackVolume

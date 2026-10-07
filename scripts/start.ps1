@@ -1,9 +1,17 @@
-param([string]$Configuration = 'config.local.json', [switch]$NoPull, [switch]$InTask)
+param([string]$Configuration = 'config.local.json', [switch]$NoPull, [switch]$InTask, [int]$ContextLength = 0)
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $companionRepo = Split-Path -Parent $PSScriptRoot
 Set-Location $companionRepo
 . "$PSScriptRoot/common.ps1"
+if ($ContextLength -ne 0) {
+    if ($ContextLength -lt 1024 -or $ContextLength -gt 262144) { throw 'Invalid context length.' }
+    $contextSettings = Get-Content -Raw -Encoding UTF8 $Configuration | ConvertFrom-Json
+    $contextSettings.runtime.windows.context_length = $ContextLength
+    $contextPath = (Resolve-Path $Configuration).Path
+    [System.IO.File]::WriteAllText($contextPath + '.tmp', ($contextSettings | ConvertTo-Json -Depth 32), [System.Text.UTF8Encoding]::new($false))
+    Move-Item -Force ($contextPath + '.tmp') $contextPath
+}
 $settings = Read-CompanionSettings $Configuration
 if (-not $NoPull) {
     $dirty = & git status --porcelain --untracked-files=no
@@ -68,7 +76,13 @@ if ($LASTEXITCODE -ne 0) { throw 'Cannot start LM Studio daemon.' }
 $loadedJSON = & $lms ps --json
 if ($LASTEXITCODE -ne 0) { throw 'Cannot query loaded models.' }
 $loaded = $loadedJSON | ConvertFrom-Json
-if (-not ($loaded | Where-Object { $_.identifier -eq $settings.llm.model })) {
+$configuredModels = @($loaded | Where-Object { $_.identifier -eq $settings.llm.model })
+if ($configuredModels.Count -gt 0 -and [int]$configuredModels[0].contextLength -ne [int]$settings.runtime.windows.context_length) {
+    & $lms unload ([string]$settings.llm.model)
+    if ($LASTEXITCODE -ne 0) { throw 'Cannot reload the configured model with the new context.' }
+    $configuredModels = @()
+}
+if ($configuredModels.Count -eq 0) {
     & $lms load ([string]$settings.runtime.windows.model_key) --identifier ([string]$settings.llm.model) --gpu ([string]$settings.runtime.windows.gpu) --context-length ([int]$settings.runtime.windows.context_length) --yes
     if ($LASTEXITCODE -ne 0) { throw 'Cannot load the configured LLM.' }
 }

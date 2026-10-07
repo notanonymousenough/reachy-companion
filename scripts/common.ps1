@@ -28,6 +28,9 @@ function Read-CompanionSettings {
         if ($profile.PSObject.Properties['conversation'] -and $profile.conversation.PSObject.Properties['expressions'] -and -not $settings.conversation.PSObject.Properties['expressions']) {
             $settings.conversation | Add-Member -NotePropertyName expressions -NotePropertyValue $profile.conversation.expressions
         }
+        if ($profile.PSObject.Properties['conversation'] -and $profile.conversation.PSObject.Properties['barge_in'] -and -not $settings.conversation.PSObject.Properties['barge_in']) {
+            $settings.conversation | Add-Member -NotePropertyName barge_in -NotePropertyValue $profile.conversation.barge_in
+        }
         Merge-CompanionSettings $settings $profile
     }
     return $settings
