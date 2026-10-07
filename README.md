@@ -147,7 +147,7 @@ ROBOT_ROOT=$(./scripts/companion config value deployment.robot.root)
 
 Текущий голос — Piper Ruslan medium, поднятый SoX на 150 cents (1,5 полутона). `volume=0.65`, `length_scale=1.0`, `noise_scale=0.35`, `noise_w_scale=0.65`, нормализация включена. Это настройка для обычного молодого мужского тембра; субъективное звучание оценивается по аудиопробе. Чтобы сделать его взрослее, уменьшить `tts.pitch_cents`; темп регулируется `length_scale` (больше — медленнее). Новую модель менять вместе с её ONNX JSON. [Карточка Ruslan](https://huggingface.co/rhasspy/piper-voices/blob/main/ru/ru_RU/ruslan/medium/MODEL_CARD) указывает русский голос 22 050 Hz и лицензию корпуса CC BY-NC-SA 4.0; учитывать условия при дальнейшем использовании.
 
-Persona задаётся в `llm.system_prompt`: маленький любознательный компаньон, короткие точные ответы по-русски, дружелюбный тон без сюсюканья. Голос и persona — отдельные настройки.
+Persona задаётся в `llm.system_prompt` и профиле: язвительный приятель с собственным мнением, прямой разговор на «ты» без лести, готовность обсуждать сложные темы. Голос и persona — отдельные настройки.
 
 ### Быстрые ответы без reasoning
 
@@ -227,7 +227,7 @@ PYTHONPATH=src python3 -m unittest discover -s tests -v
 
 Профиль `profiles/friend.json` задаёт остроумного, язвительного приятеля с собственным мнением. Он общается на «ты», может подколоть, огрызнуться или выругаться по ситуации, не льстит и прямо говорит о противоречиях. Не избегает сложных и чувствительных тем, различает факты и догадки. Грубость не обязательна в каждом ответе; при настоящем переживании человека он умеет убрать колкости. Профиль описывает манеру общения, а не гарантирует каждую реплику модели.
 
-Голос остаётся Piper Ruslan; pitch уменьшен с детских +650 до +300 cents, темп length_scale=1.0. Это изменение существующего голоса, а не новая обученная модель. Персонаж задаётся `llm.system_prompt`, звук — `tts`, служебные фразы — `conversation`.
+Голос остаётся Piper Ruslan; pitch уменьшен с детских +650 до +150 cents, темп length_scale=1.0. Это изменение существующего голоса, а не новая обученная модель. Персонаж задаётся `llm.system_prompt`, звук — `tts`, служебные фразы — `conversation`.
 
 Чтобы применить профиль к уже работающему Windows worker, из каталога repo выполнить:
 
@@ -274,3 +274,27 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install-startup.ps1
 Docker CLI worker использует собственный data/docker-client/config.json без credential helper и фактический endpoint текущего Docker context. Это позволяет собирать публичный базовый образ через SSH Windows, где Desktop helper не имеет доступа к Windows Credential Manager. Пользовательский ~/.docker/config.json не изменяется.
 
 При запуске start.ps1 через SSH Windows весь стек запускается задачей Task Scheduler вне дерева процессов OpenSSH: LM Studio продолжает работать после выхода из SSH. Тот же task запускается при входе User; пароль не сохраняется. Журнал запуска — data/startup.log с ограничением из logging.max_bytes; статус/код последнего запуска — Get-ScheduledTaskInfo.
+
+
+### Первоначальная установка Git checkout
+
+На Mac начать с git clone, config init и заполнения локального конфига по разделу выше. Устройствам передать один и тот же secrets/token; не запускать независимый config init на каждом устройстве. Windows требует установленные Git, Docker Desktop с Linux engine и LM Studio с lms; модель должна быть уже скачана, точный ключ из lms ls --json записан в runtime.windows.model_key.
+
+На каждом Linux-устройстве сначала установить git и создать checkout (путь должен совпадать с deployment.ROLE.root):
+
+```sh
+sudo apt-get update
+sudo apt-get install -y git
+# В домашнем каталоге пользователя устройства:
+git clone https://github.com/notanonymousenough/reachy-companion.git reachy-companion
+```
+
+Затем с Mac скопировать основной config.local.json и secrets/token в checkout, используя scp/SSH jump через hub для Reachy. На устройствах конфигу и токену задать chmod 600. Выполнить sudo ./scripts/companion install hub либо install robot из checkout. После первой установки робота открыть новое SSH-соединение через hub, проверить службы и подтвердить firewall. После этого достаточно update.sh ROLE.
+
+Windows: git clone того же URL в каталог reachy-companion, скопировать туда локальный конфиг и общий secrets/token, затем start.ps1. Для firewall rule первоначальный запуск start-worker.ps1 из PowerShell администратора; зарегистрированная задача работает с обычными правами пользователя и не меняет firewall при каждом входе. При переносе существующего каталога сначала сохранить рабочие исходники/конфиги, затем подключить Git; именно так переведены текущие три устройства.
+
+### Подтверждённое состояние
+
+Код закоммичен и запушен в main. Mac, Windows, hub и Reachy используют checkout одного репозитория. На Windows установлен task «Reachy Companion»: запускает стек при входе User; запуск через SSH ждёт завершения этого же task. Полная перезагрузка Windows не проверялась, но ручной запуск задачи и повторный start.ps1 прошли с LastTaskResult=0, LLM осталась доступна после выхода из SSH. Повторный Linux pull/restart прошёл без повторного pip и без изменения firewall.
+
+Проверен реальный ответ через ALSA робота и полный Vosk → LM Studio → Piper/SoX → PCM через хаб. В последнем замере первый audio chunk полного turn пришёл через 1,324 s после отправки готовой синтетической реплики (без записи и полного проигрывания). Голос +150 cents и новый персонаж применены к настоящему Windows worker. 15 тестов Python прошли; PowerShell scripts разобраны штатным Windows parser, запуск реально выполнен.

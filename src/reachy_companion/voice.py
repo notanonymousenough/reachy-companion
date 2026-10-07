@@ -181,7 +181,7 @@ class Pipeline:
             text = re.sub(r'[*#`]', '', result['reply']).strip()
             for chunk in self.tts.synthesize(text, syn_config=self.tts_settings):
                 # Convert each Piper sentence on the COMPUTE worker, preserving
-                # the child voice. Hub forwards bytes without decoding/resampling.
+                # the configured voice. Hub forwards bytes without decoding/resampling.
                 command = ['sox', '-t', 'raw', '-e', 'signed-integer', '-b', '16',
                            '-L', '-c', str(chunk.sample_channels), '-r', str(chunk.sample_rate), '-',
                            '-t', 'raw', '-e', 'signed-integer', '-b', '16', '-L',

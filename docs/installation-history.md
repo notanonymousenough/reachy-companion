@@ -144,4 +144,31 @@ sudo cp -an /etc/systemd/system/reachy-voice-agent.service /etc/systemd/system/r
 
 ## Новый характер и голос
 
-По запросу пользователя детский характер заменён на язвительного молодого приятеля. Профиль вынесен в profiles/friend.json; llm.system_prompt, tts и служебные conversation-фразы обновлены в example и основном локальном конфиге. Pitch +300 cents вместо +650, length_scale=1.0; остальные параметры мягкости и громкости сохранены. Для Windows подготовлен apply-character.ps1 с резервным копированием и перезапуском worker. У Windows нет настроенного SSH или API изменения конфигурации, поэтому постоянное применение на ПК требует запуска этого скрипта пользователем; до этого worker сохраняет прежний профиль.
+По запросу пользователя детский характер заменён на язвительного молодого приятеля. Профиль вынесен в profiles/friend.json; llm.system_prompt, tts и служебные conversation-фразы обновлены в example и основном локальном конфиге. Pitch +300 cents вместо +650, length_scale=1.0; остальные параметры мягкости и громкости сохранены. Для Windows подготовлен apply-character.ps1 с резервным копированием и перезапуском worker. На момент этой подготовки SSH Windows ещё не был настроен, поэтому применение требовало запуска скрипта пользователем. Следующий этап ниже выполнил применение через появившийся SSH.
+
+
+## Git, единый запуск и окончательный профиль
+
+По запросу пользователя репозиторий получил полноценные коммиты и push в GitHub main. Автор настроен только в этом repo: notanonymousenough, notanonenough@gmail.com. Локальные адреса, общий токен, модели, venv и данные не вошли в коммиты. Windows SSH доступен под User; голос скорректирован до обычного молодого мужского: Ruslan +150 cents, length_scale=1.0.
+
+Перед превращением рабочих папок в Git checkout сохранены исходники/конфиги: на hub и Reachy ../reachy-companion.before-git.tar.gz с umask 077; на Windows Desktop/reachy-companion.before-git. В Linux архив включает secrets/token и остаётся приватным. Модели и venv не переносились, существующие пути/ссылки сохранились. Git установлен на hub через apt; на Reachy уже присутствовал.
+
+В каждой рабочей папке после резервного копирования:
+
+```sh
+git init -b main
+git remote add origin https://github.com/notanonymousenough/reachy-companion.git
+git fetch origin main
+# Первичная миграция сохранённых исходников; выполнялась только после backup:
+git checkout -f -B main origin/main
+git branch --set-upstream-to=origin/main main
+# На Windows также: git config core.autocrlf false
+```
+
+Далее передан новый config.local.json с runtime.profile, runtime.git и runtime.windows; токен сохранён прежний. Hub: ./scripts/update.sh hub. Reachy через SSH jump: ./scripts/update.sh robot. Скрипты выполняют fast-forward pull, validate, установку зависимостей только при изменении lock, генерацию units и restart; используют PYTHONPATH=src. При обычном update firewall не переустанавливается и rollback не запускается.
+
+Windows: powershell -ExecutionPolicy Bypass -File scripts/start.ps1. Скрипт делает pull, запускает Docker Desktop при необходимости, lms daemon up, грузит configured model с GPU=max и context 8192, запускает API на configured port/bind, делает реальную completion-пробу и запускает Docker worker с health-проверкой. Повторный запуск использует уже загруженный model identifier. Профиль подтягивается из Git через runtime.profile и не меняет локальную сеть/секреты.
+
+Две особенности Windows проверены и учтены. Docker Desktop credential helper недоступен из OpenSSH-сеанса: worker использует отдельный data/docker-client с публичным пустым auth entry, явным endpoint текущего context и временным DOCKER_CONFIG для дочерних docker/buildx; личный Docker config не меняется. LM Studio завершалась вместе с SSH job: теперь зарегистрирована пользовательская задача «Reachy Companion», запускающая start.ps1 -NoPull -InTask вне SSH. SSH-обёртка ждёт её результата. Task также запускается при входе пользователя, с обычными правами, без сохранения пароля; startup.log ограничен logging.max_bytes.
+
+Проверено: повторный start.ps1 прошёл, LastTaskResult=0; модель и worker доступны после закрытия SSH. На worker pitch=150. Реальный ask через agent/hub/PC/ALSA успешен. Синтетическое «Привет! Как тебя зовут?» распознано как «привет как тебя зовут», первый PCM за 1,324 s, поток завершён за 1,591 s, звук 9,94 s; запись и проигрывание не входят в эти замеры. 15 тестов Python прошли; штатный Windows parser проверил PowerShell. Полная перезагрузка Windows/устройств и разговор после перезагрузки не выполнялись.

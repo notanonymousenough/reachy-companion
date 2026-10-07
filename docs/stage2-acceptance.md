@@ -17,3 +17,10 @@
 - [ ] Подключение настоящего OpenClaw/Hermes (в этом этапе только задел).
 
 Автозапуск служб включён; полная перезагрузка не проверялась. Адаптеры OpenClaw/Hermes проверены mock API, настоящие агентные runtimes не развёрнуты.
+
+- [x] Коммиты/push GitHub main и настоящий checkout Windows/hub/Reachy.
+- [x] Версионируемый профиль обновляется без перезаписи локальной сети/токена.
+- [x] Повторный pull/restart Linux без изменения firewall.
+- [x] Единый Windows start.ps1: загрузка LLM, worker, повторный запуск.
+- [x] Task Scheduler LastTaskResult=0, LLM/worker переживают закрытие SSH.
+- [ ] Полная перезагрузка Windows и проверка запуска при следующем login.
