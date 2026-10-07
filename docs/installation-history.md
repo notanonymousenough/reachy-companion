@@ -172,3 +172,8 @@ Windows: powershell -ExecutionPolicy Bypass -File scripts/start.ps1. Скрип�
 Две особенности Windows проверены и учтены. Docker Desktop credential helper недоступен из OpenSSH-сеанса: worker использует отдельный data/docker-client с публичным пустым auth entry, явным endpoint текущего context и временным DOCKER_CONFIG для дочерних docker/buildx; личный Docker config не меняется. LM Studio завершалась вместе с SSH job: теперь зарегистрирована пользовательская задача «Reachy Companion», запускающая start.ps1 -NoPull -InTask вне SSH. SSH-обёртка ждёт её результата. Task также запускается при входе пользователя, с обычными правами, без сохранения пароля; startup.log ограничен logging.max_bytes.
 
 Проверено: повторный start.ps1 прошёл, LastTaskResult=0; модель и worker доступны после закрытия SSH. На worker pitch=150. Реальный ask через agent/hub/PC/ALSA успешен. Синтетическое «Привет! Как тебя зовут?» распознано как «привет как тебя зовут», первый PCM за 1,324 s, поток завершён за 1,591 s, звук 9,94 s; запись и проигрывание не входят в эти замеры. 15 тестов Python прошли; штатный Windows parser проверил PowerShell. Полная перезагрузка Windows/устройств и разговор после перезагрузки не выполнялись.
+
+
+## Голос чуть серьёзнее
+
+По просьбе пользователя голос молодого парня сделан немного ниже и спокойнее: pitch +50 cents вместо +150, length_scale=1.04 вместо 1.0. Изменены profiles/friend.json, example и основной локальный конфиг. Персонаж сохранён. Через SSH проверено: загружена Qwen3.5-9B-Uncensored-HauhauCS-Aggressive Q6_K, context 8192. Профиль применяется после Git pull и перезапуска worker.
