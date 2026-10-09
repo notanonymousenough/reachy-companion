@@ -147,6 +147,10 @@ class SchedulerTests(unittest.TestCase):
     def test_expired_main_does_not_grant_new_execution_permit(self):
         release = threading.Event()
         class Hung(ReplayGateway):
+            views = []
+            def fast(self, request_id, view):
+                self.views.append(view)
+                return super().fast(request_id, view)
             def main(self, task):
                 release.wait(1)
                 return dict(output='late', compute_boot_id=self.boot_id, request_id=task.attempt_id)
@@ -159,6 +163,7 @@ class SchedulerTests(unittest.TestCase):
             spin(scheduler, lambda: scheduler.state.counts['main_execution_busy'] >= 2)
             self.assertEqual(scheduler.state.counts['task_started'], 1)
             self.assertTrue(scheduler.state.candidates)
+            self.assertTrue(any(any(p['status']=='execution_busy_result_revoked' for p in v['pending']) for v in scheduler.gateway.views))
             release.set()
             spin(scheduler, lambda: scheduler.state.counts['task_result_stale'] == 1)
         finally: release.set()

@@ -22,3 +22,7 @@ src.before-*/
 .venv
 .venv-*
 models
+
+# Remote-only n8n owner/session material and bootstrap credentials.
+deploy/workflows/*.local.json
+deploy/workflows/bootstrap/

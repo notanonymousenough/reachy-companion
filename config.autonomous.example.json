@@ -83,5 +83,12 @@
     "credential_env": "REACHY_ANALYSIS_TOKEN",
     "candidate_ram_mb": 4096,
     "candidate_vcpus": 4
+  },
+  "workflows": {
+    "enabled": false,
+    "broker_url": null,
+    "token_env": "REACHY_WORKFLOW_TOKEN",
+    "http_timeout_s": 2,
+    "poll_s": 0.1
   }
 }

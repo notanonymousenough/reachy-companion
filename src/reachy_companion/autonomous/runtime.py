@@ -51,6 +51,10 @@ class RemoteGateway:
         return result
 
     def main(self, task):
+        if task.kind == 'research':
+            from .workflows import WorkflowClient
+            output = WorkflowClient(self.config['workflows']).run(task)
+            return dict(output=output,compute_boot_id=self.boot_id,request_id=task.attempt_id)
         result = self.call('/main', dict(request_id=task.attempt_id, data=task.prompt))
         if result['request_id'] != task.attempt_id:
             raise ValueError('attempt identity mismatch')
@@ -71,11 +75,11 @@ class ReplayGateway:
                 choice = dict(a='converse', why='Replay: accept ready proposal', commit=view['ready'][0]['alias'])
             elif view['candidates']:
                 choice = dict(a='think', why='Replay: start background task',
-                              start=dict(type='main', input_ref=view['candidates'][0]['alias']))
+                              start=dict(type=view['candidates'][0]['kind'], input_ref=view['candidates'][0]['alias']))
         return dict(output=choice, compute_boot_id=self.boot_id, request_id=request_id)
     def main(self, task):
         time.sleep(self.main_delay)
-        return dict(output='Replay fixture response.', compute_boot_id=self.boot_id, request_id=task.attempt_id)
+        return dict(output=task.prompt if task.kind == 'research' else 'Replay fixture response.', compute_boot_id=self.boot_id, request_id=task.attempt_id)
 
 
 class Scheduler:
@@ -130,6 +134,11 @@ class Scheduler:
         if self.fast_job:
             self.state.record('tick_busy_gap'); return
         view = self.state.snapshot(now)
+        if self.main_job and not self.main_job.future.done() and self.main_task.status != 'running':
+            # Revoking a result does not conceal still-busy physical execution.
+            view['pending'] = view['pending'][:7] + [dict(alias=self.main_task.task_id,
+                kind=self.main_task.kind, status='execution_busy_result_revoked',
+                age_ms=max(0, int((now-self.main_task.created)*1000)))]
         self.binding = self.state.bind(now, self.config['fast_deadline_s'])
         self.fast_job = Job(self.gateway.fast, self.binding.request_id, view)
         self.expiry_logged = False

@@ -92,3 +92,4 @@ class Task:
     status: str = 'running'
     result: str | None = None
     expires: float = 0
+    kind: str = "main"

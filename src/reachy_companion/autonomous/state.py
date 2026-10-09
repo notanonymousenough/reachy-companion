@@ -20,6 +20,7 @@ class State:
         self.privacy = False
         self.sensors = {}
         self.candidates = {}
+        self.candidate_kinds = {}
         self.tasks = {}
         self.previous = deque(maxlen=3)
         self.ledger = deque(maxlen=self.config['ledger_cap'])
@@ -60,8 +61,20 @@ class State:
                 speech_epoch=self.authority.speech_epoch + 1)
             # Old candidates are no longer current; active tasks remain accounted.
             self.candidates.clear()
-            self.candidates[uid()] = text
+            self.candidate_kinds.clear()
+            ref = uid()
+            self.candidates[ref] = text
+            self.candidate_kinds[ref] = "main"
             self.record('new_turn')
+        elif kind == 'workflow':
+            value = event.get('value')
+            if not isinstance(value, str) or len(value)>256:
+                raise ValueError('workflow argument cap')
+            if not self.config.get('workflows',{}).get('enabled'):
+                self.record('workflow_disabled'); return
+            if len(self.candidates)>=self.config['candidate_cap']:
+                self.record('candidate_admission_rejected'); return
+            ref=uid(); self.candidates[ref]=value; self.candidate_kinds[ref]='research'
         elif kind == 'sensor':
             name, summary = event.get('id'), event.get('summary', '')
             availability = event.get('availability', 'available')
@@ -101,7 +114,7 @@ class State:
         pending, ready = [], []
         for task in self.tasks.values():
             if task.status == 'running':
-                pending.append(dict(alias=task.task_id, kind='main', status='running',
+                pending.append(dict(alias=task.task_id, kind=task.kind, status='running',
                                     age_ms=max(0, int((now-task.created)*1000))))
             elif task.status == 'ready':
                 expires = datetime.now(timezone.utc) + timedelta(seconds=max(0, task.expires-now))
@@ -116,11 +129,11 @@ class State:
                      confidence=None, social_need=0, transition_reasons=[]),
             scene='Shadow/replay. No physical sensor or actuator connected.',
             sensors=[s.view(now, self.muted) for s in self.sensors.values()],
-            prev=list(self.previous), dialogue=next(iter(self.candidates.values()), ''),
+            prev=list(self.previous), dialogue=next((v for k,v in self.candidates.items() if self.candidate_kinds[k]=='main'), ''),
             memory=[], personality='Ричи: краткий, прямой, любопытный.',
             principles='No invented perception. Muted blocks speech. Simulated actions only.', goal=None,
             pending=pending[:8], ready=ready[:4],
-            candidates=[dict(alias=k, kind='main', summary=v[:256]) for k,v in self.candidates.items()][:8],
+            candidates=[dict(alias=k, kind=self.candidate_kinds[k], summary=v[:256]) for k,v in self.candidates.items()][:8],
             evidence_aliases=[])
         return validate('FastView', view)
 
@@ -146,7 +159,7 @@ class State:
             self.record('capability_rejected'); return None
         if (start or commit) and (self.muted or self.privacy):
             self.record('muted_action_rejected'); return None
-        if start and (start['type'] != 'main' or start['input_ref'] not in binding.candidates):
+        if start and (start['input_ref'] not in binding.candidates or start['type'] != self.candidate_kinds.get(start['input_ref'])):
             self.record('alias_rejected'); return None
         if commit and commit not in binding.ready:
             self.record('alias_rejected'); return None
@@ -166,7 +179,7 @@ class State:
             if any(t.input_ref == ref for t in self.tasks.values()) or len(self.tasks) >= self.config['task_cap']:
                 self.record('task_admission_rejected'); return None
             task = Task(uid(), uid(), ref, self.candidates.pop(ref), self.authority, now,
-                        now+self.config['task_timeout_s'])
+                        now+self.config['task_timeout_s'], kind=self.candidate_kinds.pop(ref))
             self.tasks[task.task_id] = task
             self.record('task_started', task_id=task.task_id)
             return task
@@ -175,6 +188,8 @@ class State:
     def complete(self, task_id, attempt_id, authority, result, now, error=None):
         task = self.tasks.get(task_id)
         if not task or task.attempt_id != attempt_id or task.authority != authority or authority != self.authority or now > task.deadline or task.status != 'running':
+            if task and task.attempt_id == attempt_id and task.authority == authority and task.status == 'running':
+                task.status = 'discarded'
             self.record('task_result_stale', task_id=task_id); return
         if error or not isinstance(result, str) or not result.strip() or len(result) > 8192:
             task.status = 'failed'; self.record('task_failed', task_id=task_id); return

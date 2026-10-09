@@ -1,0 +1,86 @@
+{
+  "id": "reachySyntheticEcho",
+  "name": "Reachy synthetic echo (no controls)",
+  "active": false,
+  "nodes": [
+    {
+      "id": "webhook",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "companion-synthetic-echo",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "companion-synthetic-echo",
+        "authentication": "headerAuth",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "reachyWebhookAuth",
+          "name": "Reachy webhook auth"
+        }
+      }
+    },
+    {
+      "id": "echo",
+      "name": "Echo",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        240,
+        0
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "task_id",
+              "name": "task_id",
+              "value": "={{ $json.body.task_id }}",
+              "type": "string"
+            },
+            {
+              "id": "attempt_id",
+              "name": "attempt_id",
+              "value": "={{ $json.body.attempt_id }}",
+              "type": "string"
+            },
+            {
+              "id": "value",
+              "name": "value",
+              "value": "={{ $json.body.value }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Echo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "none",
+    "saveExecutionProgress": false,
+    "saveManualExecutions": false
+  }
+}

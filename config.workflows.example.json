@@ -1,0 +1,13 @@
+{
+  "instance_id": null,
+  "host": null,
+  "user": null,
+  "remote_dir": "reachy-workflows",
+  "identity_file": null,
+  "known_hosts_file": null,
+  "host_key_alias": null,
+  "editor_local_port": 15678,
+  "editor_remote_port": 5678,
+  "broker_local_port": 15679,
+  "broker_remote_port": 15679
+}

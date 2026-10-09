@@ -32,3 +32,5 @@ Hub владеет непрерывным когнитивным циклом и
 [Обзор второго прохода, decision records, анализ отказов и ворота готовности](review-and-decisions.md). Рекомендуемый следующий шаг — конечный shadow/replay slice и аппаратный audit при восстановлении связи.
 
 Реализация этапов0/1 и воспроизводимые команды: [first-slice.md](first-slice.md). Пользовательский выбор main уточнён: существующая Qwen3.5-9B uncensored HauhauCS Aggressive — baseline, Gemma12B optional backend. Результаты model/hardware audit не подменяются успешным replay.
+
+Optional VPS/n8n этап, результаты и эксплуатация: [workflows.md](workflows.md).

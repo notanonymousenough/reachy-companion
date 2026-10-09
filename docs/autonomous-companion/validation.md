@@ -3,7 +3,7 @@
 2026-10-09. Второй проход завершён конечными локальными проверками. Запускается только проверка файлов; inference, службы, сеть и физические устройства она не использует.
 
 ```text
-PASS: 2 schemas, 22 fixtures, 11 negative cases, 12 finite authority traces, 22 interruption traces, 18 context budget checks, 19 local links
+PASS: 2 schemas, 22 fixtures, 11 negative cases, 12 finite authority traces, 22 interruption traces, 18 context budget checks, 21 local links
 No hardware/model execution. Cryptographic signatures, JCS and timing were not tested.
 ```
 

@@ -27,7 +27,7 @@ def main():
     events = decode(Path(args.events).read_text()) if args.events else []
     if not isinstance(events, list) or len(events) > 10000:
         parser.error('Replay events must be a bounded list')
-    previous = -1
+    previous = 0
     for event in events:
         at = event.get('at_s')
         if type(at) not in (int,float) or not previous <= at <= args.duration:

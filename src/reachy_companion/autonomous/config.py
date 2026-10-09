@@ -19,6 +19,19 @@ def load(path):
         raise ValueError('Invalid port')
     if not config['gateway']['token_env']:
         raise ValueError('Gateway credentials must be supplied through environment')
+    workflows = config.get('workflows', {})
+    if type(workflows.get('enabled', False)) is not bool:
+        raise ValueError('Workflow enable flag must be boolean')
+    if workflows:
+        for key in ('http_timeout_s', 'poll_s'):
+            if type(workflows[key]) not in (int, float) or not 0 < workflows[key] <= 10:
+                raise ValueError('Invalid workflow timing')
+    for endpoint in (config['gateway'].get('client_url'), workflows.get('broker_url')):
+        if endpoint:
+            url = urlsplit(endpoint)
+            if (url.scheme not in ('http', 'https') or not url.hostname or url.username or url.password
+                    or url.fragment or (url.scheme == 'http' and url.hostname not in ('localhost', '127.0.0.1', '::1'))):
+                raise ValueError('Token transport requires HTTPS or localhost SSH tunnel')
     for role in ('fast', 'main'):
         model = config['models'][role]
         for key in ('context_tokens', 'input_cap_tokens', 'template_cap_tokens', 'output_tokens', 'reserve_tokens'):

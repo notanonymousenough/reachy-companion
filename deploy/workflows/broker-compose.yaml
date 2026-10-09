@@ -1,0 +1,29 @@
+name: reachy-workflows
+services:
+  broker:
+    init: true
+    image: python:3.13.7-slim@sha256:5f55cdf0c5d9dc1a415637a5ccc4a9e18663ad203673173b8cda8f8dcacef689
+    restart: unless-stopped
+    command: [python, /app/broker.py]
+    ports: ["127.0.0.1:${BROKER_LOCAL_PORT:-15679}:8080"]
+    environment:
+      WORKFLOW_URL: ${N8N_WEBHOOK_URL:?required}
+      WORKFLOW_WEBHOOK_TOKEN: ${WORKFLOW_WEBHOOK_TOKEN:?required}
+      WORKFLOW_BROKER_TOKEN: ${WORKFLOW_BROKER_TOKEN:?required}
+      WORKFLOW_DB: /data/tasks.sqlite
+    volumes: ["./broker.py:/app/broker.py:ro", "broker_data:/data"]
+    networks: [existing_n8n]
+    mem_limit: 96m
+    cpus: 0.25
+    read_only: true
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    logging:
+      driver: json-file
+      options: {max-size: 5m, max-file: "2"}
+volumes:
+  broker_data:
+networks:
+  existing_n8n:
+    external: true
+    name: ${N8N_NETWORK:?required}
