@@ -2,6 +2,8 @@
 from collections import Counter, deque
 from dataclasses import replace
 from datetime import datetime, timezone, timedelta
+import hashlib
+import json
 import time
 from .contracts import Authority, Binding, Sensor, Task, uid, validate
 
@@ -15,6 +17,8 @@ class State:
         self.config = config or dict(ledger_cap=256, sensor_cap=12, task_cap=8,
                                     candidate_cap=8, task_timeout_s=30, proposal_ttl_s=15)
         self.authority = Authority(uid(), compute_boot)
+        self.compute_generation = 0
+        self.retired_compute_boots = deque(maxlen=128)
         self.revision = 0
         self.muted = False
         self.privacy = False
@@ -32,11 +36,19 @@ class State:
         self.counts[kind] += 1
         self.ledger.append(dict(kind=kind, at=utc(), **values))
 
-    def set_compute_boot(self, boot):
+    def set_compute_boot(self, boot, generation):
+        """Trusted owner handshake only; completions never call this method."""
+        if not isinstance(boot, str) or not 1 <= len(boot) <= 256 or type(generation) is not int:
+            raise ValueError('Invalid compute handshake')
+        if generation <= self.compute_generation or boot in self.retired_compute_boots:
+            self.record('compute_handshake_stale'); return False
+        self.compute_generation = generation
         if boot != self.authority.compute_boot_id:
+            self.retired_compute_boots.append(self.authority.compute_boot_id)
             self.authority = replace(self.authority, compute_boot_id=boot)
             self.revision += 1
             self.record('compute_restart')
+        return True
 
     def ingest(self, event, now):
         kind = event.get('type')
@@ -137,13 +149,26 @@ class State:
             evidence_aliases=[])
         return validate('FastView', view)
 
+    def dependency_digest(self, alias, now):
+        if alias in self.candidates:
+            value = ('candidate', self.candidate_kinds.get(alias), self.candidates[alias])
+        else:
+            task = self.tasks.get(alias)
+            if not task or task.status != 'ready' or task.authority != self.authority or now > task.expires:
+                return None
+            value = ('proposal', task.attempt_id, task.result, task.expires)
+        return hashlib.sha256(json.dumps(value, ensure_ascii=False).encode()).hexdigest()
+
     def bind(self, now, timeout):
+        candidates = tuple(self.candidates)
+        ready = tuple(t.task_id for t in self.tasks.values() if t.status == 'ready')[:4]
         return Binding(uid(), self.authority, self.revision, now + timeout,
-                       tuple(self.candidates), tuple(t.task_id for t in self.tasks.values() if t.status=='ready'), ())
+                       candidates, ready, (),
+                       tuple((alias, self.dependency_digest(alias, now)) for alias in candidates + ready))
 
     def apply(self, value, binding, now):
         validate('FastChoice', value)
-        if binding.authority != self.authority or now > binding.deadline or binding.revision != self.revision:
+        if binding.authority != self.authority or now > binding.deadline:
             self.record('decision_stale', request_id=binding.request_id); return None
         if binding.request_id in self.consumed:
             self.record('decision_duplicate'); return None
@@ -163,6 +188,10 @@ class State:
             self.record('alias_rejected'); return None
         if commit and commit not in binding.ready:
             self.record('alias_rejected'); return None
+        dependencies = dict(binding.dependencies)
+        refs = [ref for ref in (focus, start['input_ref'] if start else None, commit) if ref is not None]
+        if any(dependencies.get(ref) is None or dependencies[ref] != self.dependency_digest(ref, now) for ref in refs):
+            self.record('dependency_changed'); return None
         self.consumed.append(binding.request_id)
         self.previous.append(value['a'] + ': ' + value['why'])
         self.focus = focus

@@ -59,6 +59,7 @@ class Binding:
     candidates: tuple[str, ...]
     ready: tuple[str, ...]
     evidence: tuple[str, ...]
+    dependencies: tuple[tuple[str, str], ...]
 
 
 @dataclass

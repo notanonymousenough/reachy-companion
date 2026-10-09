@@ -54,7 +54,7 @@ class RemoteGateway:
         if task.kind == 'research':
             from .workflows import WorkflowClient
             output = WorkflowClient(self.config['workflows']).run(task)
-            return dict(output=output,compute_boot_id=self.boot_id,request_id=task.attempt_id)
+            return dict(output=output,compute_boot_id=task.authority.compute_boot_id,request_id=task.attempt_id)
         result = self.call('/main', dict(request_id=task.attempt_id, data=task.prompt))
         if result['request_id'] != task.attempt_id:
             raise ValueError('attempt identity mismatch')
@@ -94,6 +94,10 @@ class Scheduler:
     def ingest(self, event, now=None):
         self.state.ingest(event, time.monotonic() if now is None else now)
 
+    def handshake_compute(self, boot, generation):
+        """Single-owner authenticated health/reconnect callback, never a model result."""
+        return self.state.set_compute_boot(boot, generation)
+
     def advance(self, now=None):
         now = time.monotonic() if now is None else now
         # Poll done futures without waiting; worker threads never mutate hub state.
@@ -101,15 +105,19 @@ class Scheduler:
             task = self.main_task
             try:
                 result = self.main_job.future.result()
-                self.state.set_compute_boot(result['compute_boot_id'])
-                self.state.complete(task.task_id, task.attempt_id, task.authority, result['output'], now)
+                if result['compute_boot_id'] != task.authority.compute_boot_id or result['request_id'] != task.attempt_id:
+                    self.state.complete(task.task_id, task.attempt_id, task.authority, None, now, error=True)
+                else:
+                    self.state.complete(task.task_id, task.attempt_id, task.authority, result['output'], now)
             except Exception:
                 self.state.complete(task.task_id, task.attempt_id, task.authority, None, now, error=True)
             self.main_job = self.main_task = None
         if self.fast_job and self.fast_job.future.done():
             try:
                 result = self.fast_job.future.result()
-                self.state.set_compute_boot(result['compute_boot_id'])
+                if (result['compute_boot_id'] != self.binding.authority.compute_boot_id
+                        or result['request_id'] != self.binding.request_id):
+                    raise ValueError('Completion does not match request authority')
                 choice = result['output']
                 # Capacity rejection before reducer consumes the candidate.
                 if choice.get('start') and self.main_job:

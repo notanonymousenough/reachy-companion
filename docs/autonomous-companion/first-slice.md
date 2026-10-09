@@ -43,3 +43,11 @@ python -m reachy_companion.autonomous shadow --config config.autonomous.local.js
 Finite replay5s:5 fresh fixture requests, один main task/ready/commit, operator mute/unmute. Finite replay23s с main delay20s:23 fresh requests, одна main task, цикл не останавливался. Отчёты находятся вне git. Read-only HTTP inventory ПК: один network attempt timeout после2s; SSH не повторялся. Fast model/CPU, actual tokenizer/template и GPU identity/VRAM остаются unknown. Следующий допуск: Q01/Q02/Q04 audit и finite real-model shadow; hardware только после stage3 ownership/stop tests.
 
 Дополнение: optional typed workflow adapter подключён отдельным этапом; full suite теперь70tests. Scope и реальные VPS результаты описаны в workflows.md; replay не превращается в сетевой режим.
+
+## Исправление причинности после независимой проверки
+
+Global snapshot revision остаётся audit metadata и не является blanket reject. Binding фиксирует digest только доступных candidate/proposal aliases; start/focus/commit проверяют соответствующие current input/kind/attempt/result/expiry. Unrelated sensor updates не отменяют wait или independent action. Turn/operator/boot epochs и monotonic deadline по-прежнему обязательны. Sensor-dependent capabilities в этом slice не разрешены; их будущие adapters должны добавить конкретные dependency checks.
+
+Compute boot никогда не меняется из completion envelope. Initial boot берётся из authenticated health; subsequent owner reconnect вызывает `Scheduler.handshake_compute(boot, generation)` с возрастающим hub-local generation. Old generations и bounded retired boots отвергаются; every completion обязан совпадать с producer/request authority. При boot mismatch результат отвергается; нужен новый trusted health/reconnect, автоматического доверия result нет. Workflow job сохраняет boot своего исходного task.
+
+5 новых regression tests покрывают pending wait/start/commit + unrelated sensors, changed/removed input/proposal, turn/mute fencing, A→handshakeB→lateA main с pendingB fast и late/wrong-producer fast. Полный suite теперь75tests. LAN/model/hardware проверки не запускались.

@@ -72,7 +72,7 @@ class StateTests(unittest.TestCase):
                 attempt = task.attempt_id
                 if race == 'turn': self.state.ingest(dict(type='utterance', text='new'), .01)
                 if race == 'attempt': attempt = 'wrong-attempt'
-                if race == 'compute': self.state.set_compute_boot('new-boot')
+                if race == 'compute': self.state.set_compute_boot('new-boot', 1)
                 self.state.complete(task.task_id, attempt, task.authority, 'old', .02)
                 self.assertIsNone(task.result)
                 self.assertEqual(self.state.counts['task_result_stale'], 1)
@@ -228,5 +228,124 @@ class GatewayTests(unittest.TestCase):
             finally:
                 server.shutdown(); server.server_close(); model_server.shutdown(); model_server.server_close()
 
+
+
+class CausalityRegressionTests(unittest.TestCase):
+    def test_pending_fast_accepts_wait_start_and_commit_after_unrelated_sensors(self):
+        for action in ('wait', 'start', 'commit'):
+            with self.subTest(action=action):
+                entered, release = threading.Event(), threading.Event()
+                class Controlled(ReplayGateway):
+                    def fast(self, request_id, view):
+                        entered.set(); release.wait(2)
+                        choice = dict(a='wait', why='independent')
+                        if action == 'start':
+                            choice = dict(a='think', why='same input', start=dict(type='main', input_ref=view['candidates'][0]['alias']))
+                        if action == 'commit':
+                            choice = dict(a='converse', why='same proposal', commit=view['ready'][0]['alias'])
+                        return dict(output=choice, compute_boot_id=self.boot_id, request_id=request_id)
+                cfg = config(); cfg.update(period_s=1, fast_deadline_s=1, task_timeout_s=2)
+                scheduler = Scheduler(cfg, Controlled())
+                if action in ('start', 'commit'):
+                    scheduler.ingest(dict(type='utterance', text='original input'))
+                if action == 'commit':
+                    now = time.monotonic(); state = scheduler.state; ref = next(iter(state.candidates))
+                    task = state.apply(dict(a='think', why='prepare', start=dict(type='main', input_ref=ref)), state.bind(now, 1), now)
+                    state.complete(task.task_id, task.attempt_id, task.authority, 'ready response', now)
+                baseline = scheduler.state.counts['decision_accepted']
+                try:
+                    scheduler.advance(); self.assertTrue(entered.wait(1))
+                    for i in range(5):
+                        scheduler.ingest(dict(type='sensor', id='ambient', summary=str(i)))
+                    release.set()
+                    spin(scheduler, lambda: scheduler.state.counts['decision_accepted'] > baseline)
+                    self.assertEqual(scheduler.state.counts['decision_stale'], 0)
+                    if action == 'start': self.assertEqual(scheduler.state.counts['task_started'], 1)
+                    if action == 'commit': self.assertEqual(scheduler.state.counts['simulated_speech'], 1)
+                finally: release.set()
+
+    def test_changed_or_removed_bound_input_and_proposal_cannot_act(self):
+        for change in ('changed_input', 'removed_alias', 'changed_proposal'):
+            with self.subTest(change=change):
+                state = State(config=config()); state.ingest(dict(type='utterance', text='original'), 0)
+                ref = next(iter(state.candidates))
+                choice = dict(a='think', why='same input', start=dict(type='main', input_ref=ref))
+                if change == 'changed_proposal':
+                    task = state.apply(choice, state.bind(0, 1), 0)
+                    state.complete(task.task_id, task.attempt_id, task.authority, 'original result', .01)
+                    choice = dict(a='converse', why='ready', commit=task.task_id)
+                binding = state.bind(.02, 1)
+                baseline = state.counts['decision_accepted']
+                if change == 'changed_input': state.candidates[ref] = 'corrected input'
+                elif change == 'removed_alias': state.candidates.pop(ref)
+                else: task.result = 'revised result'
+                state.apply(choice, binding, .03)
+                self.assertEqual(state.counts['decision_accepted'], baseline)
+                self.assertEqual(state.counts['simulated_speech'], 0)
+
+    def test_unrelated_updates_do_not_weaken_turn_and_operator_fencing(self):
+        for event in (dict(type='utterance', text='new turn'), dict(type='operator', muted=True)):
+            state = State(config=config()); state.ingest(dict(type='utterance', text='original'), 0)
+            binding = state.bind(0, 1)
+            state.ingest(dict(type='sensor', id='ambient'), .01)
+            state.ingest(event, .02)
+            state.apply(dict(a='wait', why='old'), binding, .03)
+            self.assertEqual(state.counts['decision_stale'], 1)
+
+    def test_late_a_main_cannot_rollback_b_or_invalidate_pending_b_fast(self):
+        entered, release = threading.Event(), threading.Event()
+        class Controlled(ReplayGateway):
+            boot_id = 'B'
+            def fast(self, request_id, view):
+                entered.set(); release.wait(2)
+                return dict(output=dict(a='wait', why='B choice'), compute_boot_id='B', request_id=request_id)
+        cfg = config(); cfg.update(period_s=1, fast_deadline_s=1, task_timeout_s=2)
+        scheduler = Scheduler(cfg, Controlled())
+        # Initial authenticated A handshake precedes this independent B gateway fixture.
+        scheduler.state = State('A', cfg)
+        state = scheduler.state; now = time.monotonic()
+        state.ingest(dict(type='utterance', text='A turn'), now)
+        ref = next(iter(state.candidates))
+        task = state.apply(dict(a='think', why='A task', start=dict(type='main', input_ref=ref)), state.bind(now, 1), now)
+        from concurrent.futures import Future
+        from types import SimpleNamespace
+        future = Future(); scheduler.main_task = task; scheduler.main_job = SimpleNamespace(future=future)
+        self.assertTrue(scheduler.handshake_compute('B', 1))
+        try:
+            scheduler.advance(); self.assertTrue(entered.wait(1))
+            binding_b = scheduler.binding
+            future.set_result(dict(output='late A', compute_boot_id='A', request_id=task.attempt_id))
+            scheduler.advance()
+            self.assertEqual(state.authority.compute_boot_id, 'B')
+            self.assertEqual(binding_b.authority, state.authority)
+            self.assertEqual(state.counts['task_result_stale'], 1)
+            release.set(); spin(scheduler, lambda: state.counts['decision_accepted'] == 2)
+            self.assertEqual(state.authority.compute_boot_id, 'B')
+            self.assertFalse(scheduler.handshake_compute('A', 2))
+            self.assertFalse(scheduler.handshake_compute('C', 0))
+            self.assertEqual(state.authority.compute_boot_id, 'B')
+        finally: release.set()
+
+    def test_late_a_fast_and_mismatched_envelope_never_change_compute_boot(self):
+        from concurrent.futures import Future
+        from types import SimpleNamespace
+        cfg = config(); scheduler = Scheduler(cfg, ReplayGateway())
+        now = time.monotonic(); scheduler.next_tick = now + 10
+        original = scheduler.state.authority.compute_boot_id
+        scheduler.binding = scheduler.state.bind(now, 1)
+        future = Future(); scheduler.fast_job = SimpleNamespace(future=future)
+        self.assertTrue(scheduler.handshake_compute('B', 1))
+        future.set_result(dict(output=dict(a='wait', why='late A'), compute_boot_id=original,
+                               request_id=scheduler.binding.request_id))
+        scheduler.advance()
+        self.assertEqual(scheduler.state.authority.compute_boot_id, 'B')
+        self.assertEqual(scheduler.state.counts['decision_stale'], 1)
+        scheduler.binding = scheduler.state.bind(now, 1)
+        future = Future(); scheduler.fast_job = SimpleNamespace(future=future)
+        future.set_result(dict(output=dict(a='wait', why='wrong producer'), compute_boot_id='C',
+                               request_id=scheduler.binding.request_id))
+        scheduler.advance()
+        self.assertEqual(scheduler.state.authority.compute_boot_id, 'B')
+        self.assertEqual(scheduler.state.counts['decision_accepted'], 0)
 
 if __name__ == '__main__': unittest.main()
