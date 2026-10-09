@@ -1,0 +1,33 @@
+{
+  "schema_version": "1.1",
+  "event_id": "fixture-e21",
+  "device_boot_id": "fixture-hub-boot",
+  "producer_seq": 21,
+  "occurred_at": "2026-10-09T12:00:00Z",
+  "ingested_at": "2026-10-09T12:00:00Z",
+  "kind": "decision_validated",
+  "privacy": "metadata",
+  "causality": {
+    "robot_boot_id": "fixture-robot-boot",
+    "operator_epoch": 3,
+    "interaction_epoch": 7,
+    "scene_revision": 12,
+    "track_id": null,
+    "utterance_id": null,
+    "utterance_revision": null,
+    "input_event_ids": [
+      "fixture-e20"
+    ],
+    "captured_at": "2026-10-09T12:00:00Z",
+    "microphone_epoch": 3,
+    "hub_boot_id": "fixture-hub-boot",
+    "compute_boot_id": "fixture-pc-boot",
+    "speech_epoch": 2
+  },
+  "payload": {
+    "request_id": "fixture-r100",
+    "activity": "wait",
+    "speech": false
+  },
+  "digest": "fixture-digest-only"
+}

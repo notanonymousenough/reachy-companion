@@ -1,0 +1,24 @@
+[
+  {
+    "at_s": 0,
+    "type": "sensor",
+    "id": "audio.rms",
+    "summary": "Synthetic quiet window",
+    "ttl_ms": 2000
+  },
+  {
+    "at_s": 0.2,
+    "type": "utterance",
+    "text": "Как ты устроен?"
+  },
+  {
+    "at_s": 3,
+    "type": "operator",
+    "muted": true
+  },
+  {
+    "at_s": 4,
+    "type": "operator",
+    "muted": false
+  }
+]

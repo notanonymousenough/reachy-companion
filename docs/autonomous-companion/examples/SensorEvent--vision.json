@@ -1,0 +1,32 @@
+{
+  "schema_version": "1.1",
+  "sensor_id": "vision.description",
+  "modality": "vision",
+  "source": {
+    "id": "fixture.vlm",
+    "version": "1",
+    "origin": "derived",
+    "units": null,
+    "frame": null,
+    "clock_uncertainty_ms": 10
+  },
+  "producer_boot_id": "fixture-pc-boot",
+  "seq": 21,
+  "captured_at": "2026-10-09T12:00:00Z",
+  "received_at": "2026-10-09T12:00:00Z",
+  "ttl_ms": 5000,
+  "availability": "available",
+  "status": "ready",
+  "confidence": 0.6,
+  "value": {
+    "description": "Предмет на столе, точная идентичность неизвестна."
+  },
+  "evidence_ids": [
+    "fixture-frame1"
+  ],
+  "task_id": "fixture-vlm1",
+  "sample_interval": null,
+  "clock_mapping_id": "fixture-clock-map",
+  "processing": "complete",
+  "value_revision": 1
+}

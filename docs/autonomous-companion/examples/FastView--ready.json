@@ -1,0 +1,74 @@
+{
+  "schema_version": "1.1",
+  "at": "2026-10-09T12:00:02Z",
+  "mode": "ACTIVE",
+  "op": {
+    "microphone_enabled": true,
+    "microphone_epoch": 3,
+    "interaction_epoch": 7,
+    "motion_allowed": true,
+    "quiet": false,
+    "privacy_all": false,
+    "operator_epoch": 3,
+    "speech_epoch": 2
+  },
+  "sim": {
+    "origin": "simulated",
+    "mood": 0.1,
+    "arousal": 0.2,
+    "curiosity": 0.4,
+    "fatigue": 0.15,
+    "confidence": 0.7,
+    "social_need": 0.2,
+    "transition_reasons": [
+      "elapsed_idle_decay"
+    ]
+  },
+  "scene": "Последнее описание: предмет на столе, идентичность неясна.",
+  "sensors": [
+    {
+      "id": "audio.rms",
+      "state": "stale",
+      "age_ms": 2000,
+      "summary": "RMS сохранён из старого окна, текущую тишину не подтверждает."
+    },
+    {
+      "id": "battery.soc",
+      "state": "unknown",
+      "age_ms": null,
+      "summary": "Источник не подтверждён."
+    },
+    {
+      "id": "vision.description",
+      "state": "ready",
+      "age_ms": 2000,
+      "summary": "Последний кадр: неизвестный предмет на столе, confidence0.6."
+    }
+  ],
+  "prev": [
+    "observe: VLM pending"
+  ],
+  "dialogue": "",
+  "memory": [
+    {
+      "alias": "m1",
+      "type": "preference",
+      "summary": "Уважать тишину."
+    }
+  ],
+  "personality": "Прямой любопытный приятель.",
+  "principles": "Не выдумывать сенсоры, не включать микрофон самостоятельно.",
+  "goal": null,
+  "pending": [],
+  "ready": [
+    {
+      "alias": "p1",
+      "summary": "Ответ об осмотре готов.",
+      "expires_at": "2026-10-09T12:00:08Z"
+    }
+  ],
+  "candidates": [],
+  "evidence_aliases": [
+    "e1"
+  ]
+}

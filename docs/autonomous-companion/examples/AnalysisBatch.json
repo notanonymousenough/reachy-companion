@@ -1,0 +1,18 @@
+{
+  "schema_version": "1.1",
+  "batch_id": "fixture-b1",
+  "object_key": "robot/fixture/events/2026-10-09/fixture-boot/fixture-b1.ndjson.gz",
+  "created_at": "2026-10-09T12:00:00Z",
+  "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "compressed_bytes": 100,
+  "raw_bytes": 500,
+  "event_count": 2,
+  "seq_ranges": [
+    {
+      "boot_id": "fixture-boot",
+      "first": 1,
+      "last": 2
+    }
+  ],
+  "privacy_policy_version": 1
+}

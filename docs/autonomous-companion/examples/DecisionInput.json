@@ -1,0 +1,175 @@
+{
+  "schema_version": "1.1",
+  "cycle_id": "fixture-c100",
+  "request_id": "fixture-r100",
+  "hub_boot_id": "fixture-hub-boot",
+  "state_revision": 100,
+  "snapshot_at": "2026-10-09T12:00:00Z",
+  "elapsed_ms": 100000,
+  "idle_ms": 15000,
+  "mode": "ACTIVE",
+  "operator": {
+    "microphone_enabled": true,
+    "microphone_epoch": 3,
+    "interaction_epoch": 7,
+    "motion_allowed": true,
+    "quiet": false,
+    "privacy_all": false,
+    "operator_epoch": 3,
+    "speech_epoch": 2
+  },
+  "versions": {
+    "memory": 4,
+    "personality": 2,
+    "principles": 1,
+    "policy": 1
+  },
+  "capabilities": [
+    {
+      "id": "reason.background",
+      "version": "1",
+      "enabled": true,
+      "args_schema_id": "registry.reason.v1",
+      "budget_ms": 30000
+    }
+  ],
+  "sensors": [
+    {
+      "schema_version": "1.1",
+      "sensor_id": "audio.rms",
+      "modality": "audio",
+      "source": {
+        "id": "fixture.audio",
+        "version": "1",
+        "origin": "sensor",
+        "units": "normalized_rms",
+        "frame": null,
+        "clock_uncertainty_ms": 10
+      },
+      "producer_boot_id": "fixture-pc-boot",
+      "seq": 20,
+      "captured_at": "2026-10-09T12:00:00Z",
+      "received_at": "2026-10-09T12:00:00Z",
+      "ttl_ms": 750,
+      "availability": "available",
+      "status": "ready",
+      "confidence": null,
+      "value": {
+        "rms": 0.004,
+        "self_audio": false
+      },
+      "evidence_ids": [
+        "fixture-e20"
+      ],
+      "task_id": null,
+      "sample_interval": null,
+      "clock_mapping_id": "fixture-clock-map",
+      "processing": "complete",
+      "value_revision": 20
+    },
+    {
+      "schema_version": "1.1",
+      "sensor_id": "audio.transcript",
+      "modality": "audio",
+      "source": {
+        "id": "fixture.stt",
+        "version": "1",
+        "origin": "derived",
+        "units": null,
+        "frame": null,
+        "clock_uncertainty_ms": 10
+      },
+      "producer_boot_id": "fixture-pc-boot",
+      "seq": 0,
+      "captured_at": null,
+      "received_at": "2026-10-09T12:00:00Z",
+      "ttl_ms": 15000,
+      "availability": "available",
+      "status": "empty",
+      "confidence": null,
+      "value": null,
+      "evidence_ids": [],
+      "task_id": null,
+      "sample_interval": null,
+      "clock_mapping_id": null,
+      "processing": "none",
+      "value_revision": 0
+    },
+    {
+      "schema_version": "1.1",
+      "sensor_id": "battery.soc",
+      "modality": "energy",
+      "source": {
+        "id": "fixture.battery-not-probed",
+        "version": "1",
+        "origin": "sensor",
+        "units": "percent",
+        "frame": null,
+        "clock_uncertainty_ms": 10
+      },
+      "producer_boot_id": "fixture-pc-boot",
+      "seq": 0,
+      "captured_at": null,
+      "received_at": "2026-10-09T12:00:00Z",
+      "ttl_ms": 30000,
+      "availability": "unknown",
+      "status": "empty",
+      "confidence": null,
+      "value": null,
+      "evidence_ids": [],
+      "task_id": null,
+      "sample_interval": null,
+      "clock_mapping_id": null,
+      "processing": "none",
+      "value_revision": 0
+    }
+  ],
+  "simulation": {
+    "origin": "simulated",
+    "mood": 0.1,
+    "arousal": 0.2,
+    "curiosity": 0.4,
+    "fatigue": 0.15,
+    "confidence": 0.7,
+    "social_need": 0.2,
+    "transition_reasons": [
+      "elapsed_idle_decay"
+    ]
+  },
+  "scene_summary": "Последняя сцена без существенного изменения; описание имеет отдельный TTL.",
+  "working_memory": [
+    "Осмотр ещё обрабатывается."
+  ],
+  "previous_decisions": [
+    {
+      "id": "fixture-d99",
+      "activity": "observe",
+      "outcome": "pending"
+    }
+  ],
+  "conversation": [],
+  "memory_projection": [
+    {
+      "id": "fixture-m1",
+      "epistemic_type": "preference",
+      "text": "Персонаж уважает длительную тишину.",
+      "confidence": 1,
+      "age_ms": 86400000
+    }
+  ],
+  "personality_summary": "Прямой, любопытный приятель; без лести.",
+  "principles_summary": "Не выдумывай события; соблюдай операторские запреты.",
+  "pinned_goal": null,
+  "tasks": [
+    {
+      "id": "fixture-vlm1",
+      "kind": "vlm",
+      "status": "running",
+      "age_ms": 900
+    }
+  ],
+  "delta_summary": [
+    "Прошло 1 s, задача VLM ещё pending."
+  ],
+  "ready_proposals": []
+}

@@ -1,0 +1,87 @@
+{
+  "version": 1,
+  "actuators": "simulated",
+  "export_enabled": false,
+  "period_s": 1,
+  "fast_deadline_s": 3,
+  "http_timeout_s": 30,
+  "task_timeout_s": 30,
+  "proposal_ttl_s": 15,
+  "ledger_cap": 256,
+  "sensor_cap": 12,
+  "task_cap": 8,
+  "candidate_cap": 8,
+  "gateway": {
+    "bind": "127.0.0.1",
+    "port": 8097,
+    "client_url": null,
+    "token_env": "REACHY_SHADOW_TOKEN"
+  },
+  "models": {
+    "fast": {
+      "id": null,
+      "base_url": null,
+      "completion_path": "/completions",
+      "tokenize_path": null,
+      "tokenize_content_key": "content",
+      "api_key_env": "",
+      "context_tokens": 4096,
+      "input_cap_tokens": 2744,
+      "template_cap_tokens": 256,
+      "output_tokens": 192,
+      "reserve_tokens": 256,
+      "message_template": "<|im_start|>{role}\n{content}<|im_end|>\n",
+      "assistant_prefix": "<|im_start|>assistant\n<think>\n\n</think>\n\n",
+      "stop": [
+        "<|im_end|>",
+        "<|im_start|>"
+      ],
+      "temperature": 0.1,
+      "audit": {
+        "verified": false,
+        "device": null,
+        "runtime_build": null,
+        "weight_sha256": null,
+        "template_sha256": null,
+        "tokenizer_sha256": null,
+        "runtime_context_tokens": null
+      }
+    },
+    "main": {
+      "id": "qwen3.5-9b-uncensored-hauhaucs-aggressive",
+      "base_url": null,
+      "completion_path": "/completions",
+      "tokenize_path": null,
+      "tokenize_content_key": "content",
+      "api_key_env": "",
+      "context_tokens": 4096,
+      "input_cap_tokens": 2048,
+      "template_cap_tokens": 256,
+      "output_tokens": 512,
+      "reserve_tokens": 256,
+      "message_template": "<|im_start|>{role}\n{content}<|im_end|>\n",
+      "assistant_prefix": "<|im_start|>assistant\n<think>\n\n</think>\n\n",
+      "stop": [
+        "<|im_end|>",
+        "<|im_start|>"
+      ],
+      "temperature": 0.6,
+      "audit": {
+        "verified": false,
+        "device": null,
+        "runtime_build": null,
+        "weight_sha256": null,
+        "template_sha256": null,
+        "tokenizer_sha256": null,
+        "runtime_context_tokens": null
+      }
+    }
+  },
+  "optional_vps": {
+    "enabled": false,
+    "endpoint": null,
+    "credential_env": "REACHY_ANALYSIS_TOKEN",
+    "candidate_ram_mb": 4096,
+    "candidate_vcpus": 4
+  }
+}

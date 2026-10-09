@@ -1,0 +1,16 @@
+{
+  "schema_version": "1.1",
+  "hub_boot_id": "fixture-hub-boot",
+  "base_revision": 99,
+  "revision": 100,
+  "upserts": [
+    {
+      "key": "tasks.fixture-vlm1",
+      "value": {
+        "status": "running"
+      }
+    }
+  ],
+  "removals": [],
+  "digest": "fixture-delta-only"
+}

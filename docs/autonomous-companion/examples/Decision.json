@@ -1,0 +1,36 @@
+{
+  "schema_version": "1.1",
+  "decision_id": "fixture-d100",
+  "request_id": "fixture-r100",
+  "based_on_revision": 100,
+  "interaction_epoch": 7,
+  "expires_at": "2026-10-09T12:00:02Z",
+  "activity": "wait",
+  "speech": null,
+  "motions": [],
+  "functions": [],
+  "attention": null,
+  "goal_patch": null,
+  "reason": "Нет нового повода для внешней реакции; осмотр ещё обрабатывается.",
+  "evidence_ids": [
+    "fixture-e20"
+  ],
+  "binding_id": "fixture-bind100",
+  "causality": {
+    "robot_boot_id": "fixture-robot-boot",
+    "operator_epoch": 3,
+    "interaction_epoch": 7,
+    "scene_revision": 12,
+    "track_id": null,
+    "utterance_id": null,
+    "utterance_revision": null,
+    "input_event_ids": [
+      "fixture-e20"
+    ],
+    "captured_at": "2026-10-09T12:00:00Z",
+    "microphone_epoch": 3,
+    "hub_boot_id": "fixture-hub-boot",
+    "compute_boot_id": "fixture-pc-boot",
+    "speech_epoch": 2
+  }
+}

@@ -1,0 +1,44 @@
+{
+  "schema_version": "1.1",
+  "decision_id": "fixture-d101",
+  "request_id": "fixture-r101",
+  "based_on_revision": 101,
+  "interaction_epoch": 7,
+  "expires_at": "2026-10-09T12:00:05Z",
+  "activity": "converse",
+  "speech": null,
+  "motions": [],
+  "functions": [
+    {
+      "capability_id": "speech.commit",
+      "arguments": {
+        "proposal_id": "fixture-p1"
+      },
+      "intent_id": "fixture-look1"
+    }
+  ],
+  "attention": null,
+  "goal_patch": null,
+  "reason": "Ответ на текущий интерес готов",
+  "evidence_ids": [
+    "fixture-frame1"
+  ],
+  "binding_id": "fixture-bind101",
+  "causality": {
+    "robot_boot_id": "fixture-robot-boot",
+    "operator_epoch": 3,
+    "interaction_epoch": 7,
+    "scene_revision": 12,
+    "track_id": null,
+    "utterance_id": null,
+    "utterance_revision": null,
+    "input_event_ids": [
+      "fixture-frame1"
+    ],
+    "captured_at": "2026-10-09T12:00:00Z",
+    "microphone_epoch": 3,
+    "hub_boot_id": "fixture-hub-boot",
+    "compute_boot_id": "fixture-pc-boot",
+    "speech_epoch": 2
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "schema_version": "1.1",
+  "proposal_id": "fixture-p1",
+  "task_id": "fixture-main1",
+  "segment_id": "fixture-s1",
+  "seq": 0,
+  "speech": {
+    "text": "По последнему кадру предмет неясен.",
+    "intent_id": "fixture-look1",
+    "reply_to": null,
+    "style": "neutral",
+    "not_before_ms": 0
+  },
+  "causality": {
+    "robot_boot_id": "fixture-robot-boot",
+    "operator_epoch": 3,
+    "interaction_epoch": 7,
+    "scene_revision": 12,
+    "track_id": null,
+    "utterance_id": null,
+    "utterance_revision": null,
+    "input_event_ids": [
+      "fixture-frame1"
+    ],
+    "captured_at": "2026-10-09T12:00:00Z",
+    "microphone_epoch": 3,
+    "hub_boot_id": "fixture-hub-boot",
+    "compute_boot_id": "fixture-pc-boot",
+    "speech_epoch": 2
+  },
+  "supporting_ids": [
+    "fixture-frame1"
+  ],
+  "final": true,
+  "expires_at": "2026-10-09T12:00:08Z"
+}

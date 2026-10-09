@@ -1,0 +1,33 @@
+{
+  "schema_version": "1.1",
+  "sensor_id": "audio.rms",
+  "modality": "audio",
+  "source": {
+    "id": "fixture.audio",
+    "version": "1",
+    "origin": "sensor",
+    "units": "normalized_rms",
+    "frame": null,
+    "clock_uncertainty_ms": 10
+  },
+  "producer_boot_id": "fixture-pc-boot",
+  "seq": 20,
+  "captured_at": "2026-10-09T12:00:00Z",
+  "received_at": "2026-10-09T12:00:00Z",
+  "ttl_ms": 750,
+  "availability": "available",
+  "status": "ready",
+  "confidence": null,
+  "value": {
+    "rms": 0.004,
+    "self_audio": false
+  },
+  "evidence_ids": [
+    "fixture-e20"
+  ],
+  "task_id": null,
+  "sample_interval": null,
+  "clock_mapping_id": "fixture-clock-map",
+  "processing": "complete",
+  "value_revision": 20
+}

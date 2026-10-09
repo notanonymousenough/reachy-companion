@@ -1,0 +1,122 @@
+{
+  "schema_version": "design-1.1",
+  "deployment_enabled": false,
+  "endpoints": {
+    "hub": null,
+    "robot": null,
+    "compute": null,
+    "fast_model": null,
+    "main_model": null,
+    "s3": null,
+    "vps": null,
+    "online": null
+  },
+  "models": {
+    "fast_candidate": "Qwen3-0.6B",
+    "fast_device": "cpu_pc",
+    "main_candidate": "qwen3.5-9b-uncensored-hauhaucs-aggressive",
+    "main_quant_candidate": "existing_quant_unverified",
+    "main_context_tokens": 4096,
+    "main_slots": 1,
+    "fallback": "existing_verified_model_after_audit",
+    "fast_context_tokens": 4096,
+    "main_context_profile": "baseline_4k",
+    "main_context_profiles": {
+      "baseline_4k": {
+        "runtime_context_tokens": 4096,
+        "text_input_cap_tokens": 2048,
+        "vision_input_cap_tokens": 1024,
+        "template_cap_tokens": 256,
+        "output_reserved_tokens": 512,
+        "safety_reserved_tokens": 256,
+        "measurement_required": false
+      },
+      "option_8k": {
+        "runtime_context_tokens": 8192,
+        "text_input_cap_tokens": 6144,
+        "vision_input_cap_tokens": 1024,
+        "template_cap_tokens": 256,
+        "output_reserved_tokens": 512,
+        "safety_reserved_tokens": 256,
+        "measurement_required": true
+      },
+      "measurement_32k": {
+        "runtime_context_tokens": 32768,
+        "text_input_cap_tokens": 30720,
+        "vision_input_cap_tokens": 1024,
+        "template_cap_tokens": 256,
+        "output_reserved_tokens": 512,
+        "safety_reserved_tokens": 256,
+        "measurement_required": true
+      }
+    },
+    "optional_main_candidate": "unverified_gemma4_12b"
+  },
+  "cycle": {
+    "period_ms": 1000,
+    "degraded_period_ms": 2500,
+    "fast_soft_ms": 1500,
+    "fast_hard_ms": 3000,
+    "fast_input_cap_tokens": 3000,
+    "fast_output_cap_tokens": 192
+  },
+  "safety": {
+    "robot_lease_ms": 500,
+    "control_target_ms": 300,
+    "autonomous_mic_enable": false,
+    "raw_shell_enabled": false,
+    "transport_heartbeat_ms": 100
+  },
+  "overload": {
+    "drain_ms": 15000,
+    "hard_withdrawn_ms": 30000,
+    "recovery_stable_ms": 10000,
+    "max_announcement_per_episode": 1
+  },
+  "behavior": {
+    "initiative_cooldown_ms": 600000,
+    "muted_blocks_initiative_speech": true,
+    "goal_change_cooldown_ms": 300000,
+    "simulated_breathing_enabled": false,
+    "initiative_hourly_cap": 2,
+    "interruption_silence_timeout_ms": 3000
+  },
+  "export": {
+    "enabled": false,
+    "log_transcripts": false,
+    "raw_media_storage": false,
+    "batch_compressed_cap_bytes": 5242880,
+    "batch_flush_ms": 60000,
+    "pc_spool_cap_bytes": 536870912,
+    "hub_spool_cap_bytes": 67108864,
+    "metadata_retention_days": 30,
+    "episode_text_retention_days": 14,
+    "version_retention_days": 180
+  },
+  "online_budget": {
+    "enabled": false,
+    "daily_usd_cap": 0.5,
+    "daily_calls_cap": 10,
+    "prices_verified_at": null
+  },
+  "optional_sensors": {
+    "battery": "unknown",
+    "servo_current": "unknown",
+    "servo_temperature": "unknown",
+    "imu": "unknown",
+    "lidar": "unsupported",
+    "touch": "unsupported"
+  },
+  "secret_references": {},
+  "scheduler": {
+    "gpu_shared_compute_permits": 1,
+    "initial_weights": {
+      "final_stt": 4,
+      "user_main": 3,
+      "scene_vlm": 1,
+      "self_interest": 1
+    },
+    "cpu_fast_thread_candidate": 2,
+    "execution_cancel_release_requires_ack": true
+  }
+}

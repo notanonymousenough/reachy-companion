@@ -1,0 +1,30 @@
+{
+  "schema_version": "1.1",
+  "task_id": "fixture-vlm1",
+  "attempt_id": "fixture-a1",
+  "causality": {
+    "robot_boot_id": "fixture-robot-boot",
+    "operator_epoch": 3,
+    "interaction_epoch": 7,
+    "scene_revision": 12,
+    "track_id": null,
+    "utterance_id": null,
+    "utterance_revision": null,
+    "input_event_ids": [
+      "fixture-e20"
+    ],
+    "captured_at": "2026-10-09T12:00:00Z",
+    "microphone_epoch": 3,
+    "hub_boot_id": "fixture-hub-boot",
+    "compute_boot_id": "fixture-pc-boot",
+    "speech_epoch": 2
+  },
+  "finished_at": "2026-10-09T12:00:02Z",
+  "outcome": "completed",
+  "confidence": 0.6,
+  "result": {
+    "description": "Предмет на столе, идентичность неизвестна."
+  },
+  "error_code": null,
+  "digest": "fixture-digest-only"
+}

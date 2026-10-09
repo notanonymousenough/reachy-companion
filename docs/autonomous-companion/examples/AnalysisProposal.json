@@ -1,0 +1,73 @@
+{
+  "schema_version": "1.1",
+  "proposal_id": "fixture-p1",
+  "idempotency_key": "fixture-b1-analyzer1",
+  "source_batch_ids": [
+    "fixture-b1"
+  ],
+  "base_versions": {
+    "memory": 4,
+    "personality": 2,
+    "principles": 1,
+    "policy": 1
+  },
+  "patches": [
+    {
+      "document_id": "fixture-m1",
+      "document_type": "memory",
+      "base_version": 0,
+      "operation": "add",
+      "item": {
+        "schema_version": "1.1",
+        "id": "fixture-m1",
+        "version": 1,
+        "namespace": "character",
+        "memory_kind": "semantic",
+        "epistemic_type": "preference",
+        "content": "Уважать тишину и не повторять вопросы.",
+        "valid_from": "2026-10-09T12:00:00Z",
+        "valid_until": null,
+        "created_at": "2026-10-09T12:00:00Z",
+        "evidence_ids": [
+          "fixture-operator-policy"
+        ],
+        "counterevidence_ids": [],
+        "confidence": 1,
+        "status": "proposed",
+        "author": "fixture-operator",
+        "model_version": null,
+        "prompt_version": "design-v1",
+        "supersedes": null,
+        "lineage_ids": [
+          "fixture-operator-policy"
+        ],
+        "claim": null
+      },
+      "text": null,
+      "rationale": "Сохранить явно заданное правило персонажа.",
+      "supporting_ids": [
+        "fixture-operator-policy"
+      ],
+      "counterevidence_ids": [],
+      "confidence": 1,
+      "trait_deltas": null
+    }
+  ],
+  "metrics": {
+    "duplicate_reaction_rate": 0
+  },
+  "analyzer_version": "fixture-analyzer1",
+  "model_version": "fixture-model",
+  "prompt_version": "design-v1",
+  "created_at": "2026-10-09T12:00:00Z",
+  "expires_at": "2026-10-10T12:00:00Z",
+  "rollback_conditions": [
+    "Оператор исправил правило."
+  ],
+  "signature": {
+    "key_id": "fixture-no-real-key",
+    "algorithm": "Ed25519",
+    "body_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "value": "fixture-not-a-valid-signature"
+  }
+}

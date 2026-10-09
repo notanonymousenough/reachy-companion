@@ -1,0 +1,20 @@
+{
+  "schema_version": "1.1",
+  "utterance_id": "fixture-u1",
+  "revision": 1,
+  "capture_session_id": "fixture-capture1",
+  "producer_boot_id": "fixture-pc-boot",
+  "microphone_epoch": 3,
+  "interaction_epoch": 7,
+  "sample_interval": {
+    "start_at": "2026-10-09T11:59:58Z",
+    "end_at": "2026-10-09T11:59:59Z"
+  },
+  "text": "Что это за предмет?",
+  "stable_prefix": "Что это",
+  "final": false,
+  "confidence": null,
+  "speaker_track": null,
+  "self_audio": "unlikely",
+  "lineage_id": "fixture-audio-episode1"
+}

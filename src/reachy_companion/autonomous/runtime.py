@@ -1,0 +1,162 @@
+"""Inference-free hub scheduler. One actual request per available clock tick."""
+from concurrent.futures import Future
+import json
+import os
+import threading
+import time
+from urllib.request import Request, build_opener, ProxyHandler
+from .contracts import decode, uid
+from .state import State
+
+
+class Job:
+    """A daemon transport job; deadline expiry never implies execution completion."""
+    def __init__(self, function, *args):
+        self.future = Future()
+        def work():
+            try:
+                self.future.set_result(function(*args))
+            except BaseException as exc:
+                self.future.set_exception(exc)
+        self.thread = threading.Thread(target=work, daemon=True)
+        self.thread.start()
+
+
+class RemoteGateway:
+    def __init__(self, config):
+        self.config = config
+        self.url = config['gateway']['client_url']
+        if not self.url:
+            raise ValueError('Set separate PC gateway client_url')
+        self.token = os.environ.get(config['gateway']['token_env'], '')
+        if len(self.token) < 32:
+            raise ValueError('Set gateway token environment variable')
+        self.opener = build_opener(ProxyHandler({}))
+        self.boot_id = self.call('/health')['compute_boot_id']
+
+    def call(self, path, payload=None):
+        headers = {'Authorization': 'Bearer ' + self.token, 'Content-Type': 'application/json'}
+        request = Request(self.url.rstrip('/') + path,
+                          data=None if payload is None else json.dumps(payload).encode(), headers=headers)
+        with self.opener.open(request, timeout=self.config['http_timeout_s'] + 1) as response:
+            raw = response.read(65537)
+        if len(raw) > 65536:
+            raise ValueError('Oversized gateway response')
+        return decode(raw)
+
+    def fast(self, request_id, view):
+        result = self.call('/decision', dict(request_id=request_id, data=view))
+        if result['request_id'] != request_id:
+            raise ValueError('request identity mismatch')
+        return result
+
+    def main(self, task):
+        result = self.call('/main', dict(request_id=task.attempt_id, data=task.prompt))
+        if result['request_id'] != task.attempt_id:
+            raise ValueError('attempt identity mismatch')
+        return result
+
+
+class ReplayGateway:
+    """Explicit deterministic fixture backend; never represented as model inference."""
+    boot_id = 'replay-compute'
+    def __init__(self, main_delay=0.1):
+        self.main_delay = main_delay
+        self.fast_calls = 0
+    def fast(self, request_id, view):
+        self.fast_calls += 1
+        choice = dict(a='wait', why='Replay: no new task')
+        if view['op']['microphone_enabled']:
+            if view['ready']:
+                choice = dict(a='converse', why='Replay: accept ready proposal', commit=view['ready'][0]['alias'])
+            elif view['candidates']:
+                choice = dict(a='think', why='Replay: start background task',
+                              start=dict(type='main', input_ref=view['candidates'][0]['alias']))
+        return dict(output=choice, compute_boot_id=self.boot_id, request_id=request_id)
+    def main(self, task):
+        time.sleep(self.main_delay)
+        return dict(output='Replay fixture response.', compute_boot_id=self.boot_id, request_id=task.attempt_id)
+
+
+class Scheduler:
+    def __init__(self, config, gateway):
+        self.config, self.gateway = config, gateway
+        self.state = State(gateway.boot_id, config)
+        self.fast_job = self.main_job = None
+        self.binding = self.main_task = None
+        self.next_tick = 0
+        self.expiry_logged = False
+
+    def ingest(self, event, now=None):
+        self.state.ingest(event, time.monotonic() if now is None else now)
+
+    def advance(self, now=None):
+        now = time.monotonic() if now is None else now
+        # Poll done futures without waiting; worker threads never mutate hub state.
+        if self.main_job and self.main_job.future.done():
+            task = self.main_task
+            try:
+                result = self.main_job.future.result()
+                self.state.set_compute_boot(result['compute_boot_id'])
+                self.state.complete(task.task_id, task.attempt_id, task.authority, result['output'], now)
+            except Exception:
+                self.state.complete(task.task_id, task.attempt_id, task.authority, None, now, error=True)
+            self.main_job = self.main_task = None
+        if self.fast_job and self.fast_job.future.done():
+            try:
+                result = self.fast_job.future.result()
+                self.state.set_compute_boot(result['compute_boot_id'])
+                choice = result['output']
+                # Capacity rejection before reducer consumes the candidate.
+                if choice.get('start') and self.main_job:
+                    self.state.record('main_execution_busy')
+                    task = None
+                else:
+                    task = self.state.apply(choice, self.binding, now)
+                if task:
+                    self.main_task = task
+                    self.main_job = Job(self.gateway.main, task)
+            except Exception:
+                self.state.record('fast_failed')
+            self.fast_job = self.binding = None
+        self.state.collect(now)
+        if self.fast_job and now > self.binding.deadline and not self.expiry_logged:
+            self.state.record('fast_deadline_expired')
+            self.expiry_logged = True
+        if now < self.next_tick:
+            return
+        # No catch-up burst. Skipped busy ticks remain explicit gaps.
+        self.next_tick = now + self.config['period_s']
+        if self.fast_job:
+            self.state.record('tick_busy_gap'); return
+        view = self.state.snapshot(now)
+        self.binding = self.state.bind(now, self.config['fast_deadline_s'])
+        self.fast_job = Job(self.gateway.fast, self.binding.request_id, view)
+        self.expiry_logged = False
+        self.state.record('fast_requested', request_id=self.binding.request_id)
+
+    def run(self, duration_s, events=(), output=None):
+        start = time.monotonic()
+        pending = iter(events)
+        event = next(pending, None)
+        while time.monotonic() - start < duration_s:
+            now = time.monotonic()
+            while event is not None and event['at_s'] <= now-start:
+                self.ingest({k:v for k,v in event.items() if k != 'at_s'}, now)
+                event = next(pending, None)
+            self.advance(now)
+            time.sleep(min(0.01, self.config['period_s']/10))
+        # Stop new admission, invalidate any pending action; no model cancellation claim.
+        self.ingest(dict(type='operator', muted=True))
+        report = dict(mode='replay' if isinstance(self.gateway, ReplayGateway) else 'real_model_shadow',
+                      actuators='simulated', counts=dict(self.state.counts),
+                      execution_busy=dict(fast=bool(self.fast_job and not self.fast_job.future.done()),
+                                          main=bool(self.main_job and not self.main_job.future.done())),
+                      ledger=list(self.state.ledger), authority=self.state.authority.wire())
+        if output:
+            from pathlib import Path
+            path = Path(output)
+            # Avoid accidental overwriting; caller selects privacy-sensitive output destination.
+            with path.open('x') as handle:
+                json.dump(report, handle, ensure_ascii=False, indent=2)
+        return report

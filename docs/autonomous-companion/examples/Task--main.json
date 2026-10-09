@@ -1,0 +1,44 @@
+{
+  "schema_version": "1.1",
+  "id": "fixture-main1",
+  "kind": "main",
+  "intent_id": "fixture-look1",
+  "causality": {
+    "robot_boot_id": "fixture-robot-boot",
+    "operator_epoch": 3,
+    "interaction_epoch": 7,
+    "scene_revision": 12,
+    "track_id": null,
+    "utterance_id": null,
+    "utterance_revision": null,
+    "input_event_ids": [
+      "fixture-frame1"
+    ],
+    "captured_at": "2026-10-09T12:00:00Z",
+    "microphone_epoch": 3,
+    "hub_boot_id": "fixture-hub-boot",
+    "compute_boot_id": "fixture-pc-boot",
+    "speech_epoch": 2
+  },
+  "created_at": "2026-10-09T12:00:00Z",
+  "deadline_at": "2026-10-09T12:00:08Z",
+  "soft_timeout_ms": 3000,
+  "cancel_token": "fixture-cancel-vlm1",
+  "coalesce_key": "scene.latest",
+  "allowed_capabilities": [],
+  "max_bytes": 8192,
+  "max_tokens": 160,
+  "worker_slot": "gpu-main-0",
+  "status": "completed",
+  "result_ref": "fixture-p1",
+  "current_attempt_id": "fixture-main-a1",
+  "source_refs": [
+    {
+      "sensor_id": "vision.description",
+      "producer_boot_id": "fixture-pc-boot",
+      "seq": 21,
+      "value_revision": 1
+    }
+  ],
+  "resource_class": "gpu_shared"
+}

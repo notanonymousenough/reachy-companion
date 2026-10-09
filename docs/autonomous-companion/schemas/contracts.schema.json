@@ -1,0 +1,3181 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:reachy-companion:design:contracts:1.1",
+  "title": "Autonomous companion design contracts",
+  "description": "Project-only contracts. Semantic guard and capability-specific argument schemas are mandatory.",
+  "$defs": {
+    "Source": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "origin": {
+          "enum": [
+            "sensor",
+            "software",
+            "derived"
+          ]
+        },
+        "units": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "frame": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "clock_uncertainty_ms": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "origin",
+        "units",
+        "frame",
+        "clock_uncertainty_ms"
+      ],
+      "additionalProperties": false
+    },
+    "SensorEvent": {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "const": "1.1"
+        },
+        "sensor_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "modality": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "source": {
+          "$ref": "#/$defs/Source"
+        },
+        "producer_boot_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "captured_at": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "received_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
+        },
+        "ttl_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "availability": {
+          "enum": [
+            "unknown",
+            "available",
+            "unsupported",
+            "disabled",
+            "offline"
+          ]
+        },
+        "status": {
+          "enum": [
+            "empty",
+            "pending",
+            "ready",
+            "error"
+          ]
+        },
+        "confidence": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1
+        },
+        "value": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "maxProperties": 32
+        },
+        "evidence_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "maxItems": 32
+        },
+        "task_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sample_interval": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Interval"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "clock_mapping_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "processing": {
+          "enum": [
+            "none",
+            "queued",
+            "running",
+            "complete",
+            "error"
+          ]
+        },
+        "value_revision": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "schema_version",
+        "sensor_id",
+        "modality",
+        "source",
+        "producer_boot_id",
+        "seq",
+        "captured_at",
+        "received_at",
+        "ttl_ms",
+        "availability",
+        "status",
+        "confidence",
+        "value",
+        "evidence_ids",
+        "task_id",
+        "sample_interval",
+        "clock_mapping_id",
+        "processing",
+        "value_revision"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "availability": {
+                "enum": [
+                  "unknown",
+                  "unsupported",
+                  "disabled",
+                  "offline"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "type": "null"
+              },
+              "status": {
+                "enum": [
+                  "empty",
+                  "pending",
+                  "error"
+                ]
+              },
+              "captured_at": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "ready"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "type": "object"
+              },
+              "captured_at": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
+              },
+              "clock_mapping_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            }
+          }
+        }
+      ]
+    },
+    "Goal": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "text": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "changed_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        },
+        "evidence_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "maxItems": 32
+        },
+        "origin": {
+          "enum": [
+            "operator",
+            "agent"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "text",
+        "changed_at",
+        "reason",
+        "evidence_ids",
+        "origin"
+      ],
+      "additionalProperties": false
+    },
+    "Versions": {
+      "type": "object",
+      "properties": {
+        "memory": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "personality": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "principles": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "policy": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "memory",
+        "personality",
+        "principles",
+        "policy"
+      ],
+      "additionalProperties": false
+    },
+    "Operator": {
+      "type": "object",
+      "properties": {
+        "microphone_enabled": {
+          "type": "boolean"
+        },
+        "microphone_epoch": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "interaction_epoch": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "motion_allowed": {
+          "type": "boolean"
+        },
+        "quiet": {
+          "type": "boolean"
+        },
+        "privacy_all": {
+          "type": "boolean"
+        },
+        "operator_epoch": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "speech_epoch": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "microphone_enabled",
+        "microphone_epoch",
+        "interaction_epoch",
+        "motion_allowed",
+        "quiet",
+        "privacy_all",
+        "operator_epoch",
+        "speech_epoch"
+      ],
+      "additionalProperties": false
+    },
+    "Simulation": {
+      "type": "object",
+      "properties": {
+        "origin": {
+          "const": "simulated"
+        },
+        "mood": {
+          "type": "number",
+          "minimum": -1,
+          "maximum": 1
+        },
+        "arousal": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "curiosity": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "fatigue": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "confidence": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1
+        },
+        "social_need": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "transition_reasons": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "maxItems": 32
+        }
+      },
+      "required": [
+        "origin",
+        "mood",
+        "arousal",
+        "curiosity",
+        "fatigue",
+        "confidence",
+        "social_need",
+        "transition_reasons"
+      ],
+      "additionalProperties": false
+    },
+    "Capability": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "args_schema_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "budget_ms": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "enabled",
+        "args_schema_id",
+        "budget_ms"
+      ],
+      "additionalProperties": false
+    },
+    "DecisionInput": {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "const": "1.1"
+        },
+        "cycle_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "hub_boot_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "state_revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "snapshot_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
+        },
+        "elapsed_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "idle_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "mode": {
+          "enum": [
+            "BOOT",
+            "ACTIVE",
+            "PRESSURED",
+            "WITHDRAWN",
+            "RECOVERING",
+            "MODEL_UNAVAILABLE"
+          ]
+        },
+        "operator": {
+          "$ref": "#/$defs/Operator"
+        },
+        "versions": {
+          "$ref": "#/$defs/Versions"
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Capability"
+          },
+          "maxItems": 32
+        },
+        "sensors": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SensorEvent"
+          },
+          "maxItems": 32
+        },
+        "simulation": {
+          "$ref": "#/$defs/Simulation"
+        },
+        "scene_summary": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "working_memory": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 4096
+          },
+          "maxItems": 16
+        },
+        "previous_decisions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "activity": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "outcome": {
+                "enum": [
+                  "pending",
+                  "completed",
+                  "failed",
+                  "cancelled",
+                  "unknown",
+                  "none"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "activity",
+              "outcome"
+            ],
+            "additionalProperties": false
+          },
+          "maxItems": 3
+        },
+        "conversation": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "role": {
+                "enum": [
+                  "user",
+                  "assistant"
+                ]
+              },
+              "text": {
+                "type": "string",
+                "maxLength": 4096
+              },
+              "at": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
+              }
+            },
+            "required": [
+              "id",
+              "role",
+              "text",
+              "at"
+            ],
+            "additionalProperties": false
+          },
+          "maxItems": 8
+        },
+        "memory_projection": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "epistemic_type": {
+                "enum": [
+                  "fact",
+                  "inference",
+                  "hypothesis",
+                  "preference",
+                  "fiction"
+                ]
+              },
+              "text": {
+                "type": "string",
+                "maxLength": 4096
+              },
+              "confidence": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "minimum": 0,
+                "maximum": 1
+              },
+              "age_ms": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "id",
+              "epistemic_type",
+              "text",
+              "confidence",
+              "age_ms"
+            ],
+            "additionalProperties": false
+          },
+          "maxItems": 8
+        },
+        "personality_summary": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "principles_summary": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "pinned_goal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Goal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tasks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "kind": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "status": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "age_ms": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "id",
+              "kind",
+              "status",
+              "age_ms"
+            ],
+            "additionalProperties": false
+          },
+          "maxItems": 16
+        },
+        "delta_summary": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 4096
+          },
+          "maxItems": 16
+        },
+        "ready_proposals": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ReadyProposal"
+          },
+          "maxItems": 4
+        }
+      },
+      "required": [
+        "schema_version",
+        "cycle_id",
+        "request_id",
+        "hub_boot_id",
+        "state_revision",
+        "snapshot_at",
+        "elapsed_ms",
+        "idle_ms",
+        "mode",
+        "operator",
+        "versions",
+        "capabilities",
+        "sensors",
+        "simulation",
+        "scene_summary",
+        "working_memory",
+        "previous_decisions",
+        "conversation",
+        "memory_projection",
+        "personality_summary",
+        "principles_summary",
+        "pinned_goal",
+        "tasks",
+        "delta_summary",
+        "ready_proposals"
+      ],
+      "additionalProperties": false
+    },
+    "Speech": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 600
+        },
+        "intent_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "reply_to": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "style": {
+          "enum": [
+            "neutral",
+            "curious",
+            "gentle",
+            "playful",
+            "thoughtful"
+          ]
+        },
+        "not_before_ms": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "text",
+        "intent_id",
+        "reply_to",
+        "style",
+        "not_before_ms"
+      ],
+      "additionalProperties": false
+    },
+    "MotionIntent": {
+      "type": "object",
+      "properties": {
+        "skill_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "target_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "amplitude": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "duration_ms": {
+          "type": "integer",
+          "minimum": 200,
+          "maximum": 10000
+        },
+        "intent_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      },
+      "required": [
+        "skill_id",
+        "target_id",
+        "amplitude",
+        "duration_ms",
+        "intent_id"
+      ],
+      "additionalProperties": false
+    },
+    "FunctionIntent": {
+      "type": "object",
+      "properties": {
+        "capability_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "arguments": {
+          "type": "object",
+          "maxProperties": 16
+        },
+        "intent_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      },
+      "required": [
+        "capability_id",
+        "arguments",
+        "intent_id"
+      ],
+      "additionalProperties": false
+    },
+    "GoalPatch": {
+      "type": "object",
+      "properties": {
+        "operation": {
+          "enum": [
+            "replace",
+            "clear"
+          ]
+        },
+        "expected_version": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "text": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 4096
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        },
+        "evidence_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "maxItems": 32
+        },
+        "expected_goal_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "operation",
+        "expected_version",
+        "text",
+        "reason",
+        "evidence_ids",
+        "expected_goal_id"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "operation": {
+                "const": "replace"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "text": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "operation": {
+                "const": "clear"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "text": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "Decision": {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "const": "1.1"
+        },
+        "decision_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "based_on_revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "interaction_epoch": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
+        },
+        "activity": {
+          "enum": [
+            "listen",
+            "focus",
+            "think",
+            "observe",
+            "wait",
+            "converse",
+            "explore",
+            "rest"
+          ]
+        },
+        "speech": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Speech"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "motions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MotionIntent"
+          },
+          "maxItems": 2
+        },
+        "functions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FunctionIntent"
+          },
+          "maxItems": 2
+        },
+        "attention": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "goal_patch": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GoalPatch"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        },
+        "evidence_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "maxItems": 32
+        },
+        "binding_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "causality": {
+          "$ref": "#/$defs/Causality"
+        }
+      },
+      "required": [
+        "schema_version",
+        "decision_id",
+        "request_id",
+        "based_on_revision",
+        "interaction_epoch",
+        "expires_at",
+        "activity",
+        "speech",
+        "motions",
+        "functions",
+        "attention",
+        "goal_patch",
+        "reason",
+        "evidence_ids",
+        "binding_id",
+        "causality"
+      ],
+      "additionalProperties": false
+    },
+    "Causality": {
+      "type": "object",
+      "properties": {
+        "robot_boot_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "operator_epoch": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "interaction_epoch": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "scene_revision": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "track_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "utterance_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "utterance_revision": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "input_event_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "maxItems": 32
+        },
+        "captured_at": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "microphone_epoch": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "hub_boot_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "compute_boot_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "speech_epoch": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "robot_boot_id",
+        "operator_epoch",
+        "interaction_epoch",
+        "scene_revision",
+        "track_id",
+        "utterance_id",
+        "utterance_revision",
+        "input_event_ids",
+        "captured_at",
+        "microphone_epoch",
+        "hub_boot_id",
+        "compute_boot_id",
+        "speech_epoch"
+      ],
+      "additionalProperties": false
+    },
+    "Task": {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "const": "1.1"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "kind": {
+          "enum": [
+            "stt",
+            "audio_classify",
+            "vlm",
+            "main",
+            "deep",
+            "web",
+            "shell",
+            "memory"
+          ]
+        },
+        "intent_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "causality": {
+          "$ref": "#/$defs/Causality"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
+        },
+        "deadline_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
+        },
+        "soft_timeout_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cancel_token": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "coalesce_key": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "allowed_capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "maxItems": 32
+        },
+        "max_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "max_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "worker_slot": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "enum": [
+            "queued",
+            "running",
+            "soft_late",
+            "completed",
+            "cancel_requested",
+            "cancelled",
+            "quarantined",
+            "failed",
+            "superseded",
+            "expired",
+            "accepted",
+            "archived"
+          ]
+        },
+        "result_ref": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "current_attempt_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "source_refs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SourceRef"
+          },
+          "maxItems": 16
+        },
+        "resource_class": {
+          "enum": [
+            "cpu_fast",
+            "cpu_audio",
+            "cpu_background",
+            "gpu_shared",
+            "network"
+          ]
+        }
+      },
+      "required": [
+        "schema_version",
+        "id",
+        "kind",
+        "intent_id",
+        "causality",
+        "created_at",
+        "deadline_at",
+        "soft_timeout_ms",
+        "cancel_token",
+        "coalesce_key",
+        "allowed_capabilities",
+        "max_bytes",
+        "max_tokens",
+        "worker_slot",
+        "status",
+        "result_ref",
+        "current_attempt_id",
+        "source_refs",
+        "resource_class"
+      ],
+      "additionalProperties": false
+    },
+    "TaskResult": {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "const": "1.1"
+        },
+        "task_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "attempt_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "causality": {
+          "$ref": "#/$defs/Causality"
+        },
+        "finished_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
+        },
+        "outcome": {
+          "enum": [
+            "completed",
+            "failed",
+            "cancelled"
+          ]
+        },
+        "confidence": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1
+        },
+        "result": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "maxProperties": 32
+        },
+        "error_code": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "digest": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      },
+      "required": [
+        "schema_version",
+        "task_id",
+        "attempt_id",
+        "causality",
+        "finished_at",
+        "outcome",
+        "confidence",
+        "result",
+        "error_code",
+        "digest"
+      ],
+      "additionalProperties": false
+    },
+    "MainProposal": {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "const": "1.1"
+        },
+        "intent_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "causality": {
+          "$ref": "#/$defs/Causality"
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
+        },
+        "summary": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "speech_segments": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Speech"
+          },
+          "maxItems": 8
+        },
+        "motions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MotionIntent"
+          },
+          "maxItems": 4
+        },
+        "functions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FunctionIntent"
+          },
+          "maxItems": 4
+        },
+        "supporting_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "maxItems": 32
+        },
+        "uncertainties": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 4096
+          },
+          "maxItems": 8
+        },
+        "requires_revalidation": {
+          "const": true
+        },
+        "proposal_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "task_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "stream_state": {
+          "enum": [
+            "partial",
+            "complete",
+            "aborted"
+          ]
+        }
+      },
+      "required": [
+        "schema_version",
+        "intent_id",
+        "causality",
+        "expires_at",
+        "summary",
+        "speech_segments",
+        "motions",
+        "functions",
+        "supporting_ids",
+        "uncertainties",
+        "requires_revalidation",
+        "proposal_id",
+        "task_id",
+        "stream_state"
+      ],
+      "additionalProperties": false
+    },
+    "MemoryItem": {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "const": "1.1"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "namespace": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "memory_kind": {
+          "enum": [
+            "episodic",
+            "semantic",
+            "procedural"
+          ]
+        },
+        "epistemic_type": {
+          "enum": [
+            "fact",
+            "inference",
+            "hypothesis",
+            "preference",
+            "fiction"
+          ]
+        },
+        "content": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "valid_from": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
+        },
+        "valid_until": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
+        },
+        "evidence_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "maxItems": 32
+        },
+        "counterevidence_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "maxItems": 32
+        },
+        "confidence": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1
+        },
+        "status": {
+          "enum": [
+            "proposed",
+            "active",
+            "disputed",
+            "retracted"
+          ]
+        },
+        "author": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "model_version": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "prompt_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "supersedes": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lineage_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "maxItems": 32
+        },
+        "claim": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Claim"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "schema_version",
+        "id",
+        "version",
+        "namespace",
+        "memory_kind",
+        "epistemic_type",
+        "content",
+        "valid_from",
+        "valid_until",
+        "created_at",
+        "evidence_ids",
+        "counterevidence_ids",
+        "confidence",
+        "status",
+        "author",
+        "model_version",
+        "prompt_version",
+        "supersedes",
+        "lineage_ids",
+        "claim"
+      ],
+      "additionalProperties": false
+    },
+    "LogEvent": {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "const": "1.1"
+        },
+        "event_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "device_boot_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "producer_seq": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
+        },
+        "ingested_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
+        },
+        "kind": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "privacy": {
+          "enum": [
+            "metadata",
+            "redacted_text",
+            "private_local"
+          ]
+        },
+        "causality": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Causality"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "payload": {
+          "type": "object",
+          "maxProperties": 32
+        },
+        "digest": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      },
+      "required": [
+        "schema_version",
+        "event_id",
+        "device_boot_id",
+        "producer_seq",
+        "occurred_at",
+        "ingested_at",
+        "kind",
+        "privacy",
+        "causality",
+        "payload",
+        "digest"
+      ],
+      "additionalProperties": false
+    },
+    "AnalysisBatch": {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "const": "1.1"
+        },
+        "batch_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "object_key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "compressed_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 5242880
+        },
+        "raw_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 33554432
+        },
+        "event_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "seq_ranges": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "boot_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "first": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "last": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "boot_id",
+              "first",
+              "last"
+            ],
+            "additionalProperties": false
+          },
+          "maxItems": 32
+        },
+        "privacy_policy_version": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "schema_version",
+        "batch_id",
+        "object_key",
+        "created_at",
+        "sha256",
+        "compressed_bytes",
+        "raw_bytes",
+        "event_count",
+        "seq_ranges",
+        "privacy_policy_version"
+      ],
+      "additionalProperties": false
+    },
+    "Patch": {
+      "type": "object",
+      "properties": {
+        "document_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "document_type": {
+          "enum": [
+            "memory",
+            "personality",
+            "character_principles"
+          ]
+        },
+        "base_version": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "operation": {
+          "enum": [
+            "add",
+            "replace",
+            "retract"
+          ]
+        },
+        "item": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MemoryItem"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "text": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 4096
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rationale": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "supporting_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "maxItems": 32
+        },
+        "counterevidence_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "maxItems": 32
+        },
+        "confidence": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1
+        },
+        "trait_deltas": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "curiosity": {
+                  "type": "number",
+                  "minimum": -0.02,
+                  "maximum": 0.02
+                },
+                "playfulness": {
+                  "type": "number",
+                  "minimum": -0.02,
+                  "maximum": 0.02
+                },
+                "directness": {
+                  "type": "number",
+                  "minimum": -0.02,
+                  "maximum": 0.02
+                },
+                "sociability": {
+                  "type": "number",
+                  "minimum": -0.02,
+                  "maximum": 0.02
+                },
+                "patience": {
+                  "type": "number",
+                  "minimum": -0.02,
+                  "maximum": 0.02
+                }
+              },
+              "additionalProperties": false,
+              "minProperties": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "document_id",
+        "document_type",
+        "base_version",
+        "operation",
+        "item",
+        "text",
+        "rationale",
+        "supporting_ids",
+        "counterevidence_ids",
+        "confidence",
+        "trait_deltas"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "document_type": {
+                "const": "personality"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "trait_deltas": {
+                "type": "object"
+              },
+              "item": {
+                "type": "null"
+              },
+              "text": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "document_type": {
+                "const": "memory"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "trait_deltas": {
+                "type": "null"
+              },
+              "text": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "document_type": {
+                "const": "character_principles"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "trait_deltas": {
+                "type": "null"
+              },
+              "item": {
+                "type": "null"
+              },
+              "text": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              }
+            }
+          }
+        }
+      ]
+    },
+    "AnalysisProposal": {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "const": "1.1"
+        },
+        "proposal_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "idempotency_key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "source_batch_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "maxItems": 32
+        },
+        "base_versions": {
+          "$ref": "#/$defs/Versions"
+        },
+        "patches": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Patch"
+          },
+          "maxItems": 32
+        },
+        "metrics": {
+          "type": "object",
+          "maxProperties": 32,
+          "additionalProperties": {
+            "type": "number"
+          }
+        },
+        "analyzer_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "model_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "prompt_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
+        },
+        "rollback_conditions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 4096
+          },
+          "maxItems": 8
+        },
+        "signature": {
+          "type": "object",
+          "properties": {
+            "key_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "algorithm": {
+              "const": "Ed25519"
+            },
+            "body_sha256": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "value": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            }
+          },
+          "required": [
+            "key_id",
+            "algorithm",
+            "body_sha256",
+            "value"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "schema_version",
+        "proposal_id",
+        "idempotency_key",
+        "source_batch_ids",
+        "base_versions",
+        "patches",
+        "metrics",
+        "analyzer_version",
+        "model_version",
+        "prompt_version",
+        "created_at",
+        "expires_at",
+        "rollback_conditions",
+        "signature"
+      ],
+      "additionalProperties": false
+    },
+    "Delta": {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "const": "1.1"
+        },
+        "hub_boot_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "base_revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "upserts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "key": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "value": {}
+            },
+            "required": [
+              "key",
+              "value"
+            ],
+            "additionalProperties": false
+          },
+          "maxItems": 64
+        },
+        "removals": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "maxItems": 32
+        },
+        "digest": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      },
+      "required": [
+        "schema_version",
+        "hub_boot_id",
+        "base_revision",
+        "revision",
+        "upserts",
+        "removals",
+        "digest"
+      ],
+      "additionalProperties": false
+    },
+    "Interval": {
+      "type": "object",
+      "properties": {
+        "start_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
+        },
+        "end_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
+        }
+      },
+      "required": [
+        "start_at",
+        "end_at"
+      ],
+      "additionalProperties": false
+    },
+    "SourceRef": {
+      "type": "object",
+      "properties": {
+        "sensor_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "producer_boot_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "value_revision": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "sensor_id",
+        "producer_boot_id",
+        "seq",
+        "value_revision"
+      ],
+      "additionalProperties": false
+    },
+    "ReadyProposal": {
+      "type": "object",
+      "properties": {
+        "proposal_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "task_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "summary": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
+        },
+        "stream_state": {
+          "enum": [
+            "partial",
+            "complete"
+          ]
+        },
+        "commit_status": {
+          "enum": [
+            "ready",
+            "committed"
+          ]
+        },
+        "causality": {
+          "$ref": "#/$defs/Causality"
+        }
+      },
+      "required": [
+        "proposal_id",
+        "task_id",
+        "summary",
+        "expires_at",
+        "stream_state",
+        "commit_status",
+        "causality"
+      ],
+      "additionalProperties": false
+    },
+    "Claim": {
+      "type": "object",
+      "properties": {
+        "subject": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "predicate": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "value": {
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "polarity": {
+          "enum": [
+            "positive",
+            "negative"
+          ]
+        },
+        "scope": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      },
+      "required": [
+        "subject",
+        "predicate",
+        "value",
+        "polarity",
+        "scope"
+      ],
+      "additionalProperties": false
+    },
+    "Transcript": {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "const": "1.1"
+        },
+        "utterance_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "capture_session_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "producer_boot_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "microphone_epoch": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "interaction_epoch": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sample_interval": {
+          "$ref": "#/$defs/Interval"
+        },
+        "text": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "stable_prefix": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "final": {
+          "type": "boolean"
+        },
+        "confidence": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1
+        },
+        "speaker_track": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "self_audio": {
+          "enum": [
+            "unlikely",
+            "possible",
+            "likely",
+            "unknown"
+          ]
+        },
+        "lineage_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      },
+      "required": [
+        "schema_version",
+        "utterance_id",
+        "revision",
+        "capture_session_id",
+        "producer_boot_id",
+        "microphone_epoch",
+        "interaction_epoch",
+        "sample_interval",
+        "text",
+        "stable_prefix",
+        "final",
+        "confidence",
+        "speaker_track",
+        "self_audio",
+        "lineage_id"
+      ],
+      "additionalProperties": false
+    },
+    "MainSegment": {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "const": "1.1"
+        },
+        "proposal_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "task_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "segment_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "speech": {
+          "$ref": "#/$defs/Speech"
+        },
+        "causality": {
+          "$ref": "#/$defs/Causality"
+        },
+        "supporting_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "maxItems": 16
+        },
+        "final": {
+          "type": "boolean"
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
+        }
+      },
+      "required": [
+        "schema_version",
+        "proposal_id",
+        "task_id",
+        "segment_id",
+        "seq",
+        "speech",
+        "causality",
+        "supporting_ids",
+        "final",
+        "expires_at"
+      ],
+      "additionalProperties": false
+    },
+    "FastChoice": {
+      "type": "object",
+      "properties": {
+        "a": {
+          "enum": [
+            "listen",
+            "focus",
+            "think",
+            "observe",
+            "wait",
+            "converse",
+            "explore",
+            "rest"
+          ]
+        },
+        "why": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 96
+        },
+        "focus": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "say": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "motion": {
+          "anyOf": [
+            {
+              "enum": [
+                "settle",
+                "look_at",
+                "nod",
+                "attentive",
+                "dance"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "start": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "enum": [
+                    "main",
+                    "vlm",
+                    "audio_analysis",
+                    "research"
+                  ]
+                },
+                "input_ref": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                }
+              },
+              "required": [
+                "type",
+                "input_ref"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "commit": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "goal_review": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "e": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "maxItems": 4
+        }
+      },
+      "required": [
+        "a",
+        "why"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "commit"
+            ],
+            "properties": {
+              "commit": {
+                "type": "string"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "say": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "FastView": {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "const": "1.1"
+        },
+        "at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
+        },
+        "mode": {
+          "enum": [
+            "ACTIVE",
+            "PRESSURED",
+            "WITHDRAWN",
+            "RECOVERING"
+          ]
+        },
+        "op": {
+          "$ref": "#/$defs/Operator"
+        },
+        "sim": {
+          "$ref": "#/$defs/Simulation"
+        },
+        "scene": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "sensors": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "state": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "age_ms": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "summary": {
+                "type": "string",
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "id",
+              "state",
+              "age_ms",
+              "summary"
+            ],
+            "additionalProperties": false
+          },
+          "maxItems": 12
+        },
+        "prev": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "maxItems": 3
+        },
+        "dialogue": {
+          "type": "string",
+          "maxLength": 1024
+        },
+        "memory": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "alias": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "type": {
+                "enum": [
+                  "fact",
+                  "inference",
+                  "hypothesis",
+                  "preference",
+                  "fiction"
+                ]
+              },
+              "summary": {
+                "type": "string",
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "alias",
+              "type",
+              "summary"
+            ],
+            "additionalProperties": false
+          },
+          "maxItems": 8
+        },
+        "personality": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "principles": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "goal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Goal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pending": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "alias": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "kind": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "status": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "age_ms": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "alias",
+              "kind",
+              "status",
+              "age_ms"
+            ],
+            "additionalProperties": false
+          },
+          "maxItems": 8
+        },
+        "ready": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "alias": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "summary": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "expires_at": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
+              }
+            },
+            "required": [
+              "alias",
+              "summary",
+              "expires_at"
+            ],
+            "additionalProperties": false
+          },
+          "maxItems": 4
+        },
+        "candidates": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "alias": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "kind": {
+                "enum": [
+                  "main",
+                  "vlm",
+                  "audio_analysis",
+                  "research",
+                  "goal_review"
+                ]
+              },
+              "summary": {
+                "type": "string",
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "alias",
+              "kind",
+              "summary"
+            ],
+            "additionalProperties": false
+          },
+          "maxItems": 8
+        },
+        "evidence_aliases": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "maxItems": 16
+        }
+      },
+      "required": [
+        "schema_version",
+        "at",
+        "mode",
+        "op",
+        "sim",
+        "scene",
+        "sensors",
+        "prev",
+        "dialogue",
+        "memory",
+        "personality",
+        "principles",
+        "goal",
+        "pending",
+        "ready",
+        "candidates",
+        "evidence_aliases"
+      ],
+      "additionalProperties": false
+    },
+    "RequestBinding": {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "const": "1.1"
+        },
+        "binding_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "snapshot_revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "causality": {
+          "$ref": "#/$defs/Causality"
+        },
+        "result_deadline_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "aliases": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "type": "object",
+            "properties": {
+              "alias": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "kind": {
+                "enum": [
+                  "evidence",
+                  "proposal",
+                  "memory",
+                  "task",
+                  "candidate"
+                ]
+              },
+              "target_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "revision": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "alias",
+              "kind",
+              "target_id",
+              "revision"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "schema_version",
+        "binding_id",
+        "request_id",
+        "snapshot_revision",
+        "causality",
+        "result_deadline_at",
+        "aliases"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/SensorEvent"
+    },
+    {
+      "$ref": "#/$defs/DecisionInput"
+    },
+    {
+      "$ref": "#/$defs/Decision"
+    },
+    {
+      "$ref": "#/$defs/Task"
+    },
+    {
+      "$ref": "#/$defs/TaskResult"
+    },
+    {
+      "$ref": "#/$defs/MainProposal"
+    },
+    {
+      "$ref": "#/$defs/MemoryItem"
+    },
+    {
+      "$ref": "#/$defs/LogEvent"
+    },
+    {
+      "$ref": "#/$defs/AnalysisBatch"
+    },
+    {
+      "$ref": "#/$defs/AnalysisProposal"
+    },
+    {
+      "$ref": "#/$defs/Delta"
+    },
+    {
+      "$ref": "#/$defs/FastChoice"
+    },
+    {
+      "$ref": "#/$defs/FastView"
+    },
+    {
+      "$ref": "#/$defs/Transcript"
+    },
+    {
+      "$ref": "#/$defs/MainSegment"
+    },
+    {
+      "$ref": "#/$defs/RequestBinding"
+    }
+  ]
+}
