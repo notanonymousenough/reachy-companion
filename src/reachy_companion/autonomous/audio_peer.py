@@ -217,7 +217,7 @@ class AudioPeer:
                 now=self.clock();self.closed_at=now
                 self.first_close=dict(reason=reason,source_boot=self.boot_id,
                     last_accepted_age_ms=None if self.last_lease is None else max(0,(now-self.last_lease)*1000),
-                    operator_age_remaining_ms=max(0,(self.operator_deadline-now)*1000),lease_requests=self.lease_requests)
+                    operator_age_remaining_ms=max(0,(self.operator_deadline-now)*1000),controller_lease_remaining_ms=max(0,(self.lease_deadline-now)*1000),lease_requests=self.lease_requests)
                 for observer in self.close_observers:
                     try:self.first_close.update(observer(now))
                     except Exception:self.first_close['observer_error']=True
@@ -470,9 +470,11 @@ class PeerStartup:
             raise ValueError('Finite peer startup scope')
         self.source=source_boot;self.clock=clock;self.deadline=clock()+timeout
         self.phase='STARTING';self.reason=None;self.lock=threading.Lock()
+        self.last_status=None;self.first_withdrawal=None
     def observe(self,receipt,acknowledged):
         with self.lock:
             if self.phase=='WITHDRAWN':return False
+            if self.phase=='ACTIVE' and self.clock()-self.last_status>=.3:return self._withdraw('status_expired')
             if (not isinstance(receipt,dict) or receipt.get('source_boot')!=self.source
                     or any(type(receipt.get(name)) is not bool for name in ('closed','permitted','operator_ready'))):
                 return self._withdraw('invalid_status')
@@ -481,18 +483,28 @@ class PeerStartup:
                 if self.clock()>=self.deadline:return self._withdraw('first_lease_timeout')
                 if acknowledged is True and receipt['operator_ready'] and receipt['permitted']:self.phase='ACTIVE'
             elif not receipt['operator_ready'] or not receipt['permitted']:return self._withdraw('device_withdrawn')
+            self.last_status=self.clock()
             return self.phase=='ACTIVE'
-    def _withdraw(self,reason):
+    def _withdraw(self,reason,error_kind=None):
+        now=self.clock()
+        self.first_withdrawal=dict(previous_phase=self.phase,reason=reason,error_kind=error_kind,
+            last_status_age_ms=None if self.last_status is None else max(0,(now-self.last_status)*1000),
+            status_remaining_ms=None if self.last_status is None else max(0,(self.last_status+.3-now)*1000))
         self.phase='WITHDRAWN';self.reason=reason;return False
+    def failure(self,error_kind):
+        with self.lock:
+            if self.phase=='ACTIVE':self._withdraw('status_failed',error_kind[:64])
+            return self.phase
     def advance(self):
         with self.lock:
             if self.phase=='STARTING' and self.clock()>=self.deadline:self._withdraw('first_lease_timeout')
+            elif self.phase=='ACTIVE' and self.clock()-self.last_status>=.3:self._withdraw('status_expired')
             return self.phase
     def close(self):
         with self.lock:
             if self.phase!='WITHDRAWN':self._withdraw('controller_stop')
     def status(self):
-        with self.lock:return dict(phase=self.phase,reason=self.reason,source_boot=self.source)
+        with self.lock:return dict(phase=self.phase,reason=self.reason,source_boot=self.source,first_withdrawal=self.first_withdrawal)
 
 
 def diagnostic_operator(actual):

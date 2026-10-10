@@ -140,6 +140,22 @@ class PeerTests(unittest.TestCase):
         self.assertFalse(gate.observe(dict(ready,permitted=True),True))
         self.assertEqual(gate.status()['reason'],'first_lease_timeout')
 
+    def test_active_transport_failure_and_status_expiry_are_terminal(self):
+        for failure in ('timeout','freshness'):
+            now=[0.];gate=PeerStartup('source',clock=lambda:now[0])
+            receipt=dict(source_boot='source',closed=False,operator_ready=True,permitted=True)
+            self.assertTrue(gate.observe(receipt,True))
+            if failure=='timeout':self.assertEqual(gate.failure('TimeoutError'),'WITHDRAWN')
+            else:
+                now[0]=.299;self.assertEqual(gate.advance(),'ACTIVE')
+                now[0]=.301;self.assertEqual(gate.advance(),'WITHDRAWN')
+            first=gate.status()['first_withdrawal']
+            self.assertEqual(first['previous_phase'],'ACTIVE')
+            self.assertEqual(first['reason'],'status_failed' if failure=='timeout' else 'status_expired')
+            self.assertFalse(gate.observe(receipt,True));gate.close()
+            now[0]+=1;self.assertEqual(gate.status()['first_withdrawal'],first)
+        gate=PeerStartup('source');self.assertEqual(gate.failure('TimeoutError'),'STARTING')
+
     def test_diagnostic_operator_projection_never_contains_owner_nonce_or_extra_fields(self):
         peer,_=self.setup_peer();self.actual['extra_secret']='sentinel'
         view=self.call(peer,'/status')['operator']

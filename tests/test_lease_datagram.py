@@ -1,4 +1,6 @@
 import threading
+import json
+import socket
 import time
 import unittest
 from reachy_companion.autonomous.audio_peer import AudioPeer,PeerClient,PeerLease
@@ -45,6 +47,27 @@ class DatagramTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):server.handle(body)
         peer.now=.11;server.handle(body);self.assertEqual(len(server.nonces),1)
 
+    def test_exchange_phase_failure_tail_is_bounded_and_contains_no_secrets(self):
+        client=PeerClient('http://127.0.0.1:1','t'*32,'controller')
+        transport=DatagramRenewal(client,'source',1);transport.socket.close()
+        class NoReplies:
+            def setblocking(self,value):self.blocking=value
+            def settimeout(self,value):self.blocking=True
+            def send(self,raw):return len(raw)
+            def recv(self,size):
+                if not self.blocking:raise BlockingIOError()
+                raise socket.timeout()
+            def close(self):pass
+        transport.socket=NoReplies()
+        for _ in range(10):
+            with self.assertRaises(socket.timeout):transport.renew()
+        status=transport.status();self.assertEqual(len(status['exchange_tail']),16)
+        self.assertEqual(status['exchange_phase'],'failed:challenge_wait')
+        self.assertEqual(status['exchange_tail'][-1]['error_kind'],'TimeoutError')
+        self.assertIsNone(status['ack_sequence']);self.assertIsNotNone(status['last_send_age_ms'])
+        self.assertNotIn('t'*32,json.dumps(status))
+        self.assertNotIn('nonce',json.dumps(status));self.assertNotIn('mac',json.dumps(status))
+
     def test_actual_udp_exchange_does_not_renew_after_scheduler_stall(self):
         actual=dict(agent_boot_id='agent',microphone_epoch=2,microphone_owner_id='owner',microphone_enabled=True,
             phase='paused',listening=False,motion_policy=dict(epoch=1,quiet=False,privacy_all=False))
@@ -68,6 +91,10 @@ class DatagramTests(unittest.TestCase):
         self.assertEqual(frozen['ack_sequence'],server.last_sequence)
         self.assertGreaterEqual(frozen['last_accepted_age_ms'],300)
         self.assertGreaterEqual(frozen['last_receive_age_ms'],0)
+        phases=[item['phase'] for item in frozen['handling_tail']]
+        self.assertIn('verified_renew',phases);self.assertIn('ack_sent',phases)
+        self.assertLessEqual(len(phases),16);self.assertGreaterEqual(frozen['max_handle_ms'],0)
+        self.assertNotIn('nonce',json.dumps(frozen));self.assertNotIn('t'*32,json.dumps(frozen))
         time.sleep(.02);self.assertEqual(server.status()['first_withdrawal'],frozen)
         lease.tick();time.sleep(.05);self.assertEqual(peer.lease_requests,requests)
         lease.close();lease.worker.join(timeout=.2);self.assertFalse(lease.status()['execution_busy'])

@@ -32,6 +32,12 @@ def main():
     lease=PeerLease(client,datagram=datagram)
     startup=PeerStartup(source)
     stop=threading.Event();samples=[];errors=Counter();withdrawn=threading.Event()
+    first_failure={};failure_lock=threading.Lock()
+    def withdraw():
+        with failure_lock:
+            if withdrawn.is_set() or stop.is_set():return
+            first_failure.update(handshake=startup.status(),lease=lease.status())
+            withdrawn.set();stop.set();lease.close()
     def status_worker():
         while not stop.is_set():
             progress=lease.status()
@@ -41,19 +47,21 @@ def main():
                 receipt=client.call('/status')
                 samples.append((time.monotonic()-began)*1000)
                 startup.observe(receipt,acknowledged_before_request)
-                if startup.status()['phase']=='WITHDRAWN':withdrawn.set()
-            except Exception as exc:errors[type(exc).__name__]+=1
+                if startup.status()['phase']=='WITHDRAWN':withdraw()
+            except Exception as exc:
+                kind=type(exc).__name__;errors[kind]+=1
+                if startup.failure(kind)=='WITHDRAWN':withdraw()
             stop.wait(args.status_interval)
     worker=threading.Thread(target=status_worker,daemon=True);worker.start()
     began=time.monotonic()
     try:
         while time.monotonic()-began<args.duration and not withdrawn.is_set():
-            if startup.advance()=='WITHDRAWN':withdrawn.set();break
+            if startup.advance()=='WITHDRAWN':withdraw();break
             lease.tick();time.sleep(.005)
     finally:
         handshake=startup.status();startup.close()
         stop.set();lease.close();worker.join(timeout=.5);lease.worker.join(timeout=.5)
-    report=dict(mode='actual_hub_device_network_no_output',source_boot=source,handshake=handshake,
+    report=dict(mode='actual_hub_device_network_no_output',source_boot=source,handshake=handshake,first_observed_failure=first_failure or None,
         elapsed_s=time.monotonic()-began,status_interval_s=args.status_interval,status_requests=len(samples),status_errors=dict(errors),
         max_status_ms=max(samples,default=None),lease=lease.status(),status_execution_busy=worker.is_alive(),
         physical_output_commands=0,inference_requests=0,raw_audio_retained=False)
