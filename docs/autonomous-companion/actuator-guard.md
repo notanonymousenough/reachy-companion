@@ -1,0 +1,19 @@
+# Local lease guard: подготовка этапа3
+
+`autonomous/actuator_guard.py` — отдельный opt-in компонент, не подключённый к production speech/motion. Он не содержит robot SDK, motor enable, TTS, capture или LLM вызовов. `arm` доступен только trusted owner; переданные operator flags/fence attestation пока являются входом этого владельца, а не самостоятельно доказанным hardware state. Поэтому наличие класса не снимает physical activation gates.
+
+Реализованы process-lifetime `flock` для cooperating writers, новый robot-local boot ID, неизменяемая lease с полным Authority, monotonic deadline≤500ms, fresh heartbeat sequence и независимый watchdog с poll≤100ms. Старую lease нельзя продлить после expiry, смены boot или revoke. Watchdog вызывает adapter stop без обращения к hub/PC/model; stop обязан подтвердить фактическое прекращение output. False/exception означает unknown и запрещает новую lease. Operator invalidation будущего adapter обязана немедленно вызвать revoke, до очередного model tick.
+
+SQLite `synchronous=FULL` хранит active/idle/quarantined intent. После crash активного владельца следующий процесс получает quarantine; completion старого процесса не возобновляется. Отдельный trusted `acknowledge_stopped(verified_stopped=True)` — будущий operator audit, не model tool и не автоматический reset. Admission command intent записывается до future dispatch; duplicate возвращает False. Таблица ограничена256командами на lease: overflow отзывает lease, не выбрасывает tombstones ради повторного исполнения. Новый boot и lease отсекают старые commands при начале следующей bounded таблицы.
+
+Stop вызывается перед дополнительной SQLite записью: storage error не может пропустить stop и оставляет RAM quarantine; old durable active row сохраняет quarantine после restart. Это не hard real-time доказательство: fsync или blocking adapter callback под общей mutex могут задержать watchdog. Физический adapter должен иметь отдельный bounded enqueue/stop и независимый output watchdog; пока такого adapter нет. `admit` отдельно от dispatch не разрешает TOCTOU: future adapter должен удержать guard mutex до своего bounded enqueue. Проверка боевого operator state, authenticated leases и sole-owner fence всех native/SDK writers ещё не интегрированы.
+
+## Проверка2026-10-10
+
+7adversarial tests: operator/mute/privacy/boot gate, duplicate sequence/command, expiry без heartbeat revival, независимый watchdog, unknown stop+restart+explicit audit, storage failure+stop, bounded dedupe overflow и реальный второй subprocess/SIGKILL/recovery. Full regression86/86. Это локальные protocol/process tests, не servo/audio acceptance.
+
+`deploy/autonomous/guard_probe.py` запускает3heartbeat с100ms spacing, затем прекращает heartbeats и ждёт simulated sink. На реальном Linux hub последний heartbeat→simulated stop0.501303s приlease500ms/poll20ms; lease отозвана, quarantinefalse, physical commands0. Один sample не доказывает P95, stop completion реального привода или robot timing.
+
+Robot SSH доступен через hub, но pollen authentication отклонён. Проверка Python/robot-local timing не выполнена; запрос на существующий user/identity отправлен пользователю. Production services не менялись, robot mic не включался. Isolated host-key file использован только для test route, существующие trust files не заменены.
+
+Native daemon `robot-app-lock-status=free` недостаточен: OpenAPI явно говорит, что прямые SDK clients обходят этот lock. Перед физическим adapter нужны реальный sole-owner deployment fence, verified stop, current operator epochs и consumed PCM cursor. `/move/stop` принимает конкретный UUID и не является глобальным stop неизвестных writers. Следующий шаг: robot-local simulated-sink probe после восстановления SSH, затем adapter под отключёнными motors с проверкой revoke/unknown/restart; только после этого отдельная physical acceptance.

@@ -4,7 +4,6 @@ from functools import lru_cache
 import json
 from pathlib import Path
 from uuid import uuid4
-from jsonschema import Draft202012Validator, FormatChecker
 
 
 def uid():
@@ -13,6 +12,7 @@ def uid():
 
 @lru_cache(maxsize=None)
 def validator(name):
+    from jsonschema import Draft202012Validator, FormatChecker
     schema = json.loads((Path(__file__).parents[1] / 'assets/autonomous-contracts.json').read_text())
     return Draft202012Validator({**schema, 'oneOf': [{'$ref': '#/$defs/' + name}]},
                                format_checker=FormatChecker())
