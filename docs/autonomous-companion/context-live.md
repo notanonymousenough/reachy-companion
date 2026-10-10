@@ -12,6 +12,12 @@ Producer сохраняет доступные Gst buffer PTS, segment running t
 
 Hub обновляет context отдельным background Future, не занимая fast/main lane. Authenticated read-only `POST /context` принимает query≤1024 и owner epoch/boot/privacy. Старые completions не обновляют новый scope. Every L0 tick получает ≤8 memory aliases/type/summary и camera metadata; L1 получает typed `context-1` DATA envelope с полной обязательной репликой≤1024, ≤8 MemoryItems и ≤1 observation. Envelope≤40960 chars, затем exact tokenizer и прежний admission budget; это не обход token gates. Memory/observations входят в USER data, никогда не SYSTEM policy или authority. Privacy-all скрывает память, dialogue и camera IDs/summary, отзывает текущие proposals; камера закрывает собственный reader.
 
+## Отзыв и privacy checkpoint
+
+Privacy удаляет ранее принятые sensor summaries, provenance и context cache из reducer; выход из privacy требует нового admission. Проверка memory validity повторяется непосредственно перед commit, до speech proposal. Shutdown отправляет отдельный authenticated `POST /context/revoke`, независимо от занятого context slot. PC сохраняет fence по Hub boot/epoch; terminal revoke запрещает все следующие запросы этого Hub boot. Поздний snapshot проверяет fence до lease admission и после recall. Нет eviction fences: исчерпание bounded capacity закрывает provider.
+
+Scheduler допускает context только через transport с revoke API. Shutdown сообщает реальную занятость context/revoke slots; отсутствие подтверждения не означает удалённый stop. Producer policy по-прежнему имеет собственную конечную lease, а доставка отзыва и фактическое закрытие камеры требуют отдельного аппаратного подтверждения. Новый Hub boot может получить новое разрешение после проверки владельца.
+
 ## Store, corrections, restart, forget
 
 `MemoryStore` — trusted-owner API, без model tool/HTTP write endpoint. SQLite WAL/FULL, secure_delete, ограничение2048 pages, WAL checkpoint16 pages/size hint1MiB. Бounded store: ≤128 active IDs, ≤512 immutable versions/evidence, ≤4 namespaces, ≤8 recalled items, content≤256 и serialized item≤4096 bytes. Capacity/invalid input отвергаются без truncation/eviction. IDs, evidence SHA256, namespaces и supporting/counterevidence lineages проверяются; NaN/Infinity запрещены.

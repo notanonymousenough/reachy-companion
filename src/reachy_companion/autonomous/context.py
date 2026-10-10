@@ -50,7 +50,7 @@ class ContextProvider:
     def __init__(self,config,boot_id):
         self.config=config;self.video=LatestVideo();self.memory=MemoryStore(config['memory_path'],config['namespaces'])
         self.boot_id=boot_id;self.policy_lock=threading.Lock();self.scope=None;self.privacy_all=True;self.policy_seq=0
-        self.owner_deadline=0
+        self.owner_deadline=0;self.revoked_epochs={}
         self.retired_hubs=deque(maxlen=128)
         self.done=threading.Event();self.thread=None
         if config.get('video_url'):
@@ -92,10 +92,25 @@ class ContextProvider:
             if private:self.video.clear()
             self.policy_seq+=1
             return scope,private,self.policy_seq
+    def revoke(self,hub_boot_id,operator_epoch,terminal=False):
+        if not isinstance(hub_boot_id,str) or not 1<=len(hub_boot_id)<=128 or type(operator_epoch) is not int or not 0<=operator_epoch<2**63 or type(terminal) is not bool:
+            raise ValueError('Context revoke scope')
+        with self.policy_lock:
+            if hub_boot_id not in self.revoked_epochs and len(self.revoked_epochs)>=128:
+                # Never evict a fence to admit an old delayed request.
+                self.done.set();self.privacy_all=True;self.owner_deadline=0;self.video.clear()
+                raise RuntimeError('Context fence capacity exhausted')
+            floor=2**63-1 if terminal else operator_epoch
+            self.revoked_epochs[hub_boot_id]=max(floor,self.revoked_epochs.get(hub_boot_id,-1))
+            if self.scope is None or self.scope['hub_boot_id']==hub_boot_id:
+                self.privacy_all=True;self.owner_deadline=0;self.video.clear()
+            return dict(revoked=True,hub_boot_id=hub_boot_id,operator_epoch=operator_epoch,terminal=terminal)
+
     def snapshot(self,query,privacy_all,hub_boot_id,operator_epoch):
-        if not isinstance(hub_boot_id,str) or not 1<=len(hub_boot_id)<=128 or type(operator_epoch) is not int or operator_epoch<0:
+        if not isinstance(hub_boot_id,str) or not 1<=len(hub_boot_id)<=128 or type(operator_epoch) is not int or not 0<=operator_epoch<2**63 or type(privacy_all) is not bool:
             raise ValueError('Context owner scope')
         with self.policy_lock:
+            if self.done.is_set() or operator_epoch<=self.revoked_epochs.get(hub_boot_id,-1):raise ValueError('Revoked context owner')
             if hub_boot_id in self.retired_hubs:raise ValueError('Retired context owner')
             if self.scope:
                 if self.scope['hub_boot_id']==hub_boot_id and operator_epoch<self.scope['operator_epoch']:raise ValueError('Old operator epoch')
@@ -105,9 +120,12 @@ class ContextProvider:
             self.owner_deadline=time.monotonic()+self.config.get('owner_ttl_s',1.5)
             if privacy_all:self.video.clear()
         memory=self.memory.recall(query if not privacy_all else '')
-        if privacy_all:memory['items']=[]
-        return dict(memory=memory,
-                    sensors=[self.video.snapshot(time.monotonic(),privacy_all)])
+        with self.policy_lock:
+            if self.done.is_set() or operator_epoch<=self.revoked_epochs.get(hub_boot_id,-1):raise ValueError('Revoked context owner')
+            if self.scope['hub_boot_id']!=hub_boot_id or self.scope['operator_epoch']!=operator_epoch:raise ValueError('Changed context owner')
+            private=privacy_all or self.privacy_all or time.monotonic()>=self.owner_deadline
+            if private:memory['items']=[]
+            return dict(memory=memory,sensors=[self.video.snapshot(time.monotonic(),private)])
     def close(self):
         self.done.set()
         if self.thread:self.thread.join(timeout=2)

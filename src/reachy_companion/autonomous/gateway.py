@@ -369,7 +369,7 @@ def create_server(config):
                 self.reply(200 if self.path=='/health' else 404, gateway.health() if self.path=='/health' else {})
         def do_POST(self):
             if not self.authorized(): return
-            if self.path not in ('/decision', '/main', '/context'):
+            if self.path not in ('/decision', '/main', '/context', '/context/revoke'):
                 self.reply(404, {}); return
             try:
                 size = int(self.headers.get('Content-Length', '0'))
@@ -378,6 +378,12 @@ def create_server(config):
                 request = decode(self.rfile.read(size))
                 if set(request) != {'request_id', 'data'} or not isinstance(request['request_id'], str):
                     raise ValueError('Invalid request envelope')
+                if self.path=='/context/revoke':
+                    if context is None:self.reply(404,{});return
+                    data=request['data']
+                    if set(data)!={'hub_boot_id','operator_epoch','terminal'}:raise ValueError('Context revoke scope')
+                    result=context.revoke(data['hub_boot_id'],data['operator_epoch'],data['terminal'])
+                    self.reply(200,dict(output=result,compute_boot_id=gateway.boot_id,request_id=request['request_id']));return
                 if self.path=='/context':
                     if context is None:self.reply(404,{});return
                     data=request['data']

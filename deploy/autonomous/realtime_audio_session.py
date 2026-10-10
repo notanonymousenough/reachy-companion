@@ -212,7 +212,7 @@ def main():
             and sum(event['kind']=='question' for event in tts.status())==2 and not playback.status()['resumable'])
     except Exception as exc:report['error']=type(exc).__name__+': '+str(exc)[:128]
     finally:
-        stop.set();poller.close();audio.close();speech.close();lease.close();scheduler.closed=True
+        stop.set();poller.close();audio.close();speech.close();lease.close();scheduler.close()
         report.update(stage=stage,counts=dict(scheduler.state.counts),turns=turns,main_calls=main_calls,
             fast_calls=fast_calls,audio=audio.status(),peer_poll=poller.status(),lease=lease.status(),
             max_scheduler_advance_ms=max(latencies,default=None))

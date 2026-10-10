@@ -43,6 +43,22 @@ class State:
         self.speech_operator_signature=None
         self.audio_source_bound=False
 
+    @property
+    def privacy(self):return self._privacy
+
+    @privacy.setter
+    def privacy(self,value):
+        self._privacy=value
+        if value and hasattr(self,'sensors'):
+            # Drop content at admission withdrawal, so leaving privacy cannot
+            # expose old buffers. Keep only disabled availability descriptors.
+            self.sensors={name:Sensor(name,'',None,sensor.ttl,'disabled') for name,sensor in self.sensors.items()}
+            self.context_sensors=[dict(id=sensor['id'],state='disabled',summary='',age_ms=None)
+                                  for sensor in self.context_sensors]
+            self.context_received=None;self.memory_items.clear()
+            self.candidates.clear();self.candidate_kinds.clear();self.current_utterance=''
+            self.speech_proposals.clear()
+
     def set_speech_operator(self,receipt):
         signature=(tuple(receipt['binding']),receipt['microphone_enabled'],receipt['quiet'],receipt['privacy_all'])
         if signature==self.speech_operator_signature:return
@@ -154,6 +170,8 @@ class State:
         self.revision += 1
 
     def update_context(self,value,now,roundtrip_s=0):
+        if self.privacy:
+            self.record('context_privacy_blocked');return False
         memory=value['memory'];items=memory['items']
         if len(items)>8 or type(memory['revision']) is not int or memory['revision']<0:raise ValueError('Context memory bound')
         if not isinstance(memory['store_id'],str) or not 1<=len(memory['store_id'])<=128:raise ValueError('Memory store identity')
@@ -249,10 +267,10 @@ class State:
                      confidence=None, social_need=0, transition_reasons=[]),
             scene='Actual bounded antenna17 owner; any fixture sensors are synthetic. Camera semantics unavailable.' if self.actor_binding else 'Authenticated audio capture source and measured device playback; speaker identity unknown. Camera semantics unavailable.' if self.audio_source_bound else 'Shadow actors; camera observations include age bounds and provenance.' if self.context_sensors else 'Shadow/replay. No physical sensor or actuator connected.',
             sensors=([s.view(now, self.muted) for s in list(self.sensors.values())[:12-len(self.context_sensors)]]+self.context_view(now)),
-            prev=list(self.previous), dialogue='' if self.muted or self.privacy else self.current_utterance,
+            prev=[] if self.privacy else list(self.previous), dialogue='' if self.muted or self.privacy else self.current_utterance,
             memory=[] if self.privacy else [dict(alias=alias,type=item['epistemic_type'],summary=item['content']) for alias,item in self.memory_items.items() if self.memory_valid(item)], personality='Ричи: краткий, прямой, любопытный.',
             principles='No invented perception. Muted blocks speech. Motion attentive means only a finite antenna17 target <=2 degrees, never head/body; only when motion_allowed.' if self.actor_binding else 'No invented perception. Muted blocks speech. Simulated actions only.', goal=None,
-            pending=pending[:8], ready=ready[:4],
+            pending=[] if self.privacy else pending[:8], ready=[] if self.privacy else ready[:4],
             candidates=[dict(alias=k, kind=self.candidate_kinds[k], summary=v[:256]) for k,v in self.candidates.items()][:8],
             evidence_aliases=[])
         return validate('FastView', view)
@@ -301,6 +319,11 @@ class State:
             self.record('context_not_ready');return None
         if commit and commit not in binding.ready:
             self.record('alias_rejected'); return None
+        if commit:
+            task=self.tasks.get(commit)
+            if not task or task.status!='ready' or task.authority!=self.authority or now>task.expires or not self.memory_current(task):
+                if task and task.status=='ready':task.status='discarded';task.result=None
+                self.record('proposal_stale');return None
         dependencies = dict(binding.dependencies)
         refs = [ref for ref in (focus, start['input_ref'] if start else None, commit) if ref is not None]
         if any(dependencies.get(ref) is None or dependencies[ref] != self.dependency_digest(ref, now) for ref in refs):
@@ -315,7 +338,8 @@ class State:
             self.record('motion_proposed',request_id=binding.request_id)
         if commit:
             task = self.tasks.get(commit)
-            if not task or task.status != 'ready' or task.authority != self.authority or now > task.expires:
+            if not task or task.status != 'ready' or task.authority != self.authority or now > task.expires or not self.memory_current(task):
+                if task and task.status=='ready':task.status='discarded';task.result=None
                 self.record('proposal_stale'); return None
             task.status = 'committed'
             if self.speech_attached:

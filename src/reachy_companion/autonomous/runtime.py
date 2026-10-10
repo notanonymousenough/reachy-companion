@@ -63,6 +63,13 @@ class RemoteGateway:
     def context(self,request_id,query,privacy_all,authority):
         return self.call('/context',dict(request_id=request_id,data=dict(query=query,privacy_all=privacy_all,
                         hub_boot_id=authority.hub_boot_id,operator_epoch=authority.operator_epoch)))
+    def revoke_context(self,authority,terminal=False):
+        request_id=uid();data=dict(hub_boot_id=authority.hub_boot_id,operator_epoch=authority.operator_epoch,terminal=terminal)
+        result=self.call('/context/revoke',dict(request_id=request_id,data=data))
+        if result.get('request_id')!=request_id or result.get('compute_boot_id')!=authority.compute_boot_id or result.get('output')!=dict(revoked=True,**data):
+            raise ValueError('Context revoke acknowledgement')
+        return result
+
 
 
 class ReplayGateway:
@@ -103,7 +110,7 @@ class Scheduler:
         self.binding = self.main_task = None
         self.next_tick = 0
         self.expiry_logged = False
-        self.context_job=None
+        self.context_job=None;self.context_revoke_job=None;self.context_terminal_job=None
         self.context_binding=None
         self.next_context=0
         self.closed=False
@@ -113,7 +120,28 @@ class Scheduler:
         if self.audio_adapter and event.get('type')=='operator':self.audio_adapter.interrupt()
         if self.speech_adapter and event.get('type') in ('operator','utterance'):
             self.speech_adapter.interrupt('human_utterance' if event['type']=='utterance' else 'operator',False)
+        old_authority=self.state.authority
         self.state.ingest(event, time.monotonic() if now is None else now)
+        if event.get('type')=='operator' and self.state.privacy:self.revoke_context(old_authority)
+
+    def revoke_context(self,authority,terminal=False):
+        if not self.config.get('context',{}).get('enabled'):return
+        if not hasattr(self.gateway,'revoke_context'):
+            self.state.record('context_revoke_unavailable');return
+        if terminal:
+            self.context_terminal_job=Job(self.gateway.revoke_context,authority,True);return
+        if self.context_revoke_job and not self.context_revoke_job.future.done():
+            self.state.record('context_revoke_busy');return
+        self.context_revoke_job=Job(self.gateway.revoke_context,authority,terminal)
+
+    def close(self):
+        if self.closed:return
+        # Revoke in an independent real transport slot. The occupied context
+        # request remains accounted until its actual completion.
+        self.revoke_context(self.state.authority,True)
+        self.closed=True
+        if self.speech_adapter:self.speech_adapter.close()
+        if self.audio_adapter:self.audio_adapter.close()
 
     def speech_activity(self,origin):
         # Trusted classifier hook; echo cannot create a State human utterance.
@@ -130,6 +158,7 @@ class Scheduler:
     def advance(self, now=None):
         if self.closed:return
         now = time.monotonic() if now is None else now
+        before_operator=self.state.authority;was_private=self.state.privacy
         if self.speech_adapter:
             receipt=self.speech_adapter.operator_view()
             if receipt:self.state.set_speech_operator(receipt)
@@ -152,7 +181,8 @@ class Scheduler:
                     self.state.record('motion_completed' if report['accepted'] else 'motion_failed',request_id=report['request_id'])
                 except Exception:self.state.record('motion_failed')
                 self.motion_job=None
-        if self.config.get('context',{}).get('enabled') and hasattr(self.gateway,'context'):
+        if self.state.privacy and not was_private:self.revoke_context(before_operator)
+        if self.config.get('context',{}).get('enabled') and hasattr(self.gateway,'context') and hasattr(self.gateway,'revoke_context'):
             if self.context_job and self.context_job.future.done():
                 request_id,authority,started=self.context_binding
                 try:
@@ -242,9 +272,7 @@ class Scheduler:
             self.advance(now)
             time.sleep(min(0.01, self.config['period_s']/10))
         # Stop new admission, invalidate any pending action; no model cancellation claim.
-        if self.speech_adapter:self.speech_adapter.close()
-        if self.audio_adapter:self.audio_adapter.close()
-        self.closed=True
+        self.close()
         motion_stopped=self.motion_adapter.close() if self.motion_adapter else True
         self.state.ingest(dict(type='operator', muted=True),time.monotonic())
         report = dict(mode='replay' if isinstance(self.gateway, ReplayGateway) else 'real_model_shadow',
@@ -253,6 +281,8 @@ class Scheduler:
                                           main=bool(self.main_job and not self.main_job.future.done()),
                                           actor=bool(self.actor_job and not self.actor_job.future.done()),
                                           context=bool(self.context_job and not self.context_job.future.done()),
+                                          context_revoke=bool(self.context_revoke_job and not self.context_revoke_job.future.done()),
+                                          context_terminal_revoke=bool(self.context_terminal_job and not self.context_terminal_job.future.done()),
                                           motion=bool(self.motion_job and not self.motion_job.future.done()) or bool(self.motion_adapter and hasattr(self.motion_adapter,'status') and self.motion_adapter.status()['execution_busy'])),
                       ledger=list(self.state.ledger), authority=self.state.authority.wire())
         if self.motion_adapter:

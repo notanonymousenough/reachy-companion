@@ -186,6 +186,70 @@ class ContextTests(unittest.TestCase):
         self.assertEqual(state.snapshot(.1)['memory'],[])
         state.complete(task.task_id,task.attempt_id,task.authority,'expired answer',.2)
         self.assertIsNone(task.result)
+    def test_privacy_drops_all_sensor_content_and_requires_fresh_admission(self):
+        from reachy_companion.autonomous.gateway import fast_projection
+        state=State()
+        for name in ('camera.fixture','audio.fixture'):
+            state.ingest(dict(type='sensor',id=name,summary='PRIVATE_MARKER'),0)
+        cache=LatestVideo();cache.publish(dict(producer_boot_id='a',seq=0,frame_id='PRIVATE_FRAME',lineage_id='PRIVATE_LINEAGE'),dict(mean_luminance=1),0)
+        context=self.context([item(content='PRIVATE_MEMORY')]);context['sensors']=[cache.snapshot(0)]
+        state.update_context(context,0)
+        state.ingest(dict(type='operator',muted=False,privacy_all=True),.1)
+        self.assertFalse(state.update_context(context,.2))
+        for private in (True,False):
+            if not private:state.ingest(dict(type='operator',muted=False,privacy_all=False),.3)
+            view,_=fast_projection(state.snapshot(.4))
+            self.assertNotIn('PRIVATE_',json.dumps(view))
+            self.assertTrue(all(sensor['summary']=='' for sensor in view['sensors']))
+        state.ingest(dict(type='sensor',id='audio.fixture',summary='FRESH'),.5)
+        self.assertEqual(state.snapshot(.5)['sensors'][1]['summary'],'FRESH')
+
+    def test_expired_memory_is_rejected_between_fast_binding_and_commit(self):
+        state=State();state.speech_attached=True;state.update_context(self.context([item()]),0)
+        task=self.start(state);state.complete(task.task_id,task.attempt_id,task.authority,'ready answer',.1)
+        binding=state.bind(.2,5)
+        with patch.object(state,'memory_valid',return_value=False):
+            state.apply(dict(a='converse',why='commit',commit=task.task_id),binding,.3)
+        self.assertEqual(task.status,'discarded');self.assertIsNone(task.result)
+        self.assertFalse(state.speech_proposals);self.assertEqual(state.counts['speech_proposed'],0)
+        self.assertNotIn(binding.request_id,state.consumed)
+
+    def test_shutdown_revokes_independently_of_occupied_context_slot(self):
+        with tempfile.TemporaryDirectory() as directory:
+            provider=ContextProvider(dict(memory_path=str(Path(directory)/'memory.sqlite'),namespaces=['fixture']),'replay-compute')
+            entered=threading.Event();release=threading.Event();revoked=threading.Event()
+            class Transport(ReplayGateway):
+                def context(self,request_id,query,privacy,authority):
+                    entered.set();release.wait(2)
+                    result=provider.snapshot(query,privacy,authority.hub_boot_id,authority.operator_epoch)
+                    return dict(output=result,request_id=request_id,compute_boot_id=self.boot_id)
+                def revoke_context(self,authority,terminal=False):
+                    result=provider.revoke(authority.hub_boot_id,authority.operator_epoch,terminal)
+                    revoked.set();return result
+            cfg=load(Path(__file__).resolve().parents[1]/'config.autonomous.example.json');cfg['context']=dict(enabled=True,refresh_s=.1)
+            scheduler=Scheduler(cfg,Transport())
+            try:
+                report=scheduler.run(.03);self.assertTrue(entered.is_set());self.assertTrue(revoked.wait(.5))
+                self.assertTrue(report['execution_busy']['context']);self.assertFalse(scheduler.context_job.future.done())
+                release.set();scheduler.context_job.thread.join(1)
+                with self.assertRaises(ValueError):scheduler.context_job.future.result()
+                self.assertTrue(provider.policy(time.monotonic())[1]);self.assertEqual(provider.owner_deadline,0)
+            finally:release.set();provider.close()
+
+    def test_revoked_generation_and_terminal_owner_cannot_reactivate(self):
+        with tempfile.TemporaryDirectory() as directory:
+            provider=ContextProvider(dict(memory_path=str(Path(directory)/'memory.sqlite'),namespaces=['fixture']),'pc')
+            try:
+                provider.revoke('hub',0)
+                with self.assertRaises(ValueError):provider.snapshot('',False,'hub',0)
+                provider.snapshot('',False,'hub',1)
+                provider.revoke('hub',1,True)
+                with self.assertRaises(ValueError):provider.snapshot('',False,'hub',2)
+                provider.snapshot('',False,'new-hub',0)
+                provider.revoke('hub',2,True)
+                self.assertFalse(provider.policy(time.monotonic())[1])
+            finally:provider.close()
+
     def test_video_latest_only_sequence_gaps_bounds_and_privacy(self):
         cache=LatestVideo();metrics=dict(mean_luminance=20)
         metadata=dict(producer_boot_id='a',seq=1,frame_id='f1',lineage_id='root')
@@ -251,6 +315,7 @@ class ContextTests(unittest.TestCase):
             def context(self,request_id,query,privacy,authority):
                 time.sleep(.03)
                 return dict(output=owner.context([item()]),request_id=request_id,compute_boot_id=self.boot_id)
+            def revoke_context(self,authority,terminal=False):return dict(revoked=True)
             def main(self,task):
                 self.prompts.append(task.prompt)
                 return super().main(task)
