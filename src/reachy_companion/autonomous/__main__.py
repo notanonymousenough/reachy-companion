@@ -59,7 +59,7 @@ def main():
             parser.error('Owned ALSA playback runs on Agent host with loopback operator endpoint')
         pcm=Playback(AlsaPCM(settings['device']),rate=settings['sample_rate'],max_seconds=settings['max_seconds'],
             chunk_frames=settings['chunk_frames'],stop_timeout=settings['stop_timeout_s'],motion=adapter)
-        speech_adapter=SpeechAdapter(pcm,HttpTTS(companion['network']['voice_url'],companion.token,rate=settings['sample_rate']),lambda:speech_hub.agent('/operator'))
+        speech_adapter=SpeechAdapter(pcm,HttpTTS(companion['network']['voice_url'],companion.token,rate=settings['sample_rate'],gain=settings.get('tts_gain',1)),lambda:speech_hub.agent('/operator'))
     report = Scheduler(config, gateway,adapter,speech_adapter).run(args.duration, events, args.output)
     print(json.dumps({k:v for k,v in report.items() if k != 'ledger'}, ensure_ascii=False))
 

@@ -32,6 +32,8 @@ def load(path):
     speech=config.get('speech',{'enabled':False})
     if type(speech.get('enabled')) is not bool:raise ValueError('Speech explicit opt-in')
     if speech['enabled']:
+        from .pcm_controls import PcmGain
+        PcmGain(speech.get('tts_gain',1))
         if (speech.get('backend')!='alsa' or not isinstance(speech.get('device'),str) or not speech['device']
                 or not isinstance(speech.get('companion_config_path'),str) or not speech['companion_config_path']):raise ValueError('Owned PCM settings')
         for key,low,high in [('sample_rate',8000,48000),('max_seconds',1,60),('chunk_frames',1,4096),('stop_timeout_s',.01,.5)]:

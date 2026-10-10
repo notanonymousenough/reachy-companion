@@ -6,14 +6,19 @@ import threading
 import time
 from urllib.request import Request,build_opener,ProxyHandler
 from .contracts import decode
+from .pcm_controls import PcmGain
 
 
 class HttpTTS:
-    def __init__(self,url,token,*,rate=16000,max_event=65536,timeout=5):
+    def __init__(self,url,token,*,rate=16000,max_event=65536,timeout=5,gain=1):
         self.url=url.rstrip('/')+'/stream/say';self.token=token;self.rate=rate;self.max_event=max_event;self.timeout=timeout
+        PcmGain(gain) # validate before transport/output
+        self.gain=gain;self.receipts=[]
         self.lock=threading.Lock();self.response=None
         self.opener=build_opener(ProxyHandler({}))
     def stream(self,text,cancel):
+        if cancel.is_set():raise RuntimeError('TTS cancelled')
+        levels=PcmGain(self.gain);complete=False
         request=Request(self.url,data=json.dumps({'text':text}).encode(),headers={'Authorization':'Bearer '+self.token,'Content-Type':'application/json'})
         with self.opener.open(request,timeout=self.timeout) as response:
             with self.lock:self.response=response
@@ -21,17 +26,29 @@ class HttpTTS:
                 while not cancel.is_set():
                     line=response.readline(self.max_event+1)
                     if not line or len(line)>self.max_event or not line.endswith(b'\n'):raise RuntimeError('Bounded TTS completion required')
+                    if cancel.is_set():raise RuntimeError('TTS cancelled')
                     event=decode(line)
                     if event['type']=='audio':
-                        if event.get('sample_rate')!=self.rate or event.get('format')!='S16_LE' or event.get('channels')!=1:raise ValueError('TTS PCM format')
-                        yield base64.b64decode(event['pcm_base64'],validate=True)
+                        if (type(event.get('sample_rate')) is not int or event['sample_rate']!=self.rate
+                                or event.get('format')!='S16_LE' or type(event.get('channels')) is not int
+                                or event['channels']!=1):raise ValueError('TTS PCM format')
+                        pcm=base64.b64decode(event['pcm_base64'],validate=True)
+                        if len(pcm)%2:raise ValueError('Complete TTS S16LE frames required')
+                        for offset in range(0,len(pcm),8192):
+                            if cancel.is_set():raise RuntimeError('TTS cancelled')
+                            out=levels.process(pcm[offset:offset+8192])
+                            if cancel.is_set():raise RuntimeError('TTS cancelled')
+                            yield out
                     elif event['type']=='done':
                         if event.get('ok') is not True:raise RuntimeError('TTS failure')
-                        return
+                        complete=True;return
                     elif event['type'] not in ('reply','motion'):raise RuntimeError('TTS event rejected')
                 raise RuntimeError('TTS cancelled')
             finally:
-                with self.lock:self.response=None
+                with self.lock:
+                    self.response=None;self.receipts.append(dict(complete=complete,**levels.status()));del self.receipts[:-8]
+    def status(self):
+        with self.lock:return [dict(receipt) for receipt in self.receipts]
     def cancel(self):
         with self.lock:response=self.response
         if response:response.close()

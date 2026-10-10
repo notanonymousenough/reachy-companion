@@ -1,9 +1,7 @@
 """Finite owned realtime audio service. Device capture/PCM only; no inference."""
 import argparse
-import array
 import json
 import signal
-import sys
 import threading
 import time
 from pathlib import Path
@@ -16,6 +14,7 @@ from reachy_companion.autonomous.playback import Playback
 from reachy_companion.autonomous.response_endpoint import ResponseEndpoint
 from reachy_companion.autonomous.contracts import uid
 from reachy_companion.autonomous.lease_datagram import LeaseDatagramServer
+from reachy_companion.autonomous.pcm_controls import StereoChannels,CaptureExclusion
 
 HTTP=build_opener(ProxyHandler({}))
 
@@ -55,10 +54,17 @@ def main():
     p.add_argument('--allow-capture-output',action='store_true');p.add_argument('--allow-agent-mute',action='store_true');p.add_argument('--cleanup-only',action='store_true')
     p.add_argument('--port',type=int,default=8780)
     p.add_argument('--capture-device',choices=('reachymini_audio_src','plug:reachymini_audio_src'))
+    p.add_argument('--capture-channel',type=int,choices=(0,1),default=0)
+    p.add_argument('--echo-tail-seconds',type=float,default=.2)
+    p.add_argument('--endpoint-max-seconds',type=int,choices=range(1,9),default=8)
+    p.add_argument('--endpoint-silence-frames',type=int,default=30)
     p.add_argument('--listen',default='127.0.0.1')
     p.add_argument('--lease-datagram-port',type=int)
     a=p.parse_args();cfg=Config(a.config)
     if a.cleanup_only:cleanup(cfg,a.owner_file);return
+    channels=StereoChannels(a.capture_channel);exclusion=CaptureExclusion(a.echo_tail_seconds)
+    endpoint_settings=dict(max_seconds=a.endpoint_max_seconds,silence_frames=a.endpoint_silence_frames)
+    ResponseEndpoint(None,**endpoint_settings) # validate before activating an owner/microphone
     if not 1<=a.port<=65535 or a.lease_datagram_port is not None and not 1<=a.lease_datagram_port<=65535:
         raise ValueError('Explicit valid local transport ports required')
     if a.listen!='127.0.0.1':
@@ -94,8 +100,8 @@ def main():
         import webrtcvad
         capture_device=a.capture_device or cfg['audio']['capture_device']
         report['capture_device']=capture_device
-        endpoint=ResponseEndpoint(webrtcvad.Vad(2))
-        start=time.monotonic();last_output=None;tail_until=0
+        endpoint=ResponseEndpoint(webrtcvad.Vad(2),**endpoint_settings)
+        start=time.monotonic()
         while not stop.is_set() and not peer.closed and time.monotonic()-start<a.duration:
             if not peer.permitted():
                 endpoint.clear();time.sleep(.003);continue
@@ -103,28 +109,25 @@ def main():
             value=capture.read()
             if not value:time.sleep(.003);continue
             report['capture_frames']+=value['frames'];report['capture_timestamp_samples']+=1
-            with playback.lock:active=playback.active
-            if active:
-                last_output=active['stream_id'];tail_until=time.monotonic()+.2
+            with playback.lock:
+                active_stream=playback.active['stream_id'] if playback.active else None;output=playback.status()
+            if type(value['frames']) is not int or value['frames']*4!=len(value['pcm']):raise ValueError('Complete stereo capture frames required')
+            scope=exclusion.classify(active_stream,output,value['captured_end']-value['frames']/16000,time.monotonic())
+            mono=channels.select(value['pcm'],scope)
+            if scope!='endpoint':
                 report['owned_output_frames_excluded']+=value['frames'];endpoint.clear()
-                endpoint=ResponseEndpoint(webrtcvad.Vad(2));continue
-            if time.monotonic()<tail_until:
-                report['owned_output_frames_excluded']+=value['frames'];continue
-            samples=array.array('h');samples.frombytes(value['pcm'])
-            if sys.byteorder!='little':samples.byteswap()
-            mono=samples[::2]
-            if sys.byteorder!='little':mono.byteswap()
-            available_bytes=len(endpoint.pcm)+len(endpoint.pending)+len(mono)*2
-            endpoint.feed(mono.tobytes());del samples,mono
+                endpoint=ResponseEndpoint(webrtcvad.Vad(2),**endpoint_settings);continue
+            available_bytes=len(endpoint.pcm)+len(endpoint.pending)+len(mono)
+            endpoint.feed(mono);del mono
             if endpoint.reason:
                 if endpoint.reason=='speech_then_silence':
                     # VAD can end inside this read. Do not date the retained
                     # utterance at the later samples that were discarded.
                     unused_frames=(available_bytes-len(endpoint.pcm))//2
                     captured_end=value['captured_end']-unused_frames/16000
-                    if peer.publish(bytes(endpoint.pcm),captured_end,last_output):report['utterances']+=1
+                    if peer.publish(bytes(endpoint.pcm),captured_end,exclusion.last_stream):report['utterances']+=1
                 else:report['no_response_windows']+=1
-                endpoint.clear();endpoint=ResponseEndpoint(webrtcvad.Vad(2))
+                endpoint.clear();endpoint=ResponseEndpoint(webrtcvad.Vad(2),**endpoint_settings)
         report.update(elapsed_s=time.monotonic()-start,source_boot=peer.boot_id,controller_lease_started=peer.started_lease,
             capture_timestamp_provenance='alsa_monotonic_available_position',peer_close_reason=peer.close_reason,
             max_operator_ms=peer.max_operator_ms,operator_requests=peer.operator_requests)
@@ -132,6 +135,7 @@ def main():
             and (stop.is_set() or time.monotonic()-start>=a.duration or peer.close_reason=='controller_stop'))
     except Exception as exc:report['error']=type(exc).__name__+': '+str(exc)[:128]
     finally:
+        report.update(channel_levels=channels.status(),echo_tail_seconds=exclusion.tail_seconds,endpoint_settings=endpoint_settings)
         if endpoint:endpoint.clear()
         if peer:
             report['lease_requests']=peer.lease_requests;report['max_lease_gap_ms']=peer.max_lease_gap_ms

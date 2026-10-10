@@ -51,6 +51,7 @@ class PracticeTTS:
             yield pcm
         with self.lock:event['complete']=True
     def cancel(self):self.tts.cancel()
+    def pcm_status(self):return self.tts.status()
     def status(self):
         with self.lock:return [dict(event) for event in self.events]
 
@@ -96,8 +97,11 @@ def main():
     p.add_argument('--status-port',type=int,default=8790)
     p.add_argument('--actual-agent-cancel',action='store_true')
     p.add_argument('--lease-datagram-port',type=int)
+    p.add_argument('--tts-gain',type=float)
     p.add_argument('--trusted-private-lan',action='store_true');a=p.parse_args()
     if not a.allow_capture_output or a.output.exists() or not 20<=a.duration<=120:raise ValueError('Fresh finite realtime opt-in required')
+    from reachy_companion.autonomous.pcm_controls import PcmGain
+    if a.tts_gain is not None:PcmGain(a.tts_gain)
     if a.lease_datagram_port is not None and not 1<=a.lease_datagram_port<=65535:
         raise ValueError('Explicit valid datagram port required')
     config=load(a.config);companion=Config(a.companion_config);hub=Hub(companion)
@@ -109,7 +113,8 @@ def main():
         raise ValueError('Device explicit Agent mute opt-in required')
     playback=Playback(RemotePCM(client),chunk_frames=4096)
     tts=PracticeTTS(HttpTTS(companion['network']['voice_url'],companion.token,timeout=5,
-        max_event=companion['streaming']['max_event_bytes']))
+        max_event=companion['streaming']['max_event_bytes'],
+        gain=a.tts_gain if a.tts_gain is not None else config.get('speech',{}).get('tts_gain',1)))
     speech=SpeechAdapter(playback,tts,lambda:hub.agent('/operator'))
     audio=AudioAdapter(HttpSTT(companion['network']['compute_url'],companion.token))
     poller=AudioPolling(client,audio,source);stop=threading.Event();turns=[];main_calls=[];fast_calls=[]
@@ -253,6 +258,7 @@ def main():
         # becomes a false physical stop-known acknowledgement.
         stop_job=Job(client.call,'/stop');deadline=time.monotonic()+1
         while time.monotonic()<deadline and (not stop_job.future.done() or speech.status()['execution_busy']):time.sleep(.005)
+        report['tts_pcm_levels']=tts.pcm_status()
         report['speech_after']=speech.status();report['peer_stop_execution_busy']=not stop_job.future.done()
         if stop_job.future.done():
             try:report['peer_stop']=stop_job.future.result()

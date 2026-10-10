@@ -3,6 +3,7 @@
 This is an utterance boundary only. It cannot establish a trusted negative
 speech window for resuming an interrupted output.
 """
+import math
 
 
 class ResponseEndpoint:
@@ -10,7 +11,8 @@ class ResponseEndpoint:
     frame_bytes = 640  # 20 ms, mono S16LE
 
     def __init__(self, vad, *, max_seconds=8, silence_frames=30):
-        if not 1 <= max_seconds <= 8 or not 10 <= silence_frames <= 50:
+        if (type(max_seconds) not in (int,float) or not math.isfinite(max_seconds) or not 1<=max_seconds<=8
+                or type(silence_frames) is not int or not 10<=silence_frames<=50):
             raise ValueError('Finite endpoint bounds required')
         self.vad = vad
         self.limit = int(max_seconds * 50)

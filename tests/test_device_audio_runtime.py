@@ -19,6 +19,15 @@ runtime=importlib.util.module_from_spec(spec);spec.loader.exec_module(runtime)
 
 
 class DeviceRuntimeTests(unittest.TestCase):
+    def test_invalid_pcm_controls_fail_before_agent_activation(self):
+        for option,value in (('--echo-tail-seconds','nan'),('--echo-tail-seconds','.1'),('--endpoint-silence-frames','9')):
+            with self.subTest(option=option,value=value),patch.object(runtime,'Config'),patch.object(runtime,'agent') as agent:
+                argv=['device_audio_runtime','--config','fixture','--output','fixture-out','--owner-file','fixture-owner',
+                    '--controller','controller','--allow-capture-output',option,value]
+                with patch.object(sys,'argv',argv):
+                    with self.assertRaises(ValueError):runtime.main()
+                agent.assert_not_called()
+
     def test_actual_mute_exit_accepts_only_unchanged_final_owner_baseline(self):
         for newer_command in (False,True):
             with self.subTest(newer_command=newer_command),tempfile.TemporaryDirectory() as directory:
