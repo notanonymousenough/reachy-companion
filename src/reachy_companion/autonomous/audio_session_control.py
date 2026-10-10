@@ -97,8 +97,12 @@ def cleanup_receipts(hub,device,*,controller,session_boot,source_boot):
     playback=device.get('playback',{})
     if playback.get('stop_known') is not True or playback.get('execution_busy') is not False:errors.append('device_stop_unknown')
     peer=device.get('peer_status',{})
+    actual_cancel=hub.get('cancel_kind')=='actual_agent'
+    if actual_cancel and (not isinstance(busy,dict) or 'agent_cancel' not in busy or 'operator_control_execution_busy' not in peer):
+        errors.append('agent_cancel_occupancy_unknown')
     if (peer.get('source_boot')!=source_boot or peer.get('closed') is not True or peer.get('watch_execution_busy') is not False
-            or peer.get('operator_execution_busy') is not False):
+            or peer.get('operator_execution_busy') is not False
+            or peer.get('operator_control_execution_busy',False) is not False):
         errors.append('device_owner_busy_or_unknown')
     if hub.get('lease_transport') not in ('tcp','udp'):errors.append('lease_transport_unknown')
     if (hub.get('lease_transport')=='udp' or 'lease_datagram_execution_busy' in device) and device.get('lease_datagram_execution_busy') is not False:
@@ -112,5 +116,6 @@ def cleanup_receipts(hub,device,*,controller,session_boot,source_boot):
             or type(operator.get('microphone_epoch')) is not int or not 0<=operator['microphone_epoch']<2**63):
         errors.append('operator_cleanup_unknown')
     return dict(receipt_cleanup_verified=not errors,errors=errors,controller=controller,session_boot=session_boot,
-        source_boot=source_boot,live_readiness_verified=False,voice_acceptance=hub.get('accepted') is True,
+        source_boot=source_boot,live_readiness_verified=False,voice_acceptance=hub.get('accepted') is True
+            and (not actual_cancel or device.get('accepted') is True),
         resume_allowed=False)

@@ -162,6 +162,59 @@ class PeerTests(unittest.TestCase):
         self.assertNotIn('microphone_owner_id',view);self.assertNotIn('extra_secret',view)
         self.assertNotIn('sentinel',str(view));self.assertTrue(view['microphone_owner_present']);self.assertEqual(view['microphone_epoch'],2)
 
+    def test_agent_mute_is_explicit_scoped_single_occupied_slot_and_closes_output(self):
+        peer,_=self.setup_peer();self.call(peer,'/lease')
+        with self.assertRaises(RuntimeError):self.call(peer,'/operator-mute',source_boot=peer.boot_id)
+        release=threading.Event();entered=threading.Event();result=[]
+        def mute():
+            entered.set();release.wait(.5)
+            return dict(agent_boot_id='agent',microphone_epoch=3,microphone_enabled=False,microphone_owner_present=False,
+                capture_active=False,listening=False,microphone_state_error=None,extra_secret='sentinel')
+        peer.mute_owner=mute
+        with self.assertRaises(RuntimeError):self.call(peer,'/operator-mute',source_boot='old')
+        worker=threading.Thread(target=lambda:result.append(self.call(peer,'/operator-mute',source_boot=peer.boot_id)))
+        worker.start();self.assertTrue(entered.wait(.2))
+        try:
+            self.assertTrue(peer.operator_control_busy)
+            with self.assertRaises(RuntimeError):self.call(peer,'/operator-mute',source_boot=peer.boot_id)
+            release.set();worker.join(.5)
+            self.assertFalse(peer.operator_control_busy);self.assertTrue(peer.closed)
+            self.assertTrue(result[0]['agent_mute_verified']);self.assertNotIn('microphone_owner_id',result[0]['operator'])
+            self.assertNotIn('sentinel',str(result));result[0]['operator']['microphone_epoch']=99
+            self.assertEqual(self.call(peer,'/status')['agent_mute_receipt']['microphone_epoch'],3)
+        finally:release.set();worker.join(.5)
+
+    def test_agent_mute_unknown_acknowledgement_still_closes_peer(self):
+        peer,_=self.setup_peer();self.call(peer,'/lease');peer.mute_owner=lambda:dict(microphone_enabled=False)
+        with self.assertRaises(RuntimeError):self.call(peer,'/operator-mute',source_boot=peer.boot_id)
+        self.assertTrue(peer.closed);self.assertFalse(peer.operator_control_busy)
+
+    def test_agent_mute_http_timeout_does_not_release_actual_control_slot(self):
+        peer,_=self.setup_peer();self.call(peer,'/lease');entered=threading.Event();release=threading.Event()
+        def mute():
+            entered.set();release.wait(1)
+            raise RuntimeError('Unknown Agent result')
+        peer.mute_owner=mute;server=create_server(peer,'t'*32,port=0)
+        threading.Thread(target=server.serve_forever,daemon=True).start()
+        self.addCleanup(server.server_close);self.addCleanup(server.shutdown)
+        client=PeerClient('http://127.0.0.1:'+str(server.server_address[1]),'t'*32,'controller',timeout=.03)
+        try:
+            with self.assertRaises(TimeoutError):client.call('/operator-mute',source_boot=peer.boot_id)
+            self.assertTrue(entered.is_set());self.assertTrue(self.call(peer,'/status')['operator_control_execution_busy'])
+            with self.assertRaises(RuntimeError):self.call(peer,'/operator-mute',source_boot=peer.boot_id)
+        finally:release.set();wait(lambda:not peer.operator_control_busy)
+        self.assertTrue(peer.closed);self.assertIsNone(self.call(peer,'/status')['agent_mute_receipt'])
+
+    def test_agent_mute_rejects_wrong_epoch_boolean_epoch_and_unknown_durability(self):
+        valid=dict(agent_boot_id='agent',microphone_epoch=3,microphone_enabled=False,microphone_owner_present=False,
+            capture_active=False,listening=False,microphone_state_error=None)
+        for bad in (dict(microphone_epoch=3.0),dict(microphone_epoch=True),dict(microphone_epoch=4),
+                dict(agent_boot_id='retired'),dict(microphone_state_error='error'),dict(capture_active=True)):
+            with self.subTest(bad=bad):
+                peer,_=self.setup_peer();self.call(peer,'/lease');peer.mute_owner=lambda:dict(valid,**bad)
+                with self.assertRaises(RuntimeError):self.call(peer,'/operator-mute',source_boot=peer.boot_id)
+                self.assertTrue(peer.closed);self.assertIsNone(self.call(peer,'/status')['agent_mute_receipt'])
+
     def test_private_lan_requires_explicit_owner_opt_in(self):
         with self.assertRaises(ValueError):PeerClient('http://192.168.2.158:8780','t'*32,'owner')
         peer=PeerClient('http://192.168.2.158:8780','t'*32,'owner',trusted_private_lan=True)

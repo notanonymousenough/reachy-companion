@@ -68,6 +68,7 @@ def main():
     p.add_argument('--peer-url',required=True);p.add_argument('--controller',required=True)
     p.add_argument('--duration',type=float,default=70);p.add_argument('--allow-capture-output',action='store_true')
     p.add_argument('--status-port',type=int,default=8790)
+    p.add_argument('--actual-agent-cancel',action='store_true')
     p.add_argument('--lease-datagram-port',type=int)
     p.add_argument('--trusted-private-lan',action='store_true');a=p.parse_args()
     if not a.allow_capture_output or a.output.exists() or not 20<=a.duration<=120:raise ValueError('Fresh finite realtime opt-in required')
@@ -77,7 +78,9 @@ def main():
     if config.get('motion',{}).get('enabled'):raise ValueError('This first audio session requires a separately accepted joint motion profile')
     os.environ[config['gateway']['token_env']]=a.token_file.read_text().strip()
     client=PeerClient(a.peer_url,companion.token,a.controller,trusted_private_lan=a.trusted_private_lan)
-    source=client.call('/status')['source_boot']
+    initial_peer=client.call('/status');source=initial_peer['source_boot']
+    if a.actual_agent_cancel and initial_peer.get('agent_mute_supported') is not True:
+        raise ValueError('Device explicit Agent mute opt-in required')
     playback=Playback(RemotePCM(client),chunk_frames=4096)
     tts=PracticeTTS(HttpTTS(companion['network']['voice_url'],companion.token,timeout=5,
         max_event=companion['streaming']['max_event_bytes']))
@@ -118,7 +121,7 @@ def main():
             return super().ingest(event,now)
     scheduler=AudioScheduler(config,AuditedGateway(config),speech_adapter=speech,audio_adapter=audio)
     lease=create_lease(client,source,a.lease_datagram_port)
-    stage='startup';started=time.monotonic();latencies=[];cancel_at=None;cancel_stop_s=None;no_response_since=None
+    stage='startup';started=time.monotonic();latencies=[];cancel_job=None;cancel_at=None;cancel_stop_s=None;no_response_since=None
     latest={};status_lock=threading.Lock();stopped_streams=set();progress_frames={};first_consumed={}
     def control_status():
         with status_lock:return dict(latest)
@@ -127,7 +130,7 @@ def main():
     report=dict(mode='actual_distributed_realtime_audio_session',accepted=False,**server.session_binding,
         private_cloud_inputs=0,raw_audio_retained=False,resume_attempts=0,motor_commands=0,
         hub_inference=False,questions_limit=2,hub_boot_id=scheduler.state.authority.hub_boot_id,
-        context_enabled=config.get('context',{}).get('enabled',False),lease_transport='udp' if a.lease_datagram_port is not None else 'tcp')
+        context_enabled=config.get('context',{}).get('enabled',False),cancel_kind='actual_agent' if a.actual_agent_cancel else 'local_harness',lease_transport='udp' if a.lease_datagram_port is not None else 'tcp')
     try:
         while not stop.is_set() and time.monotonic()-started<a.duration:
             lease.tick();now=time.monotonic();began=now
@@ -135,7 +138,8 @@ def main():
             latencies.append((time.monotonic()-began)*1000)
             events=tts.status();status=speech.status();timeline=status['timeline']
             operator=speech.operator_view()
-            if stage!='startup' and operator and (not operator['microphone_enabled'] or operator['quiet'] or operator['privacy_all']):
+            if stage!='startup' and operator and (operator['quiet'] or operator['privacy_all']
+                    or not operator['microphone_enabled'] and stage not in ('cancel_pending','complete')):
                 raise RuntimeError('Actual operator withdrew realtime session')
             for event in timeline:
                 stream=event.get('stream_id')
@@ -171,8 +175,17 @@ def main():
                 progress=[event for event in timeline if event['kind']=='speech_progress'
                     and event['consumed_frames']>=320 and event['stream_id'] not in earlier]
                 if progress:
-                    cancel_at=now;scheduler.ingest(dict(type='operator',muted=True));stage='cancel_pending'
-            if stage=='cancel_pending' and status['stop_known'] and not status['execution_busy']:
+                    cancel_at=now
+                    if a.actual_agent_cancel:cancel_job=Job(lambda:client.call('/operator-mute',source_boot=source))
+                    else:scheduler.ingest(dict(type='operator',muted=True))
+                    stage='cancel_pending'
+            if (stage=='cancel_pending' and status['stop_known'] and not status['execution_busy']
+                    and (not a.actual_agent_cancel or cancel_job.future.done())):
+                if a.actual_agent_cancel:
+                    acknowledgement=cancel_job.future.result()
+                    if acknowledgement.get('source_boot')!=source or acknowledgement.get('agent_mute_verified') is not True:
+                        raise RuntimeError('Actual Agent cancel unknown')
+                    report['agent_cancel']=acknowledgement
                 cancel_stop_s=now-cancel_at;stage='complete';break
             with status_lock:latest=dict(stage=stage,elapsed_s=now-started,source_boot=source,
                 audio=audio.status(),peer_poll=poller.status(),lease=lease.status(),
@@ -220,7 +233,8 @@ def main():
             peer_poll=poller.status()['execution_busy'],lease=lease.status()['execution_busy'],
             context=bool(scheduler.context_job and not scheduler.context_job.future.done()),
             context_revoke=bool(scheduler.context_revoke_job and not scheduler.context_revoke_job.future.done()),
-            context_terminal_revoke=bool(scheduler.context_terminal_job and not scheduler.context_terminal_job.future.done()))
+            context_terminal_revoke=bool(scheduler.context_terminal_job and not scheduler.context_terminal_job.future.done()),
+            agent_cancel=bool(cancel_job and not cancel_job.future.done()))
         if scheduler.context_terminal_job and scheduler.context_terminal_job.future.done():
             try:report['context_terminal_revoke']=scheduler.context_terminal_job.future.result()
             except Exception:report['context_terminal_revoke_unknown']=True

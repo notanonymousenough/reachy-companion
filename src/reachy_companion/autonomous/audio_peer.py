@@ -17,9 +17,10 @@ from .contracts import decode, uid
 
 
 class AudioPeer:
-    def __init__(self, playback, operator, expected_owner, *, controller, clock=time.monotonic):
+    def __init__(self, playback, operator, expected_owner, *, controller, clock=time.monotonic, mute_owner=None):
         self.playback, self.operator, self.expected_owner = playback, operator, dict(expected_owner)
         self.controller, self.clock, self.boot_id = controller, clock, uid()
+        self.mute_owner=mute_owner;self.operator_control_busy=False;self.operator_control_receipt=None
         self.lock = threading.RLock()
         self.cached_operator = None
         self.operator_deadline = 0
@@ -92,7 +93,7 @@ class AudioPeer:
         if (not isinstance(actual.get('agent_boot_id'),str) or not 1<=len(actual['agent_boot_id'])<=256
                 or type(actual.get('microphone_epoch')) is not int or actual['microphone_epoch']<0
                 or type(actual.get('microphone_enabled')) is not bool or type(actual.get('listening')) is not bool
-                or not isinstance(actual.get('microphone_owner_id'),str)
+                or 'microphone_owner_id' not in actual or (actual['microphone_owner_id'] is not None and not isinstance(actual['microphone_owner_id'],str))
                 or actual.get('phase') not in ('paused','listening','thinking','speaking','error')
                 or type(policy.get('epoch')) is not int or policy['epoch']<0
                 or type(policy.get('quiet')) is not bool or type(policy.get('privacy_all')) is not bool):
@@ -132,7 +133,8 @@ class AudioPeer:
             raise ValueError('Controller owner mismatch')
         if path == '/status':
             return dict(source_boot=self.boot_id, closed=self.closed, permitted=self.permitted(), operator_ready=self.operator_ready(),
-                operator=self.operator_status(), playback=self.playback.status(), observation_sequence=self.sequence,
+                agent_mute_supported=self.mute_owner is not None,operator_control_execution_busy=self.operator_control_busy,
+                agent_mute_receipt=None if self.operator_control_receipt is None else dict(self.operator_control_receipt),operator=self.operator_status(), playback=self.playback.status(), observation_sequence=self.sequence,
                 close_reason=self.close_reason,first_close=self.first_close,watch_error=self.watch_error,
                 watch_execution_busy=self.watch.is_alive(),operator_execution_busy=bool(self.operator_job and self.operator_job.is_alive()),max_operator_ms=self.max_operator_ms,operator_requests=self.operator_requests)
         if path == '/stop':
@@ -142,6 +144,27 @@ class AudioPeer:
                 if status['stop_known'] and not status['execution_busy']:return status
                 time.sleep(.005)
             return self.playback.status()
+        if path == '/operator-mute':
+            with self.lock:
+                if (set(body)!={'source_boot'} or body['source_boot']!=self.boot_id or self.mute_owner is None
+                        or self.operator_control_busy or not self.permitted()):raise RuntimeError('Owned operator mute unavailable')
+                self.operator_control_busy=True
+            try:
+                receipt=self.mute_owner()
+                if (not isinstance(receipt,dict) or receipt.get('agent_boot_id')!=self.expected_owner['agent_boot_id']
+                        or type(receipt.get('microphone_epoch')) is not int or not 0<=receipt['microphone_epoch']<2**63
+                        or receipt['microphone_epoch']!=self.expected_owner['owned_microphone_epoch']+1
+                        or receipt.get('microphone_enabled') is not False or receipt.get('microphone_owner_present') is not False
+                        or receipt.get('listening') is not False or receipt.get('capture_active') is not False
+                        or 'microphone_state_error' not in receipt or receipt['microphone_state_error'] is not None):
+                    raise RuntimeError('Actual Agent mute acknowledgement unknown')
+                public={name:receipt[name] for name in ('agent_boot_id','microphone_epoch','microphone_enabled',
+                    'microphone_owner_present','listening','capture_active','microphone_state_error')}
+                with self.lock:self.operator_control_receipt=public
+                return dict(source_boot=self.boot_id,agent_mute_verified=True,operator=dict(public))
+            finally:
+                self.close('owner_operator_mute')
+                with self.lock:self.operator_control_busy=False
         if path == '/lease':
             with self.lock:
                 if (self.closed or self.cached_operator is None or self.clock() >= self.operator_deadline

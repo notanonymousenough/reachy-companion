@@ -1,5 +1,7 @@
 """Finite test cleanup must not overwrite a concurrent operator command."""
 import importlib
+import importlib.util
+import json
 from pathlib import Path
 import sys
 import tempfile
@@ -91,6 +93,35 @@ class OperatorAuthorityTests(unittest.TestCase):
             agent.set_microphone(False,expected_boot_id='current',expected_epoch=1,expected_owner_id='other')
         agent.set_microphone(False,expected_boot_id='current',expected_epoch=1,expected_owner_id='test')
         self.assertIsNone(agent.microphone_owner_id);self.assertFalse(agent.microphone.enabled)
+
+    def test_device_cancel_uses_real_agent_cas_and_cleanup_preserves_later_command(self):
+        spec=importlib.util.spec_from_file_location('device_audio_runtime',Path(__file__).resolve().parents[1]/'deploy/autonomous/device_audio_runtime.py')
+        runtime=importlib.util.module_from_spec(spec);spec.loader.exec_module(runtime)
+        agent=self.agent
+        owner=dict(agent_boot_id='current',initial_microphone_epoch=0,owned_microphone_epoch=1,owner_id='private-owner')
+        owner_path=Path(self.tmp.name)/'owner.json';owner_path.write_text(json.dumps(owner))
+        agent.set_microphone(True,False,expected_boot_id='current',expected_epoch=0,owner_id='private-owner')
+        def request(cfg,path,payload=None):
+            if path=='/microphone':return agent.set_microphone(**payload)
+            return dict(agent_boot_id=agent.agent_boot_id,microphone_epoch=agent.microphone_epoch,
+                microphone_owner_id=agent.microphone_owner_id,microphone_enabled=agent.microphone.enabled)
+        with patch.object(runtime,'agent',side_effect=request) as rpc:
+            receipt=runtime.mute_owned_agent(None,owner)
+            self.assertFalse(receipt['microphone_enabled']);self.assertEqual(receipt['microphone_epoch'],2)
+            self.assertFalse(receipt['microphone_owner_present']);self.assertNotIn('private-owner',str(receipt))
+            before=agent.microphone.path.read_bytes();runtime.cleanup(None,owner_path)
+            self.assertEqual(agent.microphone.path.read_bytes(),before)
+            agent.set_microphone(True) # newer human command must survive delayed cancel/ExecStopPost
+            before=agent.microphone.path.read_bytes();runtime.cleanup(None,owner_path)
+            with self.assertRaises(RuntimeError):runtime.mute_owned_agent(None,owner)
+            self.assertEqual(agent.microphone.path.read_bytes(),before);self.assertTrue(agent.listening.is_set())
+            agent.agent_boot_id='new-boot';runtime.cleanup(None,owner_path)
+            with self.assertRaises(RuntimeError):runtime.mute_owned_agent(None,owner)
+            self.assertEqual(agent.microphone.path.read_bytes(),before)
+            for call in rpc.call_args_list:
+                if call.args[1]=='/microphone':
+                    self.assertFalse(call.args[2]['enabled']);self.assertFalse(call.args[2]['listen'])
+                    self.assertEqual(call.args[2]['expected_owner_id'],'private-owner')
 
 
 if __name__=='__main__':unittest.main()

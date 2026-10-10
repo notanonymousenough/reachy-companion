@@ -65,6 +65,20 @@ class ControlTests(unittest.TestCase):
         hub,device=self.receipts();device['source_boot']='other'
         with self.assertRaises(ValueError):self.audit(hub,device)
 
+    def test_actual_agent_cancel_requires_explicit_drained_control_slots(self):
+        hub,device=self.receipts();hub['cancel_kind']='actual_agent'
+        self.assertFalse(self.audit(hub,device)['receipt_cleanup_verified'])
+        hub['execution_busy']['agent_cancel']=False;device['peer_status']['operator_control_execution_busy']=False
+        self.assertTrue(self.audit(hub,device)['receipt_cleanup_verified'])
+        hub['accepted']=True
+        self.assertFalse(self.audit(hub,device)['voice_acceptance'])
+        device['accepted']=True
+        self.assertTrue(self.audit(hub,device)['voice_acceptance'])
+        device['peer_status']['operator_control_execution_busy']=True
+        self.assertFalse(self.audit(hub,device)['receipt_cleanup_verified'])
+        hub['execution_busy']=None
+        self.assertFalse(self.audit(hub,device)['receipt_cleanup_verified'])
+
     def test_cleanup_cli_exit_status_reflects_final_proof_without_live_admission(self):
         root=Path(__file__).resolve().parents[1];hub,device=self.receipts()
         with tempfile.TemporaryDirectory() as directory:

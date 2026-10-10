@@ -42,11 +42,17 @@ def cleanup(cfg,owner_path):
             expected_epoch=owner['initial_microphone_epoch']))
 
 
+def mute_owned_agent(cfg,owner):
+    receipt=agent(cfg,'/microphone',dict(enabled=False,listen=False,expected_boot_id=owner['agent_boot_id'],
+        expected_epoch=owner['owned_microphone_epoch'],expected_owner_id=owner['owner_id']))
+    return diagnostic_operator(receipt)
+
+
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     for name in ('config','output','owner-file'):p.add_argument('--'+name,type=Path,required=True)
     p.add_argument('--controller',required=True);p.add_argument('--duration',type=float,default=90)
-    p.add_argument('--allow-capture-output',action='store_true');p.add_argument('--cleanup-only',action='store_true')
+    p.add_argument('--allow-capture-output',action='store_true');p.add_argument('--allow-agent-mute',action='store_true');p.add_argument('--cleanup-only',action='store_true')
     p.add_argument('--port',type=int,default=8780)
     p.add_argument('--capture-device',choices=('reachymini_audio_src','plug:reachymini_audio_src'))
     p.add_argument('--listen',default='127.0.0.1')
@@ -79,7 +85,8 @@ def main():
         if actual.get('microphone_owner_id')!=owner['owner_id'] or actual['microphone_epoch']!=owner['owned_microphone_epoch']:
             raise RuntimeError('Mic activation owner mismatch')
         playback=Playback(AlsaPCM(cfg['audio']['playback_device']),chunk_frames=4096)
-        peer=AudioPeer(playback,lambda:agent(cfg,'/operator'),owner,controller=a.controller)
+        peer=AudioPeer(playback,lambda:agent(cfg,'/operator'),owner,controller=a.controller,
+            mute_owner=(lambda:mute_owned_agent(cfg,owner)) if a.allow_agent_mute else None)
         if a.lease_datagram_port is not None:
             datagram=LeaseDatagramServer(peer,cfg.token,a.listen,a.lease_datagram_port)
         server=create_server(peer,cfg.token,bind=a.listen,port=a.port)
@@ -129,7 +136,7 @@ def main():
         if peer:
             report['lease_requests']=peer.lease_requests;report['max_lease_gap_ms']=peer.max_lease_gap_ms
             peer.close();deadline=time.monotonic()+.5
-            while peer.playback.status()['execution_busy'] and time.monotonic()<deadline:time.sleep(.005)
+            while (peer.playback.status()['execution_busy'] or peer.operator_control_busy) and time.monotonic()<deadline:time.sleep(.005)
             peer.watch.join(timeout=.1)
             report['playback']=peer.playback.status()
             report['peer_status']=peer.dispatch('/status',dict(controller=a.controller))
@@ -147,11 +154,23 @@ def main():
             report['operator_after']=diagnostic_operator(after)
             report['microphone_restored']=after['microphone_enabled'] is False
         except Exception as exc:report['cleanup_error']=type(exc).__name__
+        cancel=report.get('peer_status',{}).get('agent_mute_receipt')
+        if cancel is not None:
+            after=report.get('operator_after',{})
+            final_policy=after.get('motion_policy',{})
+            report['accepted']=('error' not in report and report.get('controller_lease_started') is True
+                and report['capture_timestamp_samples']>0 and after.get('agent_boot_id')==cancel['agent_boot_id']
+                and type(after.get('microphone_epoch')) is int and after['microphone_epoch']==cancel['microphone_epoch']
+                and after.get('microphone_owner_present') is False and after.get('microphone_state_error') is None
+                and after.get('capture_active') is False and after.get('listening') is False and after.get('phase')=='paused'
+                and type(final_policy.get('epoch')) is int and final_policy['epoch']==owner['policy_epoch'] and final_policy.get('quiet') is False
+                and final_policy.get('privacy_all') is False)
         report['accepted']=(report['accepted'] and report.get('capture_closed') is True
             and report.get('microphone_restored') is True and report.get('playback',{}).get('stop_known') is True
             and report.get('playback',{}).get('execution_busy') is False
             and report.get('peer_status',{}).get('watch_execution_busy') is False
-            and report.get('peer_status',{}).get('operator_execution_busy') is False)
+            and report.get('peer_status',{}).get('operator_execution_busy') is False
+            and report.get('peer_status',{}).get('operator_control_execution_busy') is False)
         with a.output.open('x') as f:json.dump(report,f,ensure_ascii=False,indent=2)
     print(json.dumps(report,ensure_ascii=False),flush=True)
     if not report['accepted']:raise SystemExit(2)
