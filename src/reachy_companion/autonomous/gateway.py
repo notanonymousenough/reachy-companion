@@ -102,8 +102,11 @@ class ModelBackend:
                 and audit['template_sha256'] and audit['tokenizer_sha256']
                 and audit['runtime_context_tokens'] == model['context_tokens']):
             raise BudgetRejected('Model/runtime/tokenizer audit required')
-        if role == 'fast' and audit['device'] != 'cpu_pc':
-            raise BudgetRejected('This baseline requires a verified PC CPU fast lane')
+        if role == 'fast':
+            profile=model.get('execution_profile','cpu_baseline')
+            if not ((profile=='cpu_baseline' and audit['device']=='cpu_pc') or
+                    (profile=='gpu_probe' and audit['device'] in ('gpu_pc','hybrid_pc') and model.get('completion_backend')=='llama_native')):
+                raise BudgetRejected('Fast execution placement/profile audit mismatch')
         if not model['base_url'] or not model['id']:
             raise BudgetRejected('Model endpoint/id not configured')
         if model.get('completion_backend') == 'lmstudio_sdk':

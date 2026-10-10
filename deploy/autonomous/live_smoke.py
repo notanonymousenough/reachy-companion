@@ -7,6 +7,7 @@ import subprocess
 import time
 from urllib.request import urlopen
 from pc_probe import digest
+from compute_probe import native_environment,gpu_sample,placement,GPUHeadroom,main_identity
 from reachy_companion.autonomous.config import load
 from reachy_companion.autonomous.gateway import ModelBackend
 from reachy_companion.autonomous.state import State
@@ -24,7 +25,13 @@ def main():
     parser.add_argument('--period', type=float, default=1)
     parser.add_argument('--projection', choices=('full', 'task_only'), default='full')
     parser.add_argument('--decision-format', choices=('object','tuple'), default='object')
+    parser.add_argument('--gpu-layers',type=int,choices=(0,8,16,32),default=0)
+    parser.add_argument('--vendor-dir',type=Path)
+    parser.add_argument('--gpu-index',type=int,default=0)
+    parser.add_argument('--gpu-reserve-mib',type=int,default=512)
     args = parser.parse_args()
+    if not 0<=args.gpu_index<=7 or not 256<=args.gpu_reserve_mib<=2048:parser.error('GPU probe bounds')
+    if bool(args.gpu_layers)!=bool(args.vendor_dir):parser.error('GPU offload requires installed vendor package, CPU baseline omits it')
     import socket
     with socket.socket() as check:
         check.bind(('127.0.0.1', 18097))
@@ -41,21 +48,37 @@ def main():
             runtime_build=digest(args.server) if role=='fast' else 'LM Studio llama.cpp CUDA 2.55.0',
             weight_sha256=weight_hash, tokenizer_sha256=weight_hash, template_sha256=template_hash,
             runtime_context_tokens=4096 if role=='fast' else 32768)
-    cfg['models']['fast'].update(id='reachy-shadow-fast-cpu', base_url='http://127.0.0.1:18097',
+    if args.gpu_layers:cfg['models']['fast']['audit'].update(verified=False,device=None)
+    cfg['models']['fast'].update(id='reachy-shadow-fast-pc' if args.gpu_layers else 'reachy-shadow-fast-cpu', base_url='http://127.0.0.1:18097',
          completion_backend='llama_native', completion_path='/completion', tokenize_path='/tokenize', temperature=0,
          projection=args.projection, cache_ram_mb=args.cache_ram_mb,decision_format=args.decision_format)
     cfg['models']['main'].update(base_url='http://127.0.0.1:1234/v1', context_tokens=32768,
          admission_context_tokens=4096, tokenizer_backend='lmstudio_sdk', completion_backend='lmstudio_sdk')
+    main_before=main_identity(cfg['models']['main'])
+    gpu_before=gpu_sample(args.gpu_index) if args.gpu_layers else None
+    if gpu_before and gpu_before['free_mib']<args.gpu_reserve_mib+384:raise RuntimeError('Insufficient initial GPU headroom')
+    environment=native_environment(args.server,args.vendor_dir)
+    if gpu_before:environment['CUDA_VISIBLE_DEVICES']=gpu_before['uuid']
+    runtime_components={}
+    if args.gpu_layers:
+        for directory,names in [(args.server.parent,('ggml-cuda.dll','llama-server-impl.dll','llama.dll')),
+                                (args.vendor_dir,('cudart64_12.dll','cublas64_12.dll','cublasLt64_12.dll'))]:
+            for name in names:runtime_components[name]=digest(directory/name)
     log_path = args.output.with_suffix('.log')
     report = {'mode': 'real_models_simulated_state', 'tokenizer_provenance': 'embedded in hashed GGUF; digest covers entire artifact',
-              'models': cfg['models'], 'threads': args.threads, 'period_s':args.period, 'samples': []}
+              'models': cfg['models'], 'threads': args.threads, 'period_s':args.period, 'samples': [],
+              'gpu_layers':args.gpu_layers,'main_before':main_before,'gpu_before':gpu_before,'runtime_components':runtime_components}
     command = [str(args.server), '-m', str(args.weights), '--host', '127.0.0.1', '--port', '18097',
                '--threads', str(args.threads), '--threads-batch', str(args.threads), '--ctx-size', '4096', '--parallel', '1',
-               '--n-gpu-layers', '0', '--no-op-offload', '--cache-ram', str(args.cache_ram_mb), '--threads-http', '2',
-               '--alias', 'reachy-shadow-fast-cpu']
+               '--n-gpu-layers', str(args.gpu_layers), '--cache-ram', str(args.cache_ram_mb), '--threads-http', '2',
+               '--alias', cfg['models']['fast']['id']]
+    if not args.gpu_layers:command.append('--no-op-offload')
+    else:command.extend(['--batch-size','512','--ubatch-size','256','--verbosity','4','--fit','off'])
     with log_path.open('w', encoding='utf-8') as log:
-        process = subprocess.Popen(command, stdout=log, stderr=log)
+        process = subprocess.Popen(command, stdout=log, stderr=log,env=environment)
+        monitor=None
         try:
+            if args.gpu_layers:monitor=GPUHeadroom(process,args.gpu_index,args.gpu_reserve_mib,gpu_before)
             deadline = time.monotonic()+30
             while time.monotonic()<deadline:
                 if process.poll() is not None:
@@ -64,6 +87,10 @@ def main():
                     with urlopen('http://127.0.0.1:18097/health', timeout=1): break
                 except OSError: time.sleep(.1)
             else: raise TimeoutError('startup deadline')
+            if args.gpu_layers:
+                receipt=placement(log_path,args.gpu_layers);report['placement']=receipt
+                cfg['models']['fast'].update(execution_profile='gpu_probe')
+                cfg['models']['fast']['audit'].update(device=receipt['device'],verified=True)
             backend = ModelBackend(cfg)
             gateway = Gateway(backend)
             state = State(config=cfg)
@@ -78,6 +105,7 @@ def main():
             state.ingest({'type':'operator','muted':True}, .4)
             views.append(('muted', state.snapshot(.5)))
             for name, view in views:
+                if monitor and monitor.abort_reason:break
                 started=time.monotonic()
                 try:
                     result=gateway.generate('fast', view)
@@ -92,8 +120,8 @@ def main():
                         'muted': lambda x: x.get('a')=='wait' and not x.get('start') and not x.get('commit')}
             for sample in report['samples']:
                 sample['accepted'] = expected[sample['case']](sample.get('output', {})) and 'error' not in sample
-            report['acceptance_passed'] = all(x['accepted'] for x in report['samples'])
-            if not args.skip_main:
+            report['acceptance_passed'] = len(report['samples'])==len(views) and all(x['accepted'] for x in report['samples'])
+            if not args.skip_main and not (monitor and monitor.abort_reason):
                 started=time.monotonic()
                 try:
                     result=gateway.generate('main','Коротко объясни, почему небо голубое.')
@@ -126,16 +154,27 @@ def main():
                 report['cadence_passed'] = (not scheduler.state.counts['tick_busy_gap'] and
                     not scheduler.state.counts['fast_failed'] and not scheduler.state.counts['fast_deadline_expired'])
         finally:
+            if monitor:
+                monitor.close()
+                report['gpu_monitor']=dict(minimum_free_mib=monitor.minimum_free_mib,samples=monitor.samples,
+                                           reserve_mib=args.gpu_reserve_mib,abort_reason=monitor.abort_reason)
             process.terminate()
             try: process.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 process.kill(); process.wait(timeout=5)
             report['process_reaped']=process.poll() is not None
+            try:
+                report['main_after']=main_identity(cfg['models']['main'])
+                report['main_preserved']=report['main_after']==main_before
+                if args.gpu_layers:report['gpu_after']=gpu_sample(args.gpu_index)
+            except Exception as exc:
+                report['main_preserved']=False;report['post_audit_error']=type(exc).__name__
             args.output.write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
     print(json.dumps({'output':str(args.output),'acceptance_passed':report['acceptance_passed'],
                       'mixed_passed':report.get('mixed_passed'), 'samples':report['samples'],'main':report.get('main'),
                       'process_reaped':report['process_reaped']},ensure_ascii=False))
-    if not report['acceptance_passed'] or not report.get('mixed_passed', False) or not report.get('cadence_passed', False):
+    if (not report['acceptance_passed'] or not report.get('mixed_passed', False) or not report.get('cadence_passed', False)
+            or not report['main_preserved'] or report.get('gpu_monitor',{}).get('abort_reason')):
         raise SystemExit(2)
 
 

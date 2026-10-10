@@ -28,6 +28,9 @@ def load(path):
             for key,default in [('refresh_s',.5),('video_poll_s',.5)]:
                 value=context.get(key,default)
                 if type(value) not in (int,float) or not .1<=value<=10:raise ValueError('Context timing bound')
+            owner_ttl=context.get('owner_ttl_s',1.5)
+            if type(owner_ttl) not in (int,float) or not 1<=owner_ttl<=2:raise ValueError('Context owner TTL bound')
+            if context.get('video_url') and context.get('refresh_s',.5)>owner_ttl/2:raise ValueError('Video owner refresh must maintain lease')
             if context.get('video_url'):
                 endpoint=urlsplit(context['video_url'])
                 if (endpoint.scheme!='http' or endpoint.hostname not in ('localhost','127.0.0.1','::1')
@@ -73,6 +76,10 @@ def load(path):
             raise ValueError('Invalid fast projection')
         if model.get('decision_format','object') not in ('object','tuple'):
             raise ValueError('Invalid fast decision format')
+        if model.get('execution_profile','cpu_baseline') not in ('cpu_baseline','gpu_probe'):
+            raise ValueError('Invalid execution profile')
+        if model.get('execution_profile')=='gpu_probe' and (role!='fast' or model.get('completion_backend')!='llama_native'):
+            raise ValueError('GPU probe requires an explicitly audited native fast lane')
         if model.get('decision_format')=='tuple' and (role!='fast' or model.get('completion_backend')!='llama_native'):
             raise ValueError('Tuple decisions require constrained native fast lane')
         if type(model.get('cache_ram_mb', 0)) is not int or not 0 <= model.get('cache_ram_mb', 0) <= 128:

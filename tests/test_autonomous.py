@@ -320,6 +320,17 @@ class GatewayTests(unittest.TestCase):
         self.assertFalse(backend.calls)
     def test_unaudited_runtime_cannot_execute(self):
         with self.assertRaises(BudgetRejected): ModelBackend(config()).generate('fast', {})
+
+    def test_gpu_audit_cannot_bypass_default_cpu_placement_profile(self):
+        cfg=config();model=cfg['models']['fast']
+        model.update(id='fixture',base_url='http://127.0.0.1',completion_backend='llama_native')
+        model['audit'].update(verified=True,device='hybrid_pc',runtime_build='fixture',weight_sha256='x',template_sha256='x',tokenizer_sha256='x',runtime_context_tokens=4096)
+        with self.assertRaises(BudgetRejected):ModelBackend(cfg).generate('fast',State().snapshot(0))
+        class Backend(ModelBackend):
+            def count(self,*args):return 100
+            def post(self,*args):return dict(content='{"a":"wait","why":"waiting"}',stop_type='eos')
+        model['execution_profile']='gpu_probe'
+        self.assertEqual(Backend(cfg).generate('fast',State().snapshot(0))['output']['a'],'wait')
     def test_incomplete_or_unknown_fields_cannot_be_salvaged(self):
         with self.assertRaises(Exception): validate('FastChoice', dict(a='wait', why='ok', epoch=999))
         with self.assertRaises(ValueError): decode('{"a":"wait"')

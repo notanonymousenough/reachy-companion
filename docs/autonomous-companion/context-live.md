@@ -43,3 +43,21 @@ Remote cleanup receipts: robot102 frames/0 capture gaps/capture thread reaped/ra
 One-frame `camera_probe.py` отдельно исправлен: outer finally удаляет только свой raw artifact, включая ошибку after-status или output open; preexisting artifact не удаляется. Injected failures покрыты tests.
 
 110 local regression tests и design validator проходят. Tests проверяют provenance/CAS/restart/forget, counterevidence deletion, finite JSON, expiry, relevant fences, typed main bounds, async canonical context, auth/privacy epochs, producer old owner/seq/lease и raw cleanup. Это protocol tests; real runs выше имеют отдельные измерения. Physical sole-writer fence, bounded stop/verified PCM и semantic image token admission остаются следующими воротами.
+
+## Hub → partial GPU с camera и persistent correction
+
+2026-10-10. Тот же pinned main32K и отдельный fast0.8B, actual hybrid8/26layers, threads8/cache0/full/object. Hub period1s; context refresh0.25s/video poll0.5s. За19.518s:20fresh fast requests,15accepted choices,4stale choices отвергнуты при сменах context/operator (последний request drained после final mute),74context updates,2context stale failures,2main/ready/simulated commits, **0busy tick gaps/failures/deadlines**.13snapshots содержали actual camera metadata.
+
+| Метрика | Первый turn | После correction |
+|---|---:|---:|
+| Turn→main start | 1.634s | 1.442s |
+| Main start→ready | 0.765s | 0.890s |
+| Turn→simulated commit | 3.489s | 3.434s |
+
+Ответы «Синий.» и «После коррекции в синтетическом fixture указан цвет зелёный.» соответствуют owner fixture transitions. Это новый synthetic dataset `fixture-color-gpu` в **той же** SQLite store UUID; прежний forgotten root не восстановлен. Seedrevision4/v0, correctionrevision5/v1, forgetrevision6/empty; каждый owner CLI reopen equality прошёл. Private/unprivate snapshots после forget не восстановили item;4private snapshots скрыли memory/camera. Camera lower bounds79–747ms, upperunknown; semantic scene inference отсутствует.
+
+PC monitor293samples: minimumfree914MiB, reserve512, no abort; actual placement8/26layers. Main before/after instance/context/load configuration идентичны. PC70s finite supervisor: acceptedtrue, both lanesidle/quarantineempty, private fastreaped. Robot60s producer: 29frames/0capture gaps, camera threadreaped/raw files0/audio or motor commands0; supervisor exit0. Hub exit0 и local SSH processesreaped. Actual operator до/после micfalse/capturefalse/phasepaused; production services и motor/audio clients не изменены. Это ограниченный enriched shadow acceptance1Hz; latency до **simulated** commit не считается physical first-audio.
+
+Исправлен camera owner timeout: PC poller не может бесконечно продлевать старые права hub. Только authenticated `/context` обновляет local monotonic owner lease (default1.5s, configurable1..2s); refresh должен быть≤TTL/2. По expiry PC очищает latest metadata, отправляет producer privacytrue и не публикует late frame. Финальный hub probe сначала drains старые jobs, затем явно отправляет новый private epoch и проверяет empty memory/disabled sensors. Expiry regression проверяет, что самостоятельный poll не возобновляет lease; реальный прогон выше проверил explicit final privacy. HTTP/poll/native scheduling не дают доказанной hard stop bound.
+
+131regression tests и design validator проходят. Физические writer fence/PCM cursor/stop SLA, независимые episode roots и automatic consolidation остаются отдельными этапами; autotraits/policy writes выключены.

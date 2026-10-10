@@ -50,6 +50,7 @@ class ContextProvider:
     def __init__(self,config,boot_id):
         self.config=config;self.video=LatestVideo();self.memory=MemoryStore(config['memory_path'],config['namespaces'])
         self.boot_id=boot_id;self.policy_lock=threading.Lock();self.scope=None;self.privacy_all=True;self.policy_seq=0
+        self.owner_deadline=0
         self.retired_hubs=deque(maxlen=128)
         self.done=threading.Event();self.thread=None
         if config.get('video_url'):
@@ -59,9 +60,7 @@ class ContextProvider:
         opener=build_opener(ProxyHandler({}))
         while not self.done.is_set():
             try:
-                with self.policy_lock:
-                    scope=dict(self.scope) if self.scope else None;privacy_all=self.privacy_all
-                    self.policy_seq+=1;sequence=self.policy_seq
+                scope,privacy_all,sequence=self.policy(time.monotonic())
                 if scope is None:
                     self.done.wait(.1);continue
                 policy=dict(scope=scope,privacy_all=privacy_all,seq=sequence)
@@ -80,12 +79,19 @@ class ContextProvider:
                 if any(not isinstance(metadata.get(key),str) or not 1<=len(metadata[key])<=128 for key in ('frame_id','lineage_id')):raise ValueError('Video provenance')
                 metrics=pixel_metrics(raw,metadata['frame_sha256'])
                 with self.policy_lock:
-                    if not self.privacy_all and self.scope==scope and metadata.get('scope')==scope:
+                    if not self.privacy_all and time.monotonic()<self.owner_deadline and self.scope==scope and metadata.get('scope')==scope:
                         self.video.publish(metadata,metrics,time.monotonic())
             except Exception:self.video.failure()
             finally:
                 payload=raw=None
             self.done.wait(self.config.get('video_poll_s',.5))
+    def policy(self,now):
+        with self.policy_lock:
+            scope=dict(self.scope) if self.scope else None
+            private=self.privacy_all or now>=self.owner_deadline
+            if private:self.video.clear()
+            self.policy_seq+=1
+            return scope,private,self.policy_seq
     def snapshot(self,query,privacy_all,hub_boot_id,operator_epoch):
         if not isinstance(hub_boot_id,str) or not 1<=len(hub_boot_id)<=128 or type(operator_epoch) is not int or operator_epoch<0:
             raise ValueError('Context owner scope')
@@ -96,6 +102,7 @@ class ContextProvider:
                 if self.scope['hub_boot_id']!=hub_boot_id:self.retired_hubs.append(self.scope['hub_boot_id'])
             self.scope=dict(hub_boot_id=hub_boot_id,operator_epoch=operator_epoch,compute_boot_id=self.boot_id)
             self.privacy_all=privacy_all
+            self.owner_deadline=time.monotonic()+self.config.get('owner_ttl_s',1.5)
             if privacy_all:self.video.clear()
         memory=self.memory.recall(query if not privacy_all else '')
         if privacy_all:memory['items']=[]

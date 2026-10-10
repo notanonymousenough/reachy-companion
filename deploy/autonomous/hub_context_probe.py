@@ -7,11 +7,13 @@ import time
 from urllib.request import Request, build_opener, ProxyHandler
 from reachy_companion.autonomous.config import load
 from reachy_companion.autonomous.runtime import RemoteGateway,Scheduler
+from reachy_companion.autonomous.contracts import uid
 
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     for key in ('config','token-file','production-root','output'):parser.add_argument('--'+key,type=Path,required=True)
+    parser.add_argument('--fixture-id',default='fixture-color')
     args=parser.parse_args();cfg=load(args.config)
     os.environ[cfg['gateway']['token_env']]=args.token_file.read_text().strip()
     production=json.loads((args.production_root/'config.local.json').read_text())
@@ -28,7 +30,7 @@ def main():
         if scheduler.state.counts['fast_requested']!=last_tick:
             last_tick=scheduler.state.counts['fast_requested'];view=scheduler.state.snapshot(now)
             samples.append(dict(at_s=now-started,memory=view['memory'],sensors=view['sensors'],privacy_all=view['op']['privacy_all']))
-        memory=list(scheduler.state.memory_items.values())
+        memory=[item for item in scheduler.state.memory_items.values() if item['id']==args.fixture_id]
         if stage==0 and memory and scheduler.context_job is not None and now-started>3:
             scheduler.ingest(dict(type='utterance',text='Какой любимый цвет указан именно в синтетическом fixture? Одно предложение.'),now);stage=1
         elif stage==1 and scheduler.state.counts['simulated_speech']==1:
@@ -48,6 +50,11 @@ def main():
         if job:
             try:job.future.result(timeout=cfg['http_timeout_s']+2)
             except Exception:pass
+    # Deliver the final owner epoch after all earlier context requests have drained.
+    closed=gateway.context(uid(),'',True,scheduler.state.authority)
+    if (closed['compute_boot_id']!=gateway.boot_id or closed['output']['memory']['items']
+            or any(sensor['state']!='disabled' for sensor in closed['output']['sensors'])):
+        raise RuntimeError('Final private context did not clear PC caches')
     after=operator();counts=dict(scheduler.state.counts);speeches=[x['text'] for x in scheduler.state.ledger if x['kind']=='simulated_speech']
     latest_samples=[x for x in samples if any('source_id' in sensor for sensor in x['sensors'])]
     private_samples=[x for x in samples if x['privacy_all']]

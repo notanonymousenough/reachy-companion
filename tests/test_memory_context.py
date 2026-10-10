@@ -146,6 +146,22 @@ class ContextTests(unittest.TestCase):
         self.assertEqual(cache.snapshot(.3,True)['summary'],'')
         cache.publish({**metadata,'producer_boot_id':'b'},metrics,.4)
         with self.assertRaises(ValueError):cache.publish({**metadata,'seq':99},metrics,.5)
+
+    def test_camera_owner_deadline_cannot_be_refreshed_by_pc_poller_alone(self):
+        with tempfile.TemporaryDirectory() as directory:
+            provider=ContextProvider(dict(memory_path=str(Path(directory)/'memory.sqlite3'),namespaces=['fixture']),'pc')
+            try:
+                with patch('reachy_companion.autonomous.context.time.monotonic',return_value=0):
+                    provider.snapshot('',False,'hub',0)
+                provider.video.publish(dict(producer_boot_id='a',seq=0,frame_id='frame',lineage_id='root'),dict(mean_luminance=1),0)
+                self.assertFalse(provider.policy(1.4)[1])
+                self.assertTrue(provider.policy(1.6)[1])
+                self.assertIsNone(provider.video.current)
+                self.assertTrue(provider.policy(2)[1])
+                with patch('reachy_companion.autonomous.context.time.monotonic',return_value=2):
+                    provider.snapshot('',False,'hub',0)
+                self.assertFalse(provider.policy(2.1)[1])
+            finally:provider.close()
     def test_canonical_age_grows_without_context_updates_and_privacy_hides_memory(self):
         cache=LatestVideo();cache.publish(dict(producer_boot_id='a',seq=0,frame_id='f',lineage_id='root'),dict(mean_luminance=1),0)
         state=State();value=self.context([item()]);value['sensors']=[cache.snapshot(0)]
