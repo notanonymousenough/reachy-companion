@@ -100,6 +100,8 @@ def prepare(source,output):
     fn finite_withdrawn(&self) -> bool { self.inner.finite_withdrawn() }
 '''
     binding=once(binding,'    /// Perform an asynchronous raw read of motor bytes.',api+'    /// Perform an asynchronous raw read of motor bytes.')
+    from stage2 import extend
+    text,binding=extend(text,binding)
     # Keep the original source tree and lockfile intact in a new build directory.
     shutil.copytree(source,output,ignore=shutil.ignore_patterns('.git','target','.venv'))
     (output/'src'/'control_loop.rs').write_text(text)
@@ -107,8 +109,9 @@ def prepare(source,output):
     # A child module of control_loop is resolved in src/control_loop/.
     (output/'src'/'control_loop').mkdir(exist_ok=True)
     shutil.copyfile(Path(__file__).with_name('finite_owner.rs'),output/'src'/'control_loop'/'finite_owner.rs')
+    shutil.copyfile(Path(__file__).with_name('finite_engine.rs'),output/'src'/'control_loop'/'finite_engine.rs')
     cargo=(output/'Cargo.toml').read_text()
-    (output/'Cargo.toml').write_text(once(cargo,'version = "1.5.6"','version = "1.5.6-finite-head.1"'))
+    (output/'Cargo.toml').write_text(once(cargo,'version = "1.5.6"','version = "1.5.6+finite.head.2"'))
     return output
 
 if __name__=='__main__':

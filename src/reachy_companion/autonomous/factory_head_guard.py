@@ -114,7 +114,10 @@ class FiniteHeadGuard:
     def accept_sample(self,value):
         try:return self._accept_sample(value)
         except (ValueError,KeyError,TypeError):
-            self.withdraw('native_sample_unknown');raise
+            self.invalidate_sample();raise
+    @locked
+    def invalidate_sample(self):
+        self.withdraw('native_sample_unknown');self.samples.clear();self.stop_verified=False
     def _accept_sample(self,value):
         self.expire()
         now=self.clock()
@@ -169,6 +172,8 @@ class FiniteHeadGuard:
         if (self.inflight.get(action.id) is not action or action.factory_identity!=factory_identity
                 or physical_owner!=(self.boot,self.binding) or action.generation!=self.generation):return False
         if action.kind=='stop_owned':return self.closed
+        if not self.samples or not 0<=self.clock()-self.samples[-1][0]<=.1:
+            self.withdraw('native_sample_stale_at_admission');return False
         return not self.closed and self.clock()<action.deadline and self.clock()<self.policy_until
     @locked
     def complete(self,action,receipt):

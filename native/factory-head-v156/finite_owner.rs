@@ -3,7 +3,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 pub struct FiniteOwner { state: Mutex<Option<State>> }
-struct State { owner: String, deadline: Instant, policy_until: Instant, revoked: bool }
+struct State { owner: String, deadline: Instant, policy_until: Instant, revoked: bool, withdrawn_at:Option<Instant> }
 impl FiniteOwner {
     pub fn new() -> Self { Self { state: Mutex::new(None) } }
     pub fn arm(&self, owner: &str, duration_ms: u64, policy_ms: u64) -> Result<(), &'static str> {
@@ -11,15 +11,19 @@ impl FiniteOwner {
         let mut state=self.state.lock().map_err(|_| "owner poisoned")?;
         if state.is_some() { return Err("finite owner cannot rearm"); }
         let now=Instant::now();
-        *state=Some(State { owner:owner.into(),deadline:now+Duration::from_millis(duration_ms),policy_until:now+Duration::from_millis(policy_ms),revoked:false });
+        *state=Some(State { owner:owner.into(),deadline:now+Duration::from_millis(duration_ms),policy_until:now+Duration::from_millis(policy_ms),revoked:false,withdrawn_at:None });
         Ok(())
     }
     pub fn sealed(&self) -> bool { self.state.lock().map(|s| s.is_some()).unwrap_or(true) }
     pub fn withdrawn(&self) -> bool {
         let Ok(mut state)=self.state.lock() else { return true };
         let Some(state)=state.as_mut() else { return false };
-        if Instant::now()>=state.deadline || Instant::now()>=state.policy_until { state.revoked=true; }
+        let expiry=state.deadline.min(state.policy_until);
+        if Instant::now()>=expiry { state.revoked=true;state.withdrawn_at.get_or_insert(expiry); }
         state.revoked
+    }
+    pub fn withdrawn_at(&self)->Option<Instant> {
+        self.withdrawn();self.state.lock().ok().and_then(|s| s.as_ref().and_then(|s| s.withdrawn_at))
     }
     pub fn admit(&self, owner:&str) -> bool {
         if self.withdrawn() { return false }
@@ -30,14 +34,16 @@ impl FiniteOwner {
         let mut state=self.state.lock().map_err(|_| "owner poisoned")?;
         let state=state.as_mut().ok_or("unarmed")?;
         if state.owner!=owner { return Err("foreign owner") }
-        if state.revoked || Instant::now()>=state.deadline || Instant::now()>=state.policy_until { state.revoked=true;return Err("owner/expiry mismatch") }
+        if state.revoked || Instant::now()>=state.deadline || Instant::now()>=state.policy_until {
+            state.revoked=true;state.withdrawn_at.get_or_insert(state.deadline.min(state.policy_until));return Err("owner/expiry mismatch")
+        }
         state.policy_until=Instant::now()+Duration::from_millis(remaining_ms);Ok(())
     }
     pub fn revoke(&self, owner:&str) -> Result<(), &'static str> {
         let mut state=self.state.lock().map_err(|_| "owner poisoned")?;
         let state=state.as_mut().ok_or("unarmed")?;
         if state.owner!=owner { return Err("foreign owner") }
-        state.revoked=true;Ok(())
+        state.revoked=true;state.withdrawn_at.get_or_insert(Instant::now().min(state.deadline.min(state.policy_until)));Ok(())
     }
 }
 

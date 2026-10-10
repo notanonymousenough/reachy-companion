@@ -74,6 +74,16 @@ class HeadGuardTests(unittest.TestCase):
     def test_late_fresh_poll_cannot_revive_expired_policy(self):
         g=self.guard();self.now+=.301
         self.assertFalse(g.observe_operator(self.operator(),self.now));self.assertTrue(g.closed)
+    def test_fresh_operator_does_not_refresh_measurement_at_actual_admission(self):
+        for kind in ('pin_enable','outward'):
+            g=self.guard()
+            if kind=='outward':self.enabled(g)
+            action=g.issue(kind);captured=g.samples[-1][0];self.now+=.2
+            self.assertTrue(g.observe_operator(self.operator(),self.now))
+            self.assertFalse(g.admit(action,g.factory_identity,(g.boot,g.binding)))
+            self.assertTrue(g.closed);self.assertEqual(g.reason,'native_sample_stale_at_admission')
+            self.assertTrue(g.inflight) # no fake release of the issued actual slot
+            self.assertLess(captured,self.now-.1)
     def test_deadline_not_extended_by_fresh_operator_and_forged_action_rejected(self):
         g=self.guard(duration=4);action=g.issue('pin_enable')
         self.assertFalse(g.admit(replace(action),g.factory_identity,(g.boot,g.binding)))
