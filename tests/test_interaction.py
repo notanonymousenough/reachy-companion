@@ -84,7 +84,7 @@ class InteractionTests(unittest.TestCase):
 
     def test_empty_interruption_waits_until_deadline_then_continues_saved_reply(self):
         a = self.agent()
-        saved = {'pcm':b'original audio','cursor':2,'epoch':0,'deadline':time.monotonic()+3}
+        saved = {'pcm':b'original audio','cursor':2,'cursor_verified':True,'epoch':0,'deadline':time.monotonic()+3}
         a.resume_audio = saved
         a.pending_pcm = (0, b'\x00\x00'*1600)
         def request(base, path, *args, **kwargs):
@@ -103,6 +103,16 @@ class InteractionTests(unittest.TestCase):
         a.run()
         self.assertEqual(played, [saved])
         self.assertEqual(a.capture.call_args.kwargs['idle_deadline'], saved['deadline'])
+
+    def test_unverified_replay_is_discarded_before_compute_or_audio(self):
+        a=self.agent();a.resume_audio={'pcm':b'fixture','cursor':0}
+        a.request=Mock(side_effect=AssertionError('no compute'))
+        a.http.open=Mock(side_effect=AssertionError('no network'))
+        with patch('reachy_companion.agent.subprocess.Popen',side_effect=AssertionError('no audio')):
+            result=a.voice('/say',{},replay=a.resume_audio)
+        self.assertTrue(result['cancelled']);self.assertIsNone(a.resume_audio)
+        self.assertEqual(a.status()['resume_blocked_reason'],'unverified_pcm_cursor')
+        a.request.assert_not_called();a.http.open.assert_not_called()
 
     def test_spoken_stop_drops_saved_reply_and_mutes_microphone(self):
         a = self.agent()

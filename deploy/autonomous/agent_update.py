@@ -57,13 +57,14 @@ def main():
     git('fetch','origin','codex/autonomous-shadow')
     if git('rev-parse',args.target)!=args.target:raise RuntimeError('Target missing')
     changed=git('diff','--name-only',args.expected_base,args.target).splitlines()
+    allowed_active=('src/reachy_companion/agent.py','src/reachy_companion/microphone.py','src/reachy_companion/speech_clock.py')
     critical=[path for path in changed if path.startswith('src/reachy_companion/')
-              and path not in ('src/reachy_companion/agent.py','src/reachy_companion/microphone.py','src/reachy_companion/assets/autonomous-contracts.json')
+              and path not in (*allowed_active,'src/reachy_companion/assets/autonomous-contracts.json')
               and not path.startswith('src/reachy_companion/autonomous/')]
     if critical or any(path in changed for path in ('config.example.json','src/reachy_companion/deployment.py')):
         raise RuntimeError('Unexpected active-runtime changes')
     report=dict(mode='pinned_muted_agent_update',base=args.expected_base,target=args.target,apply=args.apply,
-                operator_before=before,changed_active_modules=[path for path in changed if path in ('src/reachy_companion/agent.py','src/reachy_companion/microphone.py')],
+                operator_before=before,changed_active_modules=[path for path in changed if path in allowed_active],
                 rollback=False,motor_or_speech_commands_by_probe=0,microphone_enabled_by_probe=False)
     if args.apply:
         try:

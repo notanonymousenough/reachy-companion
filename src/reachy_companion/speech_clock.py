@@ -1,4 +1,4 @@
-"""Bounded PCM playback clock, including gaps between streamed sentences."""
+"""Wall-time playback estimate; not a measured consumed-PCM cursor."""
 import threading
 import time
 
@@ -31,3 +31,8 @@ class SpeechClock:
 
     def seconds(self):
         return self.position() / self.bytes_per_second
+
+    def resume_cursor(self):
+        # Writes into an aplay pipe do not prove hardware consumption. No
+        # automatic resume until an owned backend supplies verified progress.
+        return None

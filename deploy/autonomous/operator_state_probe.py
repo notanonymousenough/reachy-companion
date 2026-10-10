@@ -45,6 +45,13 @@ def main():
                             process_boot_changes=first.agent_boot_id!=second.agent_boot_id,
                             stale_reply_cancelled=first.voice('/say',{'text':'synthetic probe'},expected_epoch=old)['cancelled'],
                             muted_manual_cancelled=second.manual('/say',{'text':'synthetic probe'})['cancelled'])
+                # Change only the isolated fixture RAM gate; the production
+                # switch/file and physical capture stay disabled throughout.
+                second.microphone.enabled=True
+                replay={'pcm':b'\0\0','cursor':0}
+                result=second.voice('/say',{},replay=replay)
+                checks['unverified_resume_cancelled']=result.get('cancelled') is True and result.get('resume_blocked_reason')=='unverified_pcm_cursor' and second.resume_audio is None
+                second.microphone.enabled=False
                 if not all(checks.values()):raise RuntimeError('Isolated Agent acceptance failed')
         after=operator()
         unchanged=hashlib.sha256(original).digest()==hashlib.sha256(state_path.read_bytes()).digest()

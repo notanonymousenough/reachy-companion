@@ -197,7 +197,7 @@ class RoutingTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
 
-    def test_barge_in_pauses_speaker_buffers_remaining_audio_and_queues_new_phrase(self):
+    def test_barge_in_stops_speaker_discards_unverified_resume_and_queues_new_phrase(self):
         import base64, time, types
         with patch.dict(sys.modules, {'webrtcvad': types.SimpleNamespace(Vad=lambda mode: None)}):
             from reachy_companion.agent import Agent
@@ -244,8 +244,9 @@ class RoutingTests(unittest.TestCase):
             self.assertTrue(reply['interrupted'])
             self.assertTrue(reply['cancelled'])
             self.assertEqual(agent.pending_pcm, (agent.microphone_epoch, new_phrase))
-            self.assertEqual(agent.resume_audio['pcm'], pcm*2)
-            self.assertLess(agent.resume_audio['cursor'], len(pcm)*2)
+            self.assertIsNone(agent.resume_audio)
+            self.assertEqual(agent.resume_blocked_reason,'unverified_pcm_cursor')
+            self.assertEqual(reply['resume_blocked_reason'],'unverified_pcm_cursor')
             self.assertIsNone(agent.playback_process)
             self.assertIsNone(agent.voice_response)
             self.assertTrue(agent.microphone.enabled)

@@ -42,6 +42,7 @@ class Agent:
         self.voice_response = None
         self.pending_pcm = None
         self.resume_audio = None
+        self.resume_blocked_reason = None
         self.last_voice_at = None
         self.current_reply_text = ''
         self.interruptions = 0
@@ -117,6 +118,8 @@ class Agent:
                              'last_transcript': self.last_transcript, 'turns': self.turns,
                              'microphone_enabled': self.microphone.enabled,
                              'interruptions': self.interruptions, 'resumable_reply': self.resume_audio is not None, 'barge_in_error': self.barge_in_error,
+                             'resume_blocked_reason': self.resume_blocked_reason,
+                             'playback_cursor_provenance': 'wall_time_estimate',
                              'volume_percent': self.volume.percent,
                              'volume_control_enabled': self.audio.get('playback_mixer', {}).get('enabled', False),
                              'capture_active': self.capture_active,
@@ -298,6 +301,11 @@ class Agent:
             return {'ok': True, 'cancelled': True, 'interrupted': bool(monitor and monitor.interrupted.is_set())}
         if cancelled():
             return cancelled_result()
+        if replay is not None and replay.get('cursor_verified') is not True:
+            self.resume_audio=None
+            self.resume_blocked_reason='unverified_pcm_cursor'
+            return {**cancelled_result(),'cancelled':True,'resume_blocked_reason':self.resume_blocked_reason}
+        self.resume_blocked_reason=None
         if path in ('/text', '/turn'):
             self.expressions.set('processing')
         if not self.config['streaming']['enabled']:
@@ -365,7 +373,7 @@ class Agent:
                         full_pcm.extend(pcm)
                         if interrupted():
                             if cursor is None:
-                                cursor = clock.position()
+                                cursor = clock.resume_cursor()
                             continue
                         if process is None:
                             if all_cues:
@@ -393,7 +401,7 @@ class Agent:
                         while remaining:
                             if interrupted():
                                 if cursor is None:
-                                    cursor = clock.position()
+                                    cursor = clock.resume_cursor()
                                 break
                             if cancelled():
                                 return cancelled_result()
@@ -434,8 +442,14 @@ class Agent:
                     time.sleep(self.audio['echo_tail_seconds'])
             if interrupted():
                 if cursor is None:
-                    cursor = clock.position()
+                    cursor = clock.resume_cursor()
+                if cursor is None:
+                    self.resume_audio=None
+                    self.resume_blocked_reason='unverified_pcm_cursor'
+                    return {**{key:value for key,value in result.items() if key!='type'},
+                            **cancelled_result(),'resume_blocked_reason':self.resume_blocked_reason}
                 self.resume_audio = {'pcm': bytes(full_pcm), 'cursor': min(cursor, len(full_pcm)),
+                                     'cursor_verified': True,
                                      'result': {key: value for key, value in result.items() if key != 'type'},
                                      'cues': all_cues, 'epoch': epoch, 'spoken_text': self.current_reply_text,
                                      'deadline': (self.last_voice_at or time.monotonic()) + self.config['conversation']['interaction']['resume_after_empty_seconds']}
@@ -530,6 +544,10 @@ class Agent:
                         text = recognized['transcript']
                         if not text and self.resume_audio is not None:
                             saved = self.resume_audio
+                            if saved.get('cursor_verified') is not True:
+                                self.resume_audio=None
+                                self.resume_blocked_reason='unverified_pcm_cursor'
+                                continue
                             self.phase = 'waiting_to_resume'
                             if time.monotonic() < saved['deadline']:
                                 more = self.capture(idle_deadline=saved['deadline'], skip_expression=True)

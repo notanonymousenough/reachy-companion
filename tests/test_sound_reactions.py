@@ -8,6 +8,12 @@ from reachy_companion.expression_player import ExpressionPlayer
 from reachy_companion.speech_clock import SpeechClock
 
 class SoundReactionTests(unittest.TestCase):
+    def test_wall_time_clock_never_claims_verified_resume_cursor(self):
+        clock=SpeechClock(16000,0);clock.feed(3200)
+        self.assertIsNone(clock.resume_cursor())
+        clock.started=time.monotonic()-10
+        self.assertEqual(clock.position(),3200)
+        self.assertIsNone(clock.resume_cursor())
     def test_music_requires_two_windows_and_exits_after_three_nonmusic_windows(self):
         settings={'enabled':True,'window_seconds':3,'interval_seconds':1,'music_enter_windows':2,'music_exit_windows':3,'sound_cooldown_seconds':6}
         config={'conversation':{'sound_reactions':settings},'network':{'voice_url':'http://test'}}
