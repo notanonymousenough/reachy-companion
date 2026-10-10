@@ -63,8 +63,19 @@ class DatagramTests(unittest.TestCase):
         end=time.monotonic()+1
         while not peer.closed and time.monotonic()<end:time.sleep(.005)
         self.assertTrue(peer.closed);requests=peer.lease_requests
+        frozen=server.status()['first_withdrawal']
+        self.assertEqual(frozen['source_boot'],peer.boot_id)
+        self.assertEqual(frozen['ack_sequence'],server.last_sequence)
+        self.assertGreaterEqual(frozen['last_accepted_age_ms'],300)
+        self.assertGreaterEqual(frozen['last_receive_age_ms'],0)
+        time.sleep(.02);self.assertEqual(server.status()['first_withdrawal'],frozen)
         lease.tick();time.sleep(.05);self.assertEqual(peer.lease_requests,requests)
         lease.close();lease.worker.join(timeout=.2);self.assertFalse(lease.status()['execution_busy'])
+        status=lease.status();self.assertEqual(status['worker_exit'],'closed')
+        self.assertIsNone(status['worker_exception']);self.assertIsNotNone(status['timing']['last_send_age_ms'])
+        self.assertEqual(status['datagram']['ack_sequence'],frozen['ack_sequence'])
+        for _ in range(20):server.reject('Datagram authentication')
+        self.assertEqual(len(server.status()['timing']['rejection_tail']),8)
 
 
 if __name__=='__main__':unittest.main()

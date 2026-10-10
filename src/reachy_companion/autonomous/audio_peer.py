@@ -27,7 +27,7 @@ class AudioPeer:
         self.started_lease = False
         self.closed = False
         self.close_reason = None
-        self.watch_error=None;self.watch_exited=False;self.operator_job=None;self.first_close=None
+        self.watch_error=None;self.watch_exited=False;self.operator_job=None;self.first_close=None;self.closed_at=None;self.close_observers=[]
         self.operator_requests = 0
         self.max_operator_ms = 0
         self.lease_requests=0;self.max_lease_gap_ms=0;self.last_lease=None
@@ -201,14 +201,23 @@ class AudioPeer:
             return receipt
         raise ValueError('Typed peer path')
 
+    def on_close(self,observer):
+        with self.lock:
+            if self.first_close is not None:self.first_close.update(observer(self.closed_at))
+            else:self.close_observers.append(observer)
+
     def close(self,reason='shutdown'):
         with self.lock:
             if self.close_reason is None:
                 self.close_reason=reason
-                now=self.clock()
+                now=self.clock();self.closed_at=now
                 self.first_close=dict(reason=reason,source_boot=self.boot_id,
                     last_accepted_age_ms=None if self.last_lease is None else max(0,(now-self.last_lease)*1000),
                     operator_age_remaining_ms=max(0,(self.operator_deadline-now)*1000),lease_requests=self.lease_requests)
+                for observer in self.close_observers:
+                    try:self.first_close.update(observer(now))
+                    except Exception:self.first_close['observer_error']=True
+                self.close_observers.clear()
             self.closed=True;self.observation=None
         with self.playback.lock:self.playback.closed=True
         return self.playback.interrupt('peer_withdrawal',preserve=False,wait=False)
@@ -373,6 +382,8 @@ class PeerLease:
         self.last_tick=time.monotonic();self.calls=self.errors=0;self.busy=False
         self.max_call_ms=0
         self.max_tick_gap_ms=0;self.error_types={}
+        self.last_worker_tick=None;self.max_worker_gap_ms=0;self.last_send=None;self.last_accepted=None
+        self.worker_exit=None;self.worker_exception=None;self.first_close=None
         endpoint=urlsplit(client.url)
         # A lost TCP segment must not occupy the renewal slot for almost the
         # whole 300 ms device lease. Other peer operations retain their limits.
@@ -382,12 +393,21 @@ class PeerLease:
         with self.lock:
             now=time.monotonic();self.max_tick_gap_ms=max(self.max_tick_gap_ms,(now-self.last_tick)*1000);self.last_tick=now
     def _run(self):
+        try:self._run_loop()
+        except BaseException as exc:
+            with self.lock:self.worker_exception=type(exc).__name__
+        finally:
+            self.connection.close()
+            if self.datagram:self.datagram.close()
+            with self.lock:self.worker_exit='closed' if self.closed else 'unexpected_exit'
+
+    def _run_loop(self):
         while True:
             with self.lock:
-                if self.closed:
-                    self.connection.close()
-                    if self.datagram:self.datagram.close()
-                    return
+                now=time.monotonic()
+                if self.last_worker_tick is not None:self.max_worker_gap_ms=max(self.max_worker_gap_ms,(now-self.last_worker_tick)*1000)
+                self.last_worker_tick=now
+                if self.closed:return
                 valid=time.monotonic()-self.last_tick<.1
                 self.busy=valid
             if valid:
@@ -396,18 +416,20 @@ class PeerLease:
                     if self.datagram:
                         self.datagram.renew()
                         with self.lock:
-                            self.calls+=1;self.busy=False
+                            self.calls+=1;self.busy=False;self.last_accepted=time.monotonic()
                             self.max_call_ms=max(self.max_call_ms,(time.monotonic()-started)*1000)
                         time.sleep(.02)
                         continue
                     if self.connection.sock is None:
                         self.connection.connect()
                         self.connection.sock.setsockopt(socket.IPPROTO_TCP,socket.TCP_NODELAY,1)
+                    with self.lock:self.last_send=time.monotonic()
                     self.connection.request('POST','/lease',json.dumps(dict(controller=self.client.controller)),
                         headers={'Authorization':'Bearer '+self.client.token,'Content-Type':'application/json'})
                     response=self.connection.getresponse();raw=response.read(8193)
                     if response.status!=200 or len(raw)>8192:raise RuntimeError('Lease response rejected')
                     decode(raw)
+                    with self.lock:self.last_accepted=time.monotonic()
                 except Exception as exc:
                     self.connection.close()
                     with self.lock:
@@ -418,9 +440,20 @@ class PeerLease:
                     self.max_call_ms=max(self.max_call_ms,(time.monotonic()-started)*1000)
             time.sleep(.02)
     def close(self):
-        with self.lock:self.closed=True
+        with self.lock:
+            if self.first_close is None:self.first_close=self._timing(time.monotonic())
+            self.closed=True
+    def _timing(self,now):
+        sent=self.datagram.last_send if self.datagram else self.last_send
+        return dict(last_send_age_ms=None if sent is None else max(0,(now-sent)*1000),
+            last_accepted_age_ms=None if self.last_accepted is None else max(0,(now-self.last_accepted)*1000),
+            reducer_progress_age_ms=max(0,(now-self.last_tick)*1000),
+            worker_scheduling_age_ms=None if self.last_worker_tick is None else max(0,(now-self.last_worker_tick)*1000))
     def status(self):
         with self.lock:return dict(execution_busy=self.worker.is_alive() if self.closed else self.busy,
             calls=self.calls,errors=self.errors,max_call_ms=self.max_call_ms,
             max_tick_gap_ms=self.max_tick_gap_ms,error_types=dict(self.error_types),
-            progress_age_ms=(time.monotonic()-self.last_tick)*1000)
+            progress_age_ms=(time.monotonic()-self.last_tick)*1000,
+            max_worker_scheduling_gap_ms=self.max_worker_gap_ms,worker_exit=self.worker_exit,worker_exception=self.worker_exception,
+            first_close=self.first_close,timing=self._timing(time.monotonic()),
+            datagram=self.datagram.status() if self.datagram else None)

@@ -17,10 +17,11 @@ def main():
     parser.add_argument('--controller',required=True)
     parser.add_argument('--output',type=Path,required=True)
     parser.add_argument('--duration',type=float,default=10)
+    parser.add_argument('--status-interval',type=float,default=.02)
     parser.add_argument('--trusted-private-lan',action='store_true')
     parser.add_argument('--lease-datagram-port',type=int)
     args=parser.parse_args()
-    if args.output.exists() or not 8<=args.duration<=20:raise ValueError('Fresh finite network probe required')
+    if args.output.exists() or not 8<=args.duration<=20 or not .02<=args.status_interval<=1:raise ValueError('Fresh finite network probe required')
     if args.lease_datagram_port is not None and not 1<=args.lease_datagram_port<=65535:
         raise ValueError('Explicit valid datagram port required')
     config=Config(args.config)
@@ -39,7 +40,7 @@ def main():
                 samples.append((time.monotonic()-began)*1000)
                 if receipt['source_boot']!=source or not receipt['permitted']:withdrawn.set()
             except Exception as exc:errors[type(exc).__name__]+=1
-            stop.wait(.02)
+            stop.wait(args.status_interval)
     worker=threading.Thread(target=status_worker,daemon=True);worker.start()
     began=time.monotonic()
     try:
@@ -48,7 +49,7 @@ def main():
     finally:
         stop.set();lease.close();worker.join(timeout=.5);lease.worker.join(timeout=.5)
     report=dict(mode='actual_hub_device_network_no_output',source_boot=source,
-        elapsed_s=time.monotonic()-began,status_requests=len(samples),status_errors=dict(errors),
+        elapsed_s=time.monotonic()-began,status_interval_s=args.status_interval,status_requests=len(samples),status_errors=dict(errors),
         max_status_ms=max(samples,default=None),lease=lease.status(),status_execution_busy=worker.is_alive(),
         physical_output_commands=0,inference_requests=0,raw_audio_retained=False)
     try:report['stop']=client.call('/stop')
