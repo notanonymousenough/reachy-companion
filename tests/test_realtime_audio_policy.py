@@ -2,6 +2,7 @@ import importlib.util
 from pathlib import Path
 import threading
 import unittest
+from unittest.mock import patch
 from reachy_companion.autonomous.config import load
 from reachy_companion.autonomous.gateway import ModelBackend
 from reachy_companion.autonomous.state import State
@@ -25,6 +26,18 @@ class PolicyTests(unittest.TestCase):
         for _ in range(3):list(tts.stream('Спасибо',threading.Event()))
         with self.assertRaises(ValueError):list(tts.stream('Спасибо',threading.Event()))
         self.assertEqual(len(calls),4)
+
+    def test_lease_transport_is_explicit_and_invalid_port_opens_no_socket(self):
+        client=object()
+        with patch.object(module,'DatagramRenewal') as udp, patch.object(module,'PeerLease') as lease:
+            module.create_lease(client,'boot')
+            udp.assert_not_called();lease.assert_called_once_with(client,datagram=None)
+            for port in (0,65536,True):
+                with self.assertRaises(ValueError):module.create_lease(client,'boot',port)
+            udp.assert_not_called()
+            module.create_lease(client,'boot',8781)
+            udp.assert_called_once_with(client,'boot',8781)
+            lease.assert_called_with(client,datagram=udp.return_value)
 
     def test_motor_permission_does_not_replace_dialogue_candidate_prompt(self):
         cfg=load(ROOT/'config.autonomous.example.json')

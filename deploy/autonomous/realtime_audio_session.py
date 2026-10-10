@@ -17,6 +17,7 @@ from reachy_companion.hub import Hub
 from reachy_companion.autonomous.config import load
 from reachy_companion.autonomous.audio_adapter import AudioAdapter,HttpSTT
 from reachy_companion.autonomous.audio_peer import PeerClient,RemotePCM,AudioPolling,PeerLease
+from reachy_companion.autonomous.lease_datagram import DatagramRenewal
 from reachy_companion.autonomous.playback import Playback
 from reachy_companion.autonomous.speech_adapter import SpeechAdapter,HttpTTS
 from reachy_companion.autonomous.runtime import RemoteGateway,Scheduler,Job
@@ -55,14 +56,24 @@ class PracticeTTS:
         with self.lock:return [dict(event) for event in self.events]
 
 
+def create_lease(client,source,port=None):
+    if port is not None and (type(port) is not int or not 1<=port<=65535):
+        raise ValueError('Explicit valid datagram port required')
+    datagram=DatagramRenewal(client,source,port) if port is not None else None
+    return PeerLease(client,datagram=datagram)
+
+
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     for name in ('config','companion-config','token-file','output'):p.add_argument('--'+name,type=Path,required=True)
     p.add_argument('--peer-url',required=True);p.add_argument('--controller',required=True)
     p.add_argument('--duration',type=float,default=70);p.add_argument('--allow-capture-output',action='store_true')
     p.add_argument('--status-port',type=int,default=8790)
+    p.add_argument('--lease-datagram-port',type=int)
     p.add_argument('--trusted-private-lan',action='store_true');a=p.parse_args()
     if not a.allow_capture_output or a.output.exists() or not 20<=a.duration<=120:raise ValueError('Fresh finite realtime opt-in required')
+    if a.lease_datagram_port is not None and not 1<=a.lease_datagram_port<=65535:
+        raise ValueError('Explicit valid datagram port required')
     config=load(a.config);companion=Config(a.companion_config);hub=Hub(companion)
     if config.get('motion',{}).get('enabled'):raise ValueError('This first audio session requires a separately accepted joint motion profile')
     os.environ[config['gateway']['token_env']]=a.token_file.read_text().strip()
@@ -107,7 +118,7 @@ def main():
                     echo_reference_matched=reference is not None and reference==event['audio']['echo_reference']))
             return super().ingest(event,now)
     scheduler=AudioScheduler(config,AuditedGateway(config),speech_adapter=speech,audio_adapter=audio)
-    lease=PeerLease(client)
+    lease=create_lease(client,source,a.lease_datagram_port)
     stage='startup';started=time.monotonic();latencies=[];cancel_at=None;cancel_stop_s=None;no_response_since=None
     latest={};status_lock=threading.Lock();stopped_streams=set();progress_frames={};first_consumed={}
     class StatusHandler(BaseHTTPRequestHandler):
@@ -126,7 +137,7 @@ def main():
     threading.Thread(target=server.serve_forever,daemon=True).start()
     report=dict(mode='actual_distributed_realtime_audio_session',accepted=False,source_boot=source,
         private_cloud_inputs=0,raw_audio_retained=False,resume_attempts=0,motor_commands=0,
-        hub_inference=False,questions_limit=2)
+        hub_inference=False,questions_limit=2,lease_transport='udp' if a.lease_datagram_port is not None else 'tcp')
     try:
         while not stop.is_set() and time.monotonic()-started<a.duration:
             lease.tick();now=time.monotonic();began=now
