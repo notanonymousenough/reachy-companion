@@ -51,3 +51,25 @@ For an explicitly selected UDP experiment, add `--lease-datagram-port 8781` on b
 Inspect both receipts, actual operator state and preserved PC main after the unit exits. A false receipt, unknown stop, occupied worker or quarantine must not be published as a completed voice round. Joint motion is rejected by this harness until its separately reviewed ownership/permission profile is integrated and accepted.
 
 The no-output probe accepts `--status-interval`: baseline `0.02` seconds, comparison `0.2` seconds. Only status polling cadence changes; heartbeat interval, reducer progress gate, challenge lifetime and device lease remain identical. Use fresh paths and the same pinned SHA for both finite runs.
+
+The no-output probe uses a separate STARTING phase for at most two seconds. Pre-lease `permitted=false` is expected there. ACTIVE requires a successfully acknowledged renewal followed by a new status request reporting operator readiness and permission. After ACTIVE, any withdrawal remains terminal. A closed/expired STARTING phase cannot be revived by a late ACK. This probe admission change leaves physical capture, PCM and publication gated by the device's first lease and preserves all existing lease/challenge/progress/stop limits. Status and device receipts project operator metadata through a whitelist; owner nonces remain only in private owner files.
+
+## Status, stop and a fresh finite restart
+
+On Hub, `realtime_audio_control.py status --config <production-config> --controller <fresh-id>` reads the authenticated loopback session endpoint. It returns `session_boot`, `source_boot` and `controller` even while startup is pending. Copy that exact binding into the stop command:
+
+```text
+realtime_audio_control.py stop --config <production-config> --controller <same-id> --session-boot <observed-session-boot> --source-boot <observed-device-source-boot>
+```
+
+The stop API accepts only that exact binding. A delayed request for a previous session cannot stop a new one, even if its controller/source were reused. The response means `stop_requested`, never physical `stop_known`. The finite runtime then closes its real adapters, revokes context independently, requests the owned device stop and writes the final receipt. Connection refusal or absence of a listener is not proof of cleanup.
+
+After the managed Root unit and Hub process exit, collect their metadata receipts into private files, then audit:
+
+```text
+realtime_audio_control.py check-cleanup --controller <same-id> --session-boot <observed-session-boot> --source-boot <observed-device-source-boot> --hub-receipt <finished-hub.json> --device-receipt <finished-device.json>
+```
+
+This check requires matching owners, known physical stop, closed capture, drained Hub context/model/audio jobs, reaped device watchdog/operator/UDP workers, and microphone restoration metadata. Unknown or missing proof fails. It reports `receipt_cleanup_verified` separately from voice acceptance and live readiness; it cannot authorize a restart using historical files alone.
+
+For a fresh finite restart, the hardware runner must additionally read current Agent/factory readiness, confirm no previous owned process/listener remains and verify the preserved PC main/gateway. Use a fresh controller, stage, output paths and private owner file; launch the managed device and Hub commands above with the same reviewed pin. Do not resume interrupted PCM or automatically reset quarantine. The control helper launches no service and introduces no always-on worker, camera or motion permission. Actual stop/restart acceptance still requires the runner's device test.

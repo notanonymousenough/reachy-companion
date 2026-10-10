@@ -4,8 +4,6 @@ Own status/stop API, occupied async slots and bounded wake/reply admission.
 No speaker identity, automatic memory promotion or interrupted PCM resume.
 """
 import argparse
-import hmac
-from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
@@ -18,6 +16,7 @@ from reachy_companion.autonomous.config import load
 from reachy_companion.autonomous.audio_adapter import AudioAdapter,HttpSTT
 from reachy_companion.autonomous.audio_peer import PeerClient,RemotePCM,AudioPolling,PeerLease
 from reachy_companion.autonomous.lease_datagram import DatagramRenewal
+from reachy_companion.autonomous.audio_session_control import create_server as create_control_server
 from reachy_companion.autonomous.playback import Playback
 from reachy_companion.autonomous.speech_adapter import SpeechAdapter,HttpTTS
 from reachy_companion.autonomous.runtime import RemoteGateway,Scheduler,Job
@@ -121,23 +120,14 @@ def main():
     lease=create_lease(client,source,a.lease_datagram_port)
     stage='startup';started=time.monotonic();latencies=[];cancel_at=None;cancel_stop_s=None;no_response_since=None
     latest={};status_lock=threading.Lock();stopped_streams=set();progress_frames={};first_consumed={}
-    class StatusHandler(BaseHTTPRequestHandler):
-        def log_message(self,*args):pass
-        def authorized(self):return hmac.compare_digest(self.headers.get('Authorization',''),'Bearer '+companion.token)
-        def do_GET(self):
-            if not self.authorized():self.send_error(401);return
-            if self.path!='/status':self.send_error(404);return
-            with status_lock:payload=json.dumps(latest).encode()
-            self.send_response(200);self.send_header('Content-Length',str(len(payload)));self.end_headers();self.wfile.write(payload)
-        def do_POST(self):
-            if not self.authorized():self.send_error(401);return
-            if self.path!='/stop':self.send_error(404);return
-            stop.set();self.send_response(202);self.end_headers()
-    server=ThreadingHTTPServer(('127.0.0.1',a.status_port),StatusHandler);server.daemon_threads=True
+    def control_status():
+        with status_lock:return dict(latest)
+    server=create_control_server(companion.token,a.controller,source,stop,control_status,port=a.status_port)
     threading.Thread(target=server.serve_forever,daemon=True).start()
-    report=dict(mode='actual_distributed_realtime_audio_session',accepted=False,source_boot=source,
+    report=dict(mode='actual_distributed_realtime_audio_session',accepted=False,**server.session_binding,
         private_cloud_inputs=0,raw_audio_retained=False,resume_attempts=0,motor_commands=0,
-        hub_inference=False,questions_limit=2,lease_transport='udp' if a.lease_datagram_port is not None else 'tcp')
+        hub_inference=False,questions_limit=2,hub_boot_id=scheduler.state.authority.hub_boot_id,
+        context_enabled=config.get('context',{}).get('enabled',False),lease_transport='udp' if a.lease_datagram_port is not None else 'tcp')
     try:
         while not stop.is_set() and time.monotonic()-started<a.duration:
             lease.tick();now=time.monotonic();began=now
