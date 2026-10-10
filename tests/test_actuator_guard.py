@@ -2,6 +2,8 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
+from contextlib import contextmanager
 import unittest
 from reachy_companion.autonomous.actuator_guard import ActuatorGuard, GuardRejected
 from reachy_companion.autonomous.contracts import Authority
@@ -14,6 +16,45 @@ def arm(guard, **override):
 
 
 class GuardTests(unittest.TestCase):
+    def test_output_watchdog_stops_while_durable_admission_is_blocked(self):
+        with tempfile.TemporaryDirectory() as directory:
+            stopped=threading.Event();entered=threading.Event();enqueued=[];errors=[]
+            guard=ActuatorGuard(directory,lambda:stopped.set() or True,ttl=.1,poll=.01)
+            lease=arm(guard);original=guard.transaction
+            @contextmanager
+            def slow_transaction():
+                with original():
+                    entered.set();time.sleep(.4);yield
+            guard.transaction=slow_transaction
+            def admit():
+                try:guard.dispatch(lease,'blocked',lambda:enqueued.append(True) or True)
+                except GuardRejected as exc:errors.append(exc)
+            thread=threading.Thread(target=admit);thread.start()
+            try:
+                self.assertTrue(entered.wait(.1))
+                self.assertTrue(stopped.wait(.25))
+                self.assertTrue(thread.is_alive())
+                thread.join(2)
+                self.assertFalse(thread.is_alive());self.assertTrue(errors);self.assertEqual(enqueued,[])
+                self.assertFalse(guard.status()['leased'])
+            finally:thread.join(2);guard.transaction=original;guard.close()
+
+    def test_revoke_between_intent_and_enqueue_cannot_dispatch_and_duplicate_cannot_repeat(self):
+        with tempfile.TemporaryDirectory() as directory:
+            stopped=[];enqueued=[]
+            guard=ActuatorGuard(directory,lambda:stopped.append(True) or True)
+            try:
+                lease=arm(guard)
+                self.assertTrue(guard.dispatch(lease,'first',lambda:enqueued.append(True) or True))
+                self.assertFalse(guard.dispatch(lease,'first',lambda:enqueued.append(True) or True))
+                original=guard.admit
+                def revoke_before_enqueue(lease,command):
+                    result=original(lease,command);guard.revoke();return result
+                guard.admit=revoke_before_enqueue
+                with self.assertRaises(GuardRejected):guard.dispatch(lease,'late',lambda:enqueued.append(True) or True)
+                self.assertEqual(enqueued,[True]);self.assertEqual(stopped,[True])
+            finally:guard.close()
+
     def test_operator_gates_no_dispatch_and_old_boot(self):
         with tempfile.TemporaryDirectory() as directory:
             guard = ActuatorGuard(directory, lambda: True)

@@ -24,6 +24,66 @@ class Lease:
     authority: Authority
 
 
+class OutputGate:
+    """RAM output lease; its watchdog never acquires the SQLite owner's mutex.
+
+    enqueue and stop must be bounded adapter operations, with no storage/model
+    work or calls back into ActuatorGuard. This removes disk contention, not
+    arbitrary callback/OS latency. Physical adapter admission remains gated.
+    """
+    def __init__(self,stop,clock,poll):
+        self.stop,self.clock,self.poll=stop,clock,poll
+        self.mutex=threading.RLock();self.lease=None;self.deadline=0
+        self.last_stopped=None;self.known=True;self.max_enqueue_s=0
+        self.done=threading.Event()
+        self.thread=threading.Thread(target=self.watchdog,name='output-watchdog',daemon=True);self.thread.start()
+
+    def arm(self,lease,deadline):
+        with self.mutex:
+            if self.lease or not self.known or self.clock()>=deadline:raise GuardRejected('Output lease gate')
+            self.lease=lease;self.deadline=deadline
+
+    def live(self,lease):
+        with self.mutex:return self.lease==lease and self.clock()<self.deadline
+
+    def extend(self,lease,deadline):
+        with self.mutex:
+            if not self.live(lease):raise GuardRejected('Output lease cannot be revived')
+            self.deadline=deadline
+
+    def enqueue(self,lease,enqueue):
+        with self.mutex:
+            if not self.live(lease):raise GuardRejected('Output withdrawn before enqueue')
+            started=time.monotonic()
+            try:
+                if enqueue() is not True:raise GuardRejected('Enqueue completion unknown')
+            finally:self.max_enqueue_s=max(self.max_enqueue_s,time.monotonic()-started)
+            if not self.live(lease):raise GuardRejected('Enqueue exceeded live lease')
+
+    def revoke(self,lease):
+        with self.mutex:
+            if lease==self.last_stopped:return self.known
+            if self.lease is not None and self.lease!=lease:return False
+            self.lease=None
+            try:self.known=self.stop() is True
+            except Exception:self.known=False
+            self.last_stopped=lease
+            return self.known
+
+    def acknowledge(self):
+        with self.mutex:
+            if self.lease:raise GuardRejected('Output still leased')
+            self.known=True
+
+    def watchdog(self):
+        while not self.done.wait(self.poll):
+            with self.mutex:
+                if self.lease and self.clock()>=self.deadline:self.revoke(self.lease)
+
+    def close(self):
+        self.done.set();self.thread.join(timeout=self.poll+1)
+
+
 class ActuatorGuard:
     """One process owner, one lease, bounded durable command dedupe.
 
@@ -60,6 +120,7 @@ class ActuatorGuard:
         self.max_durable_transaction_s = 0
         self.max_stop_call_s = 0
         self.write('quarantined' if self.quarantined else 'idle')
+        self.output=OutputGate(self.stop_output,clock,poll)
         self.done = threading.Event()
         self.thread = threading.Thread(target=self.watchdog, name='actor-watchdog', daemon=True)
         self.thread.start()
@@ -91,12 +152,15 @@ class ActuatorGuard:
             # Tombstones survive lease/boot changes. Re-arming cannot replay an
             # already admitted command under freshly rebound authority.
             self.write('active')
+            try:self.output.arm(self.lease,self.deadline)
+            except GuardRejected:
+                self.revoke_locked();raise
             return self.lease
 
     def check(self, lease):
         if self.closed or self.quarantined or not self.lease or lease != self.lease:
             raise GuardRejected('Lease/authority no longer current')
-        if self.clock() >= self.deadline:
+        if self.clock() >= self.deadline or not self.output.live(lease):
             self.revoke_locked()
             raise GuardRejected('Lease expired')
 
@@ -106,14 +170,16 @@ class ActuatorGuard:
             if type(sequence) is not int or not 0 <= sequence <= 2**63-1 or sequence <= self.sequence:
                 raise GuardRejected('Heartbeat sequence not fresh')
             self.sequence = sequence
-            self.deadline = self.clock()+self.ttl
+            deadline = self.clock()+self.ttl
+            self.output.extend(lease,deadline)
+            self.deadline = deadline
 
     def admit(self, lease, command_id):
         """Persist intent BEFORE dispatch. Duplicate returns False, never replay.
 
         This only authorizes a future adapter dispatch; it does not move/speak.
-        An adapter must hold mutex through its bounded enqueue to avoid a revoke
-        between this check and enqueue. Blocking model/TTS work belongs elsewhere.
+        Physical adapters must use dispatch for the final output lease fence.
+        This legacy intent API alone does not authorize external SDK writes.
         """
         with self.mutex:
             self.check(lease)
@@ -126,22 +192,34 @@ class ActuatorGuard:
                 raise GuardRejected('Dedupe capacity exhausted; no eviction/replay')
             with self.transaction():
                 self.db.execute('INSERT INTO commands VALUES (?, ?)', (command_id, lease.lease_id))
+            self.check(lease)
             return True
+
+    def dispatch(self,lease,command_id,enqueue):
+        """Persist intent, then atomically fence bounded enqueue with output lease.
+
+        No SQLite lock is held during enqueue; the independent output watchdog
+        can stop while admission is blocked on fsync. No direct SDK I/O here.
+        """
+        if not self.admit(lease,command_id):return False
+        try:self.output.enqueue(lease,enqueue)
+        except BaseException:
+            self.revoke();raise
+        return True
+
+    def stop_output(self):
+        started=time.monotonic()
+        try:return self.stop() is True
+        finally:self.max_stop_call_s=max(self.max_stop_call_s,time.monotonic()-started)
 
     def revoke_locked(self):
         if not self.lease:
             return
         # The durable row is already active: crash at any point means unknown.
         # Stop before additional fsync so storage failure cannot skip stopping.
-        self.lease = None
+        lease=self.lease;self.lease = None
         self.quarantined = True
-        started = time.monotonic()
-        try:
-            known = self.stop() is True
-        except Exception:
-            known = False
-        finally:
-            self.max_stop_call_s = max(self.max_stop_call_s, time.monotonic()-started)
+        known = self.output.revoke(lease)
         self.quarantined = not known
         try:
             self.write('quarantined' if self.quarantined else 'idle')
@@ -159,20 +237,22 @@ class ActuatorGuard:
             if self.closed or self.lease or verified_stopped is not True:
                 raise GuardRejected('Stop audit not verified')
             self.quarantined = False
+            self.output.acknowledge()
             self.write('idle')
 
     def watchdog(self):
         while not self.done.wait(self.poll):
             with self.mutex:
-                if self.lease and self.clock() >= self.deadline:
+                if self.lease and (self.clock() >= self.deadline or not self.output.live(self.lease)):
                     self.revoke_locked()
 
     def status(self):
         with self.mutex:
+            if self.lease and not self.output.live(self.lease):self.revoke_locked()
             return dict(robot_boot_id=self.robot_boot_id, quarantined=self.quarantined,
                         leased=self.lease is not None, closed=self.closed,
                         max_durable_transaction_s=self.max_durable_transaction_s,
-                        max_stop_call_s=self.max_stop_call_s)
+                        max_stop_call_s=self.max_stop_call_s,max_enqueue_s=self.output.max_enqueue_s)
 
     def close(self):
         self.done.set()
@@ -181,6 +261,7 @@ class ActuatorGuard:
             if self.closed:
                 return
             self.revoke_locked()
+            self.output.close()
             self.closed = True
             self.db.close()
             fcntl.flock(self.lock_file, fcntl.LOCK_UN)
