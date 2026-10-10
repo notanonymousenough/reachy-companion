@@ -43,6 +43,7 @@ class GuardTests(unittest.TestCase):
                 self.assertEqual(stops, [True])
                 replacement = arm(guard)
                 with self.assertRaises(GuardRejected): guard.admit(lease, 'late')
+                self.assertFalse(guard.admit(replacement, 'one'))
                 self.assertTrue(guard.admit(replacement, 'fresh'))
             finally: guard.close()
 
@@ -56,6 +57,19 @@ class GuardTests(unittest.TestCase):
                 self.assertFalse(guard.status()['leased'])
                 self.assertFalse(guard.status()['quarantined'])
             finally: guard.close()
+
+    def test_dedupe_survives_clean_restart_and_fresh_authority(self):
+        with tempfile.TemporaryDirectory() as directory:
+            guard = ActuatorGuard(directory, lambda: True)
+            lease = arm(guard)
+            self.assertTrue(guard.admit(lease, 'same-logical-command'))
+            guard.close()
+            replacement = ActuatorGuard(directory, lambda: True)
+            try:
+                fresh = arm(replacement)
+                self.assertFalse(replacement.admit(fresh, 'same-logical-command'))
+                self.assertTrue(replacement.admit(fresh, 'new-logical-command'))
+            finally: replacement.close()
 
     def test_unknown_stop_persists_restart_and_requires_audit(self):
         with tempfile.TemporaryDirectory() as directory:

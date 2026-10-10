@@ -52,4 +52,4 @@ Compute boot никогда не меняется из completion envelope. Init
 
 5 новых regression tests покрывают pending wait/start/commit + unrelated sensors, changed/removed input/proposal, turn/mute fencing, A→handshakeB→lateA main с pendingB fast и late/wrong-producer fast. На момент этого causality patch полный suite —75tests, LAN/model/hardware проверки ещё не запускались. Актуальные реальные PC/hub model пробы и78tests описаны в [pc-live.md](pc-live.md); physical speech/motion ещё не приняты.
 
-Подготовка local lease/ownership guard,86tests и ограничения hardware integration описаны в [actuator-guard.md](actuator-guard.md). Полный FastView теперь default; актуальная full shadow acceptance — в [pc-live.md](pc-live.md).
+Подготовка local lease/ownership guard,87tests и ограничения hardware integration описаны в [actuator-guard.md](actuator-guard.md). Полный FastView теперь default; актуальная full shadow acceptance — в [pc-live.md](pc-live.md).

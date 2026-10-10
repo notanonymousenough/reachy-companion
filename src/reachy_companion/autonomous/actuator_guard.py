@@ -76,10 +76,8 @@ class ActuatorGuard:
             self.lease = Lease(uid(), authority)
             self.deadline = self.clock()+self.ttl
             self.sequence = -1
-            # Old command IDs have a different lease and robot boot. They cannot
-            # regain authority even when the bounded table starts a new lease.
-            with self.db:
-                self.db.execute('DELETE FROM commands')
+            # Tombstones survive lease/boot changes. Re-arming cannot replay an
+            # already admitted command under freshly rebound authority.
             self.write('active')
             return self.lease
 
