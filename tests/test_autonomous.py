@@ -6,6 +6,7 @@ from pathlib import Path
 import threading
 import time
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.error import HTTPError
@@ -13,7 +14,7 @@ from urllib.request import Request, urlopen
 
 from reachy_companion.autonomous.config import load
 from reachy_companion.autonomous.contracts import decode, validate
-from reachy_companion.autonomous.gateway import BudgetRejected, ExecutionUnknown, Gateway, ModelBackend, create_server
+from reachy_companion.autonomous.gateway import BudgetRejected, ExecutionUnknown, Gateway, ModelBackend, create_server, fast_schema, fast_projection
 from reachy_companion.autonomous.runtime import ReplayGateway, Scheduler
 from reachy_companion.autonomous.state import State
 
@@ -170,6 +171,81 @@ class SchedulerTests(unittest.TestCase):
 
 
 class GatewayTests(unittest.TestCase):
+    def test_sdk_counts_and_completion_share_loaded_handle_and_timeout_quarantines(self):
+        cfg = config(); model = cfg['models']['main']
+        model.update(id='loaded-main', base_url='http://127.0.0.1:1234/v1',
+                     tokenizer_backend='lmstudio_sdk', completion_backend='lmstudio_sdk')
+        model['audit'].update(verified=True, runtime_build='fixture', weight_sha256='x',
+                              template_sha256='x', tokenizer_sha256='x', runtime_context_tokens=4096)
+        calls = []; clients = []
+        class Handle:
+            fail = False
+            def get_info(self): return SimpleNamespace(identifier='loaded-main', context_length=4096)
+            def tokenize(self, text): calls.append('tokenize'); return [1, 2, 3]
+            def complete(self, prompt, config):
+                calls.append('complete')
+                if self.fail: raise TimeoutError('unknown prediction completion')
+                return SimpleNamespace(content='reply', stats=SimpleNamespace(stop_reason='eosFound',
+                    predicted_tokens_count=1, time_to_first_token_sec=.1))
+        handle = Handle()
+        class Client:
+            def __init__(self, host):
+                clients.append(host)
+                self.llm = SimpleNamespace(list_loaded=lambda: [handle])
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+        sdk = SimpleNamespace(Client=Client, set_sync_api_timeout=lambda value: None)
+        with patch.dict('sys.modules', {'lmstudio': sdk}):
+            gateway = Gateway(ModelBackend(cfg))
+            result = gateway.generate('main', 'hello')
+            self.assertEqual(calls, ['tokenize', 'tokenize', 'complete'])
+            self.assertEqual(clients, ['127.0.0.1:1234'])
+            self.assertEqual(result['usage']['time_to_first_token_s'], .1)
+            handle.fail = True
+            with self.assertRaises(ExecutionUnknown): gateway.generate('main', 'timeout')
+            with self.assertRaises(BlockingIOError): gateway.generate('main', 'do not duplicate')
+            self.assertEqual(gateway.health()['quarantined'], ['main'])
+
+    def test_native_grammar_only_exposes_current_aliases(self):
+        from jsonschema import validate as validate_schema
+        state = State(config=config())
+        view = state.snapshot(0)
+        with self.assertRaises(Exception):
+            validate_schema({'a':'think','why':'invented','start':{'type':'main','input_ref':'ghost'}}, fast_schema(view))
+        state.ingest({'type':'utterance','text':'hello'}, 0)
+        view = state.snapshot(0)
+        ref = view['candidates'][0]['alias']
+        validate_schema({'a':'think','why':'new','start':{'type':'main','input_ref':ref}}, fast_schema(view))
+        with self.assertRaises(Exception):
+            validate_schema({'a':'converse','why':'not ready','commit':ref}, fast_schema(view))
+        projected, aliases = fast_projection(view)
+        self.assertEqual(aliases['c0'], ref)
+        self.assertEqual(projected['candidates'][0]['alias'], 'c0')
+        self.assertEqual(view['candidates'][0]['alias'], ref)
+        projected['muted'] = True
+        with self.assertRaises(Exception):
+            validate_schema({'a':'think','why':'muted','start':{'type':'main','input_ref':'c0'}}, fast_schema(projected))
+
+    def test_native_token_limit_and_smaller_admission_context_reject(self):
+        class Backend(ModelBackend):
+            def count(self, model, content): return 200
+            def post(self, url, payload, *args):
+                self.payload = payload
+                return {'content':'{"a":"wait","why":"limited"}', 'stop_type':'limit', 'stop':True}
+        cfg = config(); model = cfg['models']['fast']
+        model.update(id='fixture', base_url='http://127.0.0.1', completion_backend='llama_native')
+        model['audit'].update(verified=True, device='cpu_pc', runtime_build='fixture', weight_sha256='x',
+                              template_sha256='x', tokenizer_sha256='x', runtime_context_tokens=4096)
+        backend = Backend(cfg)
+        with self.assertRaises(ValueError): backend.generate('fast', State().snapshot(0))
+        self.assertIn('json_schema', backend.payload)
+        self.assertEqual(backend.payload['n_predict'], 192)
+        self.assertNotIn('max_tokens', backend.payload)
+        model['admission_context_tokens'] = 300
+        del backend.payload
+        with self.assertRaises(BudgetRejected): backend.generate('fast', State().snapshot(0))
+        self.assertFalse(hasattr(backend, 'payload'))
+
     def test_unknown_completion_quarantines_without_freeing_slot(self):
         class Failed:
             def generate(self, role, data): raise ExecutionUnknown('unknown')

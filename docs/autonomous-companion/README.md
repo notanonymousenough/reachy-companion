@@ -34,3 +34,5 @@ Hub владеет непрерывным когнитивным циклом и
 Реализация этапов0/1 и воспроизводимые команды: [first-slice.md](first-slice.md). Пользовательский выбор main уточнён: существующая Qwen3.5-9B uncensored HauhauCS Aggressive — baseline, Gemma12B optional backend. Результаты model/hardware audit не подменяются успешным replay.
 
 Optional VPS/n8n этап, результаты и эксплуатация: [workflows.md](workflows.md).
+
+Реальный PC audit, tokenizer adapters, конечные model measurements и acceptance failures: [pc-live.md](pc-live.md).

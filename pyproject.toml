@@ -12,6 +12,7 @@ dependencies = []
 [project.optional-dependencies]
 hub = []
 autonomous = ["jsonschema>=4.23,<5"]
+autonomous-pc = ["jsonschema>=4.23,<5", "lmstudio==1.5.0"]
 worker = ["vosk==0.3.45", "piper-tts==1.8.0", "faster-whisper==1.2.1", "onnx==1.23.2"]
 robot = ["webrtcvad-wheels==2.0.14.post1"]
 

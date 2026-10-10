@@ -39,6 +39,20 @@ def load(path):
                 raise ValueError('Invalid model budget')
         if model['input_cap_tokens'] + model['template_cap_tokens'] + model['output_tokens'] + model['reserve_tokens'] > model['context_tokens']:
             raise ValueError('Model budget exceeds runtime context')
+        admission = model.get('admission_context_tokens', model['context_tokens'])
+        if type(admission) is not int or not 1 <= admission <= model['context_tokens']:
+            raise ValueError('Invalid admission context')
+        if model.get('tokenizer_backend', 'http') not in ('http', 'lmstudio_sdk'):
+            raise ValueError('Invalid tokenizer backend')
+        if model.get('completion_backend', 'openai') not in ('openai', 'llama_native', 'lmstudio_sdk'):
+            raise ValueError('Invalid completion backend')
+        if (model.get('tokenizer_backend') == 'lmstudio_sdk') != (model.get('completion_backend') == 'lmstudio_sdk'):
+            raise ValueError('SDK tokenizer and completion must be paired')
+        if model.get('tokenizer_backend') == 'lmstudio_sdk':
+            endpoint = urlsplit(model.get('base_url') or '')
+            if (role != 'main' or model.get('completion_backend') != 'lmstudio_sdk' or endpoint.scheme != 'http'
+                    or endpoint.hostname not in ('localhost', '127.0.0.1', '::1')):
+                raise ValueError('SDK main requires paired loaded-handle completion on loopback')
         if role == 'fast' and model['output_tokens'] > 192:
             raise ValueError('Fast output exceeds design cap')
         if model.get('base_url'):
