@@ -131,7 +131,8 @@ class AudioAdapter:
         return (not self.closed and self.allowed and now < self.operator_deadline
                 and generation == self.generation and observation['authority'] == self.authority
                 and observation['operator_signature'] == self.operator_signature
-                and observation['source_boot'] == self.source and now < observation['deadline'])
+                and observation['source_boot'] == self.source and observation['sequence']==self.sequence
+                and now < observation['deadline'])
 
     def submit(self, pcm, *, source_boot, sequence, captured_end, authority,
                operator_binding, origin='unknown', echo_reference=None):

@@ -105,7 +105,13 @@ class PeerTests(unittest.TestCase):
         self.assertTrue(backend.streams)
 
     def test_malformed_or_failed_operator_closes_watch_and_output(self):
-        for invalid in ({'motion_policy':{}},None,{'microphone_enabled':1},'unknown'):
+        valid=dict(agent_boot_id='agent',microphone_epoch=2,microphone_owner_id='owner',microphone_enabled=True,
+            microphone_state_error=None,phase='paused',listening=False,motion_policy=dict(epoch=1,quiet=False,privacy_all=False))
+        invalids=[{'motion_policy':{}},None,{'microphone_enabled':1},'unknown',
+            {**valid,'microphone_enabled':1},{**valid,'microphone_epoch':True},{**valid,'listening':0}]
+        invalids.extend({**valid,'motion_policy':{**valid['motion_policy'],name:value}}
+                       for name,value in (('epoch',True),('quiet',0),('privacy_all',0)))
+        for invalid in invalids:
             with self.subTest(invalid=invalid):
                 peer,backend=self.setup_peer();self.call(peer,'/lease')
                 self.actual=invalid;wait(lambda:peer.closed)

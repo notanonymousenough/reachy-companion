@@ -83,6 +83,47 @@ class AudioTests(unittest.TestCase):
                     self.assertGreater(adapter.status()['counts']['stale'],0)
                 finally:release.set()
 
+    def test_latest_stop_survives_superseded_completion_without_epoch_change(self):
+        for newest,withdraw in ((2,False),(3,False),(3,True)):
+            with self.subTest(newest=newest,withdraw=withdraw):
+                release=threading.Event();entered=threading.Event();calls=[]
+                def stt(pcm):
+                    sequence=int.from_bytes(pcm[:2],'little');calls.append(sequence)
+                    if sequence==1:entered.set();release.wait(2);return 'obsolete request'
+                    return 'замолчи'
+                adapter=self.setup_adapter(stt)
+                class Speech:
+                    def operator_view(self):return operator(time.monotonic())
+                    def advance(self,authority):pass
+                    def interrupt(self,*args):pass
+                    def execute(self,proposal):pass
+                    def close(self):pass
+                cfg=load(Path(__file__).resolve().parents[1]/'config.autonomous.example.json')
+                scheduler=Scheduler(cfg,ReplayGateway(),speech_adapter=Speech(),audio_adapter=adapter)
+                scheduler.advance();authority=scheduler.state.authority
+                try:
+                    for sequence in range(1,newest+1):
+                        self.assertTrue(adapter.submit(sequence.to_bytes(2,'little')*320,source_boot='capture',sequence=sequence,
+                            captured_end=time.monotonic(),authority=authority,operator_binding=('agent',1,0)))
+                        if sequence==1:scheduler.advance();self.assertTrue(entered.wait(.5))
+                    self.assertTrue(adapter.status()['execution_busy']);self.assertEqual(calls,[1])
+                    if withdraw:scheduler.ingest(dict(type='operator',muted=True))
+                    release.set();self.drain(adapter)
+                    deadline=time.monotonic()+.5
+                    while time.monotonic()<deadline:
+                        scheduler.advance()
+                        if scheduler.state.counts['audio_turn'] or withdraw:break
+                        time.sleep(.002)
+                    if withdraw:
+                        self.assertEqual(calls,[1]);self.assertEqual(scheduler.state.counts['audio_turn'],0)
+                    else:
+                        self.assertEqual(calls,[1,newest]);self.assertEqual(scheduler.state.current_utterance,'замолчи')
+                        self.assertEqual(scheduler.state.counts['audio_turn'],1)
+                        self.assertEqual(scheduler.state.authority.interaction_epoch,authority.interaction_epoch+1)
+                        for _ in range(5):scheduler.advance()
+                        self.assertEqual(scheduler.state.counts['audio_turn'],1)
+                finally:release.set();adapter.close();scheduler.close()
+
     def test_blocked_stt_does_not_stop_scheduler_ticks_or_operator_ingestion(self):
         release=threading.Event();entered=threading.Event()
         adapter=self.setup_adapter(lambda pcm:(entered.set(),release.wait(2),'fixture')[-1])
