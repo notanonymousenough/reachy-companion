@@ -87,10 +87,11 @@ class ReplayGateway:
 
 
 class Scheduler:
-    def __init__(self, config, gateway, motion_adapter=None):
+    def __init__(self, config, gateway, motion_adapter=None, speech_adapter=None):
         self.config, self.gateway = config, gateway
         self.state = State(gateway.boot_id, config)
         self.motion_adapter=motion_adapter
+        self.speech_adapter=speech_adapter;self.state.speech_attached=speech_adapter is not None
         self.actor_job=self.motion_job=None;self.next_actor=0
         if motion_adapter:
             self.state.muted=True
@@ -102,15 +103,28 @@ class Scheduler:
         self.context_job=None
         self.context_binding=None
         self.next_context=0
+        self.closed=False
 
     def ingest(self, event, now=None):
+        if self.closed:return
+        if self.speech_adapter and event.get('type') in ('operator','utterance'):
+            self.speech_adapter.interrupt('human_utterance' if event['type']=='utterance' else 'operator',False)
         self.state.ingest(event, time.monotonic() if now is None else now)
+
+    def speech_activity(self,origin):
+        # Trusted classifier hook; echo cannot create a State human utterance.
+        if origin not in ('human_activity','echo'):raise ValueError('Speech provenance')
+        if self.speech_adapter:return self.speech_adapter.interrupt(origin)
+
+    def confirm_no_user_utterance(self,since,until):
+        return bool(self.speech_adapter and self.speech_adapter.confirm_no_utterance(since=since,until=until))
 
     def handshake_compute(self, boot, generation):
         """Single-owner authenticated health/reconnect callback, never a model result."""
         return self.state.set_compute_boot(boot, generation)
 
     def advance(self, now=None):
+        if self.closed:return
         now = time.monotonic() if now is None else now
         if self.motion_adapter:
             if self.actor_job and self.actor_job.future.done():
@@ -176,6 +190,12 @@ class Scheduler:
             except Exception:
                 self.state.record('fast_failed')
             self.fast_job = self.binding = None
+        if self.speech_adapter:
+            self.speech_adapter.advance(self.state.authority)
+            if self.state.speech_proposals:
+                proposal=self.state.speech_proposals.popleft()
+                try:self.speech_adapter.execute(proposal)
+                except Exception:self.state.record('speech_admission_rejected')
         self.state.collect(now)
         if self.fast_job and now > self.binding.deadline and not self.expiry_logged:
             self.state.record('fast_deadline_expired')
@@ -210,14 +230,24 @@ class Scheduler:
             self.advance(now)
             time.sleep(min(0.01, self.config['period_s']/10))
         # Stop new admission, invalidate any pending action; no model cancellation claim.
-        if self.motion_adapter:self.motion_adapter.close()
-        self.ingest(dict(type='operator', muted=True))
+        if self.speech_adapter:self.speech_adapter.close()
+        self.closed=True
+        motion_stopped=self.motion_adapter.close() if self.motion_adapter else True
+        self.state.ingest(dict(type='operator', muted=True),time.monotonic())
         report = dict(mode='replay' if isinstance(self.gateway, ReplayGateway) else 'real_model_shadow',
                       actuators='bounded_native_antenna17' if self.motion_adapter else 'simulated', counts=dict(self.state.counts),
                       execution_busy=dict(fast=bool(self.fast_job and not self.fast_job.future.done()),
-                                          main=bool(self.main_job and not self.main_job.future.done())),
+                                          main=bool(self.main_job and not self.main_job.future.done()),
+                                          actor=bool(self.actor_job and not self.actor_job.future.done()),
+                                          context=bool(self.context_job and not self.context_job.future.done()),
+                                          motion=bool(self.motion_job and not self.motion_job.future.done()) or bool(self.motion_adapter and hasattr(self.motion_adapter,'status') and self.motion_adapter.status()['execution_busy'])),
                       ledger=list(self.state.ledger), authority=self.state.authority.wire())
-        if self.motion_adapter:report['motion_receipts']=list(self.motion_adapter.receipts)
+        if self.motion_adapter:
+            report['motion_receipts']=list(self.motion_adapter.receipts)
+            report['motion_stop_known']=motion_stopped
+        if self.speech_adapter:
+            report['speech']=self.speech_adapter.status()
+            report['execution_busy']['speech']=report['speech']['execution_busy'] or report['speech']['tts_execution_busy']
         if output:
             from pathlib import Path
             path = Path(output)

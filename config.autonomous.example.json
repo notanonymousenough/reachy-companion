@@ -108,5 +108,15 @@
     "agent_url": "http://127.0.0.1:8775",
     "cooldown_s": 4,
     "heartbeat_s": 0.04
+  },
+  "speech": {
+    "enabled": false,
+    "backend": "alsa",
+    "device": null,
+    "companion_config_path": null,
+    "sample_rate": 16000,
+    "max_seconds": 30,
+    "chunk_frames": 1600,
+    "stop_timeout_s": 0.3
   }
 }

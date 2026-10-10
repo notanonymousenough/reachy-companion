@@ -44,7 +44,23 @@ def main():
         hub_config.data['guarded_motion']['enabled']=True
         hub_config.data['network']['agent_url']=native['agent_url']
         adapter=MotionAdapter(Hub(hub_config),cooldown_s=native['cooldown_s'],heartbeat_s=native['heartbeat_s'])
-    report = Scheduler(config, gateway,adapter).run(args.duration, events, args.output)
+    speech_adapter=None
+    if config.get('speech',{}).get('enabled'):
+        if args.command!='shadow':parser.error('Device PCM requires explicit shadow audio opt-in')
+        from ..config import Config
+        from ..hub import Hub
+        from .alsa_pcm import AlsaPCM
+        from .playback import Playback
+        from .speech_adapter import SpeechAdapter,HttpTTS
+        settings=config['speech'];companion=Config(Path(args.config).resolve().parent/settings['companion_config_path'])
+        speech_hub=Hub(companion)
+        from urllib.parse import urlsplit
+        if urlsplit(companion['network']['agent_url']).hostname not in ('localhost','127.0.0.1','::1'):
+            parser.error('Owned ALSA playback runs on Agent host with loopback operator endpoint')
+        pcm=Playback(AlsaPCM(settings['device']),rate=settings['sample_rate'],max_seconds=settings['max_seconds'],
+            chunk_frames=settings['chunk_frames'],stop_timeout=settings['stop_timeout_s'],motion=adapter)
+        speech_adapter=SpeechAdapter(pcm,HttpTTS(companion['network']['voice_url'],companion.token,rate=settings['sample_rate']),lambda:speech_hub.agent('/operator'))
+    report = Scheduler(config, gateway,adapter,speech_adapter).run(args.duration, events, args.output)
     print(json.dumps({k:v for k,v in report.items() if k != 'ledger'}, ensure_ascii=False))
 
 

@@ -7,8 +7,9 @@ LOG = logging.getLogger('reachy-expressions')
 
 
 class ExpressionPlayer:
-    def __init__(self, config, request, stopping):
+    def __init__(self, config, request, stopping, permitted=None):
         self.config, self.request, self.stopping = config, request, stopping
+        self.permitted=permitted or (lambda:True)
         self.settings = config['conversation'].get('expressions', {})
         self.condition = threading.Condition()
         self.state = None
@@ -25,7 +26,7 @@ class ExpressionPlayer:
             self.thread.start()
 
     def set(self, phase, emotion='neutral', wait=False, force=False):
-        if not self.settings.get('enabled', False):
+        if not self.settings.get('enabled', False) or not self.permitted():
             return
         with self.condition:
             if force or self.state != (phase, emotion):
@@ -46,7 +47,7 @@ class ExpressionPlayer:
             self.stopping.wait(self.settings['settle_seconds'])
 
     def timeline(self, cues, clock):
-        if not self.settings.get('enabled', False):
+        if not self.settings.get('enabled', False) or not self.permitted():
             return
         from .motion_limits import validate_steps
         valid = []
@@ -66,7 +67,7 @@ class ExpressionPlayer:
             self.condition.notify_all()
 
     def wait_timeline(self, clock):
-        if not self.settings.get('enabled', False): return
+        if not self.settings.get('enabled', False) or not self.permitted(): return
         with self.condition:
             version = self.version
             deadline = time.monotonic()+self.config['timeouts']['http']+self.settings['max_total_seconds']+2
@@ -75,7 +76,7 @@ class ExpressionPlayer:
                 self.condition.wait(.05)
 
     def dance(self, result, captured_at):
-        if not self.settings.get('enabled', False): return
+        if not self.settings.get('enabled', False) or not self.permitted(): return
         from .motion_limits import validate_steps
         for step in result['steps']:validate_steps([step],self.settings)
         beat=result['beat_seconds']
@@ -146,7 +147,7 @@ class ExpressionPlayer:
                                      {'phase': state[0], 'emotion': state[1], 'variant': variant % 10000}, timeout=self.config['timeouts']['http']))
                 with self.condition:
                     stale = self.version != version
-                if not stale and plan.get('steps'):
+                if not stale and self.permitted() and plan.get('steps'):
                     self.request(self.config['network']['hub_url'], '/actions/expression',
                                  {'steps': plan['steps']}, timeout=self.config['timeouts']['http'])
                     self.last_expression = ({'phase': cue.get('phase','speaking'), 'emotion': cue.get('emotion', 'neutral'),

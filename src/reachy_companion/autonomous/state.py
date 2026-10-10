@@ -39,6 +39,7 @@ class State:
         self.focus = None
         self.actor_binding=None;self.actor_signature=None;self.actor_deadline=0
         self.motion_allowed=False;self.quiet=False;self.motion_proposals=deque(maxlen=1)
+        self.speech_attached=False;self.speech_proposals=deque(maxlen=1)
 
     def set_actor(self,receipt):
         # Trusted adapter receipt only, never a model/operator event payload.
@@ -299,7 +300,12 @@ class State:
             if not task or task.status != 'ready' or task.authority != self.authority or now > task.expires:
                 self.record('proposal_stale'); return None
             task.status = 'committed'
-            self.record('simulated_speech', task_id=task.task_id, text=task.result)
+            if self.speech_attached:
+                if isinstance(task.result,str) and 0<len(task.result)<=1024:
+                    self.speech_proposals.append(dict(text=task.result,request_id=binding.request_id,authority=self.authority,deadline=min(task.expires,now+30)))
+                    self.record('speech_proposed',task_id=task.task_id)
+                else:self.record('speech_text_rejected',task_id=task.task_id)
+            else:self.record('simulated_speech', task_id=task.task_id, text=task.result)
             task.result = None
         if start:
             ref = start['input_ref']

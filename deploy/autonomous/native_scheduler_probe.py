@@ -16,6 +16,7 @@ from reachy_companion.hub import Hub
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     for key in ('config','token-file','companion-config','output'):parser.add_argument('--'+key,type=Path,required=True)
+    parser.add_argument('--robot-idle-receipt',type=Path)
     args=parser.parse_args()
     if args.output.exists():raise FileExistsError(args.output)
     cfg=load(args.config)
@@ -66,22 +67,41 @@ def main():
         report['model_inputs']=model_inputs
         report['counts']=dict(scheduler.state.counts);report['last_model_choices']=list(scheduler.state.previous)
         if adapter.completed!=3 or adapter.failed:raise RuntimeError('Three actual model motion proposals did not pass acceptance')
-        # Keep one idle lease through >256 real heartbeat commands. No trajectory
-        # is admitted here; this measures steady service/ledger, never movement.
-        state=hub.agent('/status')['motion_actor'];common=MotionAdapter.binding(hub.agent('/status'))
-        sequence=state['command_high_watermark']
-        def call(kind,**extra):
-            nonlocal sequence
-            sequence+=1
-            return hub.native_motion(dict(common,kind=kind,command_sequence=sequence,**extra))
-        lease=call('arm',motor_enabled=True,quiet=False,privacy_all=False)['lease_id']
-        began=time.monotonic()
-        for index in range(300):
-            call('heartbeat',lease_id=lease,sequence=index);time.sleep(.02)
-        stopped=call('revoke',lease_id=lease)
-        steady=hub.agent('/status')['motion_actor']
-        report['steady_heartbeat']=dict(count=300,elapsed_s=time.monotonic()-began,high_watermark=steady['command_high_watermark'],
-            verified_stopped=stopped['verified_stopped'],target_writes=steady['target_writes'],ready=steady['ready'])
+        if args.robot_idle_receipt:
+            with args.output.with_suffix('.motions.json').open('x') as f:
+                json.dump(dict(hub_boot_id=hub.boot_id,motion_receipts=report['motion_receipts']),f)
+            deadline=time.monotonic()+30
+            while not args.robot_idle_receipt.exists():
+                if time.monotonic()>deadline:raise RuntimeError('Robot-local idle IPC proof timeout')
+                time.sleep(.1)
+            idle=json.loads(args.robot_idle_receipt.read_text())
+            binding=MotionAdapter.binding(hub.agent('/status'))
+            if not idle['accepted'] or idle['common']!=binding or idle['hub_boot_id']!=hub.boot_id:
+                raise RuntimeError('Robot-local idle proof does not match actual owner')
+            report['robot_local_heartbeat']=idle
+            steady=hub.agent('/status')['motion_actor'];common=binding;sequence=steady['command_high_watermark']
+            lease='already-revoked'
+            def call(kind,**extra):
+                nonlocal sequence
+                sequence+=1;return hub.native_motion(dict(common,kind=kind,command_sequence=sequence,**extra))
+            report['steady_heartbeat']=dict(count=300,transport='robot_local_ipc',ready=steady['ready'],verified_stopped=idle['verified_stopped'])
+        else:
+            # Keep one idle lease through >256 real heartbeat commands. No trajectory
+            # is admitted here; this measures steady service/ledger, never movement.
+            state=hub.agent('/status')['motion_actor'];common=MotionAdapter.binding(hub.agent('/status'))
+            sequence=state['command_high_watermark']
+            def call(kind,**extra):
+                nonlocal sequence
+                sequence+=1
+                return hub.native_motion(dict(common,kind=kind,command_sequence=sequence,**extra))
+            lease=call('arm',motor_enabled=True,quiet=False,privacy_all=False)['lease_id']
+            began=time.monotonic()
+            for index in range(300):
+                call('heartbeat',lease_id=lease,sequence=index);time.sleep(.02)
+            stopped=call('revoke',lease_id=lease)
+            steady=hub.agent('/status')['motion_actor']
+            report['steady_heartbeat']=dict(count=300,elapsed_s=time.monotonic()-began,high_watermark=steady['command_high_watermark'],
+                verified_stopped=stopped['verified_stopped'],target_writes=steady['target_writes'],ready=steady['ready'])
         report['policy_withdrawal']=hub.agent('/motion-policy',dict(motor_enabled=False,quiet=True,privacy_all=False))
         time.sleep(.2)
         try:

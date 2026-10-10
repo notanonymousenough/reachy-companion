@@ -67,7 +67,7 @@ class Agent:
         self.volume_lock = threading.Lock()
         self.vad = webrtcvad.Vad(self.audio['vad_mode'])
         from .expression_player import ExpressionPlayer
-        self.expressions = ExpressionPlayer(config, self.request, self.stopping)
+        self.expressions = ExpressionPlayer(config, self.request, self.stopping, permitted=self.motor_permitted)
         self.chunk_bytes = self.audio['sample_rate'] * 2 * self.audio['chunk_ms'] // 1000
         from .sound_monitor import SoundMonitor
         self.sounds = SoundMonitor(self)
@@ -89,7 +89,21 @@ class Agent:
             except (AttributeError, OSError):
                 pass
 
-    def set_microphone(self, enabled):
+    def motor_permitted(self):
+        policy=self.motion_policy.snapshot()
+        return (self.config['guarded_motion']['enabled'] is True and policy['motor_enabled'] is True
+                and policy['quiet'] is False and policy['privacy_all'] is False)
+
+    def set_motion_policy(self,value):
+        result=self.motion_policy.save(value)
+        if result['quiet'] or result['privacy_all']:
+            self.stop_speaker();self.resume_audio=None;self.pending_pcm=None
+        if not result['motor_enabled'] or result['quiet'] or result['privacy_all']:self.expressions.hold()
+        if result['privacy_all']:self.listening.clear()
+        return result
+
+    def set_microphone(self, enabled, listen=True):
+        if type(listen) is not bool:raise ValueError('listen must be boolean')
         if not isinstance(enabled, bool):
             raise ValueError('enabled must be boolean')
         with self.microphone_lock:
@@ -110,10 +124,10 @@ class Agent:
                 self.stop_speaker()
                 raise
             self.sounds.reset()
-            if enabled:
+            if enabled and listen:
                 self.listening.set()
         return {'ok': True, 'microphone_enabled': enabled, 'capture_active': self.capture_active,
-                'agent_boot_id': self.agent_boot_id, 'microphone_epoch': self.microphone_epoch}
+                'agent_boot_id': self.agent_boot_id, 'microphone_epoch': self.microphone_epoch,'listening':self.listening.is_set()}
 
     def status(self):
         motion_status = self.motion_actor_status()
@@ -144,7 +158,7 @@ class Agent:
         with self.microphone_lock:
             return dict(agent_boot_id=self.agent_boot_id,microphone_epoch=self.microphone_epoch,
                         microphone_enabled=self.microphone.enabled,capture_active=self.capture_active,
-                        phase=self.phase,microphone_state_error=self.microphone.error,motion_policy=self.motion_policy.snapshot())
+                        phase=self.phase,listening=self.listening.is_set(),microphone_state_error=self.microphone.error,motion_policy=self.motion_policy.snapshot())
 
     def set_volume(self, percent):
         from .volume import validate_percent
@@ -284,6 +298,9 @@ class Agent:
                 self.capture_active = False
 
     def play(self, encoded, epoch=None):
+        policy=self.motion_policy.snapshot()
+        policy_epoch=policy['epoch']
+        if policy['quiet'] or policy['privacy_all']:return
         if not encoded or not self.microphone.enabled or (epoch is not None and epoch != self.microphone_epoch):
             return
         self.phase = 'speaking'
@@ -294,7 +311,8 @@ class Agent:
                               stdin=subprocess.PIPE, stderr=subprocess.PIPE) as process:
             self.playback_process = process
             try:
-                if not self.microphone.enabled or (epoch is not None and epoch != self.microphone_epoch):
+                if (not self.microphone.enabled or (epoch is not None and epoch != self.microphone_epoch)
+                        or self.motion_policy.snapshot()['epoch']!=policy_epoch):
                     process.terminate()
                     return
                 _, error = process.communicate(wav, timeout=seconds + self.config['timeouts']['playback_margin'])
@@ -309,10 +327,13 @@ class Agent:
 
     def voice(self, path, payload, expected_epoch=None, allow_barge_in=True, replay=None):
         epoch = self.microphone_epoch if expected_epoch is None else expected_epoch
+        motor_policy_epoch=self.motion_policy.snapshot()['epoch']
         monitor = None
         self.current_reply_text = replay.get('spoken_text', '') if replay else ''
         def cancelled():
-            return not self.microphone.enabled or epoch != self.microphone_epoch or self.stopping.is_set()
+            policy=self.motion_policy.snapshot()
+            return (not self.microphone.enabled or epoch != self.microphone_epoch or self.stopping.is_set()
+                    or policy['epoch']!=motor_policy_epoch or policy['quiet'] or policy['privacy_all'])
         def interrupted():
             return bool(monitor and monitor.interrupted.is_set())
         def cancelled_result():
@@ -538,7 +559,7 @@ class Agent:
                         self.configure_playback()
                         self.playback_configured = True
                     if not greeted:
-                        if self.config['conversation']['wake_on_start']:
+                        if self.config['conversation']['wake_on_start'] and self.motor_permitted():
                             self.request(self.config['network']['hub_url'], '/actions/wake', {}, timeout=self.config['timeouts']['wake'])
                         if self.config['conversation']['greet_on_start']:
                             self.voice('/say', {'text': self.config['conversation']['greeting']}, expected_epoch=epoch)
@@ -701,12 +722,14 @@ def main(config, test_speaker=False):
                     size=int(self.headers.get('Content-Length',0))
                     if not 0<size<=4096:raise ValueError('Policy request bound')
                     from .autonomous.contracts import decode
-                    value=agent.motion_policy.save(decode(self.rfile.read(size)))
+                    value=agent.set_motion_policy(decode(self.rfile.read(size)))
                 elif self.path == '/microphone':
                     size = int(self.headers.get('Content-Length', 0))
                     if not 0 < size <= config['limits']['max_agent_request_bytes']:
                         raise ValueError('Invalid request size')
-                    value = agent.set_microphone(json.loads(self.rfile.read(size))['enabled'])
+                    payload=json.loads(self.rfile.read(size))
+                    if set(payload) not in ({'enabled'},{'enabled','listen'}):raise ValueError('Microphone control fields')
+                    value = agent.set_microphone(payload['enabled'],payload.get('listen',True))
                 elif self.path in ('/ask', '/say'):
                     size = int(self.headers.get('Content-Length', 0))
                     if not 0 < size <= config['limits']['max_agent_request_bytes']:

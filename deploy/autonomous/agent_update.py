@@ -13,7 +13,7 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--production-root',type=Path,required=True)
     parser.add_argument('--expected-base',required=True);parser.add_argument('--target',required=True)
-    parser.add_argument('--output',type=Path,required=True);parser.add_argument('--apply',action='store_true')
+    parser.add_argument('--operator-wiring',action='store_true');parser.add_argument('--output',type=Path,required=True);parser.add_argument('--apply',action='store_true')
     args=parser.parse_args()
     if any(not re.fullmatch('[0-9a-f]{40}',value) for value in (args.expected_base,args.target)):parser.error('Pinned full commit SHA required')
     if args.output.exists():raise FileExistsError(args.output)
@@ -58,10 +58,23 @@ def main():
     if git('rev-parse',args.target)!=args.target:raise RuntimeError('Target missing')
     changed=git('diff','--name-only',args.expected_base,args.target).splitlines()
     allowed_active=('src/reachy_companion/agent.py','src/reachy_companion/microphone.py','src/reachy_companion/speech_clock.py')
+    if args.operator_wiring:
+        allowed_active+=('src/reachy_companion/config.py','src/reachy_companion/hub.py',
+            'src/reachy_companion/motion_policy.py','src/reachy_companion/motion_proxy.py','src/reachy_companion/expression_player.py')
     critical=[path for path in changed if path.startswith('src/reachy_companion/')
               and path not in (*allowed_active,'src/reachy_companion/assets/autonomous-contracts.json')
               and not path.startswith('src/reachy_companion/autonomous/')]
-    if critical or any(path in changed for path in ('config.example.json','src/reachy_companion/deployment.py')):
+    if args.operator_wiring and 'config.example.json' in changed:
+        old=json.loads(git('show',args.expected_base+':config.example.json'))
+        new=json.loads(git('show',args.target+':config.example.json'))
+        added=new.get('guarded_motion')
+        if 'guarded_motion' not in old:
+            if added!={'enabled':False,'socket_path':'data/native-motion.sock','policy_path':'data/motion-policy.json'}:
+                raise RuntimeError('Default native actor must remain disabled')
+            new.pop('guarded_motion')
+        else:new['guarded_motion'].pop('policy_path',None)
+        if old!=new:raise RuntimeError('Unexpected example configuration changes')
+    if critical or 'src/reachy_companion/deployment.py' in changed or ('config.example.json' in changed and not args.operator_wiring):
         raise RuntimeError('Unexpected active-runtime changes')
     report=dict(mode='pinned_muted_agent_update',base=args.expected_base,target=args.target,apply=args.apply,
                 operator_before=before,changed_active_modules=[path for path in changed if path in allowed_active],

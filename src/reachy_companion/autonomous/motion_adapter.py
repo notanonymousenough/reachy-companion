@@ -12,6 +12,7 @@ class MotionAdapter:
         self.lock=threading.Lock();self.busy=self.closed=self.failed=False
         self.next_motion=0;self.lease=None;self.common=None
         self.completed=0;self.receipts=[];self.cached=None
+        self.stop_known=True
 
     @staticmethod
     def binding(status):
@@ -45,6 +46,7 @@ class MotionAdapter:
         with self.lock:
             if self.closed or self.failed or self.busy or time.monotonic()<self.next_motion:raise RuntimeError('Motion admission unavailable')
             self.busy=True
+            self.stop_known=False
         report=dict(accepted=False,request_id=proposal['request_id'],source='scheduler_fresh_model_proposal',audio_commands=0)
         try:
             fresh=self.hub.agent('/status');actor=fresh['motion_actor'];policy=actor['policy']
@@ -82,10 +84,12 @@ class MotionAdapter:
             if not report['accepted']:raise RuntimeError('Bounded movement/500ms stop acceptance failed')
             self.completed+=1
             self.lease=None
+            self.stop_known=True
         except Exception as exc:
             report['error']=type(exc).__name__+': '+str(exc)[:120]
             self.failed=True
             report['stop_verified']=self.stop()
+            self.stop_known=report['stop_verified']
             if report['stop_verified']:self.lease=None
         finally:
             self.receipts.append(report);self.receipts=self.receipts[-32:]
@@ -98,8 +102,13 @@ class MotionAdapter:
                 reply=self.hub.native_motion(dict(self.common,kind='revoke',command_sequence=0,lease_id=self.lease))
                 return reply.get('verified_stopped') is True
             except Exception:return False
-        return True
+        return not self.busy
 
     def close(self):
-        self.closed=True
-        return self.stop()
+        with self.lock:self.closed=True
+        self.stop_known=self.stop()
+        return self.stop_known
+
+    def status(self):
+        with self.lock:
+            return dict(execution_busy=self.busy,stop_known=self.stop_known,closed=self.closed)

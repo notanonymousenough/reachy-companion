@@ -40,6 +40,20 @@ class ExpressionTests(unittest.TestCase):
         self.addCleanup(a.stopping.set)
         return a
 
+    def test_microphone_test_permission_can_leave_automatic_listener_paused(self):
+        a=self.agent();a.set_microphone(True,listen=False)
+        self.assertTrue(a.microphone.enabled);self.assertFalse(a.listening.is_set())
+        self.assertFalse(a.motor_permitted())
+        with self.assertRaises(ValueError):a.set_microphone(True,listen=1)
+        a.set_microphone(False);self.assertFalse(a.microphone.enabled)
+
+    def test_quiet_operator_withdraws_speech_without_changing_mic_permission(self):
+        a=self.agent();a.set_microphone(True,listen=False)
+        a.stop_speaker=Mock();a.resume_audio={'fixture':True}
+        a.set_motion_policy(dict(motor_enabled=False,quiet=True,privacy_all=False))
+        a.stop_speaker.assert_called_once();self.assertIsNone(a.resume_audio);self.assertTrue(a.microphone.enabled)
+        self.assertTrue(a.voice('/say',{'text':'late fixture'})['cancelled'])
+
     def test_old_private_config_gets_expression_settings_after_pull(self):
         data = json.loads(self.config.filename.read_text())
         del data['conversation']['expressions']

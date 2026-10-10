@@ -39,6 +39,26 @@ class RuntimeTests(unittest.TestCase):
     def arm(self):
         reply=self.proxy.handle(self.request('arm',motor_enabled=True,quiet=False,privacy_all=False))
         self.assertTrue(reply['accepted']);return reply['result']['lease_id']
+    def test_adapter_shutdown_fences_delayed_trajectory_on_actual_runtime(self):
+        import threading
+        from reachy_companion.autonomous.motion_adapter import MotionAdapter
+        entered=threading.Event();release=threading.Event();outer=self
+        class Hub:
+            boot_id='hub'
+            def agent(self,path):return dict(outer.op,motion_actor=outer.proxy.status())
+            def native_motion(self,payload,command_id='fixture'):
+                if payload['kind']=='trajectory':entered.set();release.wait(1)
+                r=outer.proxy.handle(dict(command_id=command_id,hub_boot_id='hub',path='/native/antenna',payload=payload))
+                if not r['accepted']:raise RuntimeError('Native output withdrawn')
+                return r['result']
+        a=MotionAdapter(Hub());binding=a.binding(Hub().agent('/status'))
+        thread=threading.Thread(target=a.execute,args=(dict(request_id='pending',deadline=time.monotonic()+2,motion='attentive',actual_binding=binding),))
+        thread.start();self.assertTrue(entered.wait(1));self.assertTrue(a.close())
+        self.assertTrue(a.status()['execution_busy']);writes=self.driver.writes
+        release.set();thread.join(1);self.assertFalse(thread.is_alive())
+        self.assertEqual(self.driver.writes,writes);self.assertFalse(self.driver.enabled)
+        self.assertFalse(a.receipts[-1]['accepted']);self.assertTrue(a.status()['stop_known'])
+
     def test_proxy_motion_lease_ignores_mic_permission_but_expires_and_cannot_revive(self):
         self.assertTrue(self.proxy.status()['ready'])
         lease=self.arm()

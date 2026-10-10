@@ -29,6 +29,15 @@ def load(path):
         if (transport not in ('loopback_ssh','trusted_private_lan') or not permitted or endpoint.scheme!='http'
                 or endpoint.username or endpoint.password or endpoint.query or endpoint.fragment):
             raise ValueError('Native actor requires explicit loopback SSH or trusted private LAN transport')
+    speech=config.get('speech',{'enabled':False})
+    if type(speech.get('enabled')) is not bool:raise ValueError('Speech explicit opt-in')
+    if speech['enabled']:
+        if (speech.get('backend')!='alsa' or not isinstance(speech.get('device'),str) or not speech['device']
+                or not isinstance(speech.get('companion_config_path'),str) or not speech['companion_config_path']):raise ValueError('Owned PCM settings')
+        for key,low,high in [('sample_rate',8000,48000),('max_seconds',1,60),('chunk_frames',1,4096),('stop_timeout_s',.01,.5)]:
+            v=speech.get(key)
+            if type(v) not in (int,float) or not low<=v<=high:raise ValueError('Speech bound '+key)
+        if type(speech['sample_rate']) is not int or type(speech['chunk_frames']) is not int:raise ValueError('PCM integer format')
     for key in ('period_s', 'fast_deadline_s', 'http_timeout_s', 'task_timeout_s', 'proposal_ttl_s'):
         if type(config[key]) not in (int, float) or not 0 < config[key] <= 120:
             raise ValueError('Invalid timing: ' + key)
