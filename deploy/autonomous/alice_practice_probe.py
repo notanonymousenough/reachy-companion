@@ -1,6 +1,6 @@
 """One authorized neutral voice question, bounded local capture and PC STT.
 
-No automatic dialogue/LLM reply or repeat wake phrase. Raw audio stays in RAM
+Optional fixed acknowledgement, with no LLM reply or repeat wake phrase. Raw audio stays in RAM
 and travels only to the configured owned compute PC. Unknown speaker identity.
 """
 import argparse,array,base64,json,math,re,select,subprocess,sys,threading,time
@@ -12,6 +12,7 @@ from reachy_companion.hub import Hub
 from reachy_companion.autonomous.alsa_pcm import AlsaPCM
 from reachy_companion.autonomous.speech_adapter import HttpTTS
 from reachy_companion.autonomous.contracts import uid
+from reachy_companion.autonomous.response_endpoint import ResponseEndpoint
 
 
 def agent(hub,path,payload=None):
@@ -47,16 +48,22 @@ def main():
     for key in ('config','output','owner-file'):p.add_argument('--'+key,type=Path,required=True)
     p.add_argument('--allow-capture-output',action='store_true');p.add_argument('--cleanup-only',action='store_true')
     p.add_argument('--capture-reference',action='store_true')
+    p.add_argument('--endpoint',action='store_true')
+    p.add_argument('--acknowledge',action='store_true')
     p.add_argument('--capture-channels',type=int,choices=(1,2),default=1)
     p.add_argument('--question',choices=('two_plus_two','three_plus_three'),default='two_plus_two');a=p.parse_args()
     if a.cleanup_only:cleanup(a.config,a.owner_file);return
+    if (a.endpoint and not a.capture_reference) or (a.acknowledge and not a.endpoint):raise ValueError('Endpoint/reference required for acknowledgement')
     if not a.allow_capture_output or a.output.exists() or a.owner_file.exists():raise ValueError('Explicit fresh finite physical voice practice required')
     cfg=Config(a.config);hub=Hub(cfg);before=agent(hub,'/operator')
     if before['microphone_enabled'] or before['capture_active'] or before['phase']!='paused':raise RuntimeError('Idle test owner baseline required')
     if before['motion_policy']['quiet'] or before['motion_policy']['privacy_all']:raise RuntimeError('Operator quiet/privacy blocks practice')
     question='Алиса, сколько будет два плюс два?' if a.question=='two_plus_two' else 'Алиса, сколько будет три плюс три?'
     expected='4' if a.question=='two_plus_two' else '6'
-    opener=build_opener(ProxyHandler({}));pcm=bytearray();captured=bytearray();capture=None;backend=None;stream=uid();reference_boundary=0
+    opener=build_opener(ProxyHandler({}));pcm=bytearray();captured=bytearray();capture=None;backend=None;stream=uid();reference_boundary=0;endpoint=None
+    if a.endpoint:
+        import webrtcvad
+        endpoint=ResponseEndpoint(webrtcvad.Vad(2))
     report=dict(mode='one_finite_external_speaker_practice',accepted=False,question=question,rounds=1,
         private_cloud_inputs=0,automatic_repeat_wake_phrase=False,raw_audio_retained=False,operator_before=before,motor_commands=0)
     owner=dict(agent_boot_id=before['agent_boot_id'],initial_microphone_epoch=before['microphone_epoch'],
@@ -115,16 +122,26 @@ def main():
         # This window excludes the owned playback itself. The response speaker
         # remains unknown; an arithmetic match is not biometric identity.
         if not capture:capture=begin_capture(capture_seconds);capture_started=time.monotonic()
-        start=capture_started;deadline=start+capture_seconds+1;next_policy=0
+        start=capture_started;deadline=start+capture_seconds+1;next_policy=0;endpoint_offset=reference_boundary;endpoint_stopped=False
         while capture.poll() is None:
             now=time.monotonic()
             if now>=deadline:raise RuntimeError('Capture deadline')
             if now>=next_policy:
                 if not valid():raise RuntimeError('Operator withdrew capture')
                 next_policy=now+.1
-            read_capture();time.sleep(.005)
+            read_capture()
+            if endpoint:
+                end=len(captured)//(2*a.capture_channels)*(2*a.capture_channels)
+                chunk=bytes(captured[endpoint_offset:end]);endpoint_offset=end
+                if a.capture_channels==2:
+                    samples=array.array('h');samples.frombytes(chunk);chunk=samples[::2].tobytes();del samples
+                endpoint.feed(chunk)
+                if endpoint.reason:
+                    capture.terminate();endpoint_stopped=True;break
+            time.sleep(.005)
+        if endpoint_stopped:capture.wait(timeout=1)
         captured.extend(capture.stdout.read() or b'');capture.wait(timeout=1)
-        if capture.returncode or len(captured)>16000*2*capture_seconds*a.capture_channels or len(captured)%(2*a.capture_channels):raise RuntimeError('Capture failed')
+        if (capture.returncode and not endpoint_stopped) or len(captured)>16000*2*capture_seconds*a.capture_channels or len(captured)%(2*a.capture_channels):raise RuntimeError('Capture failed')
         report.update(capture_elapsed_s=time.monotonic()-start,captured_frames=len(captured)//(2*a.capture_channels),capture_reaped=True,capture_channels=a.capture_channels)
         del captured[:reference_boundary]
         if a.capture_channels==2:
@@ -135,6 +152,11 @@ def main():
             report['diagnostic_selected_channel']=chosen
             captured=bytearray(channels[chosen]);del channels,samples
         report['response_capture_energy']=energy(captured)
+        if endpoint:
+            report['endpoint']=endpoint.receipt()
+            captured.clear();captured.extend(endpoint.pcm);endpoint.clear()
+            if endpoint.reason!='speech_then_silence':raise RuntimeError('No bounded speech endpoint')
+            report['transcribed_capture_energy']=energy(captured)
         start=time.monotonic()
         request=Request(cfg['network']['compute_url']+'/transcribe',data=json.dumps(dict(pcm_base64=base64.b64encode(captured).decode())).encode(),headers={'Authorization':'Bearer '+cfg.token,'Content-Type':'application/json'})
         with opener.open(request,timeout=12) as response:recognized=json.load(response)['transcript']
@@ -145,7 +167,34 @@ def main():
             external_answer=expected if any(w in (expected,'четыре' if expected=='4' else 'шесть') for w in words) and not any(w in ('нет','не') for w in words) else None,
             transcript_retained=False,automatic_reply=False)
         report['accepted']=report['external_answer']==expected and overlap<.75 and report['speaker_stop']['verified_stopped']
-    except Exception as exc:report['error']=type(exc).__name__+': '+str(exc)[:128]
+        if a.acknowledge and report['accepted']:
+            # Capture is already reaped. This fixed local reaction cannot wake
+            # the external speaker or start a self-recognition loop.
+            acknowledgement='Спасибо, ответ принят.'
+            start=time.monotonic()
+            for chunk in HttpTTS(cfg['network']['voice_url'],cfg.token,rate=16000,max_event=cfg['streaming']['max_event_bytes'],timeout=10).stream(acknowledgement,threading.Event()):
+                if len(pcm)+len(chunk)>16000*2*5 or not valid():raise RuntimeError('Acknowledgement TTS/authority bound')
+                pcm.extend(chunk)
+            report['acknowledgement_tts_elapsed_s']=time.monotonic()-start
+            stream=uid();backend=AlsaPCM(cfg['audio']['playback_device']);backend.reserve(stream);backend.start(stream,16000)
+            written=0;start=time.monotonic();deadline=start+6;next_policy=0
+            while True:
+                now=time.monotonic()
+                if now>=deadline:raise RuntimeError('Finite acknowledgement playback timeout')
+                if now>=next_policy:
+                    if not valid():raise RuntimeError('Operator withdrew acknowledgement')
+                    next_policy=now+.1
+                if written<len(pcm)//2:written+=backend.write(stream,bytes(pcm[written*2:(written+1600)*2]))
+                elif backend.finish(stream):break
+                time.sleep(.005)
+            report['acknowledgement_frames_consumed']=backend.progress(stream)['consumed_frames']
+            report['acknowledgement_playback_elapsed_s']=time.monotonic()-start
+            report['acknowledgement_stop']=backend.stop(stream);backend=None;pcm.clear()
+            report['accepted']=report['accepted'] and report['acknowledgement_stop']['verified_stopped']
+            report['automatic_reply']=True;report['reply_kind']='fixed_neutral_acknowledgement'
+    except Exception as exc:
+        report['accepted']=False
+        report['error']=type(exc).__name__+': '+str(exc)[:128]
     finally:
         if capture:
             if capture.poll() is None:capture.terminate()
@@ -157,6 +206,7 @@ def main():
             try:report['failure_speaker_stop']=backend.stop(stream)
             except Exception as exc:report['speaker_stop_error']=type(exc).__name__;report['accepted']=False
         pcm.clear();captured.clear()
+        if endpoint:endpoint.clear()
         report['microphone_restored']=False
         try:
             cleanup(a.config,a.owner_file)
