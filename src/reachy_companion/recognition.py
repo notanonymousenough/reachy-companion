@@ -24,7 +24,7 @@ class Recognizer:
             SetLogLevel(-1)
             self.model = Model(str(config.path(config['models']['stt']['path'])))
 
-    def transcribe(self, pcm):
+    def transcribe(self, pcm, *, diagnostics=None):
         audio = self.config['audio']
         if not pcm or len(pcm) % 2 or len(pcm) > audio['max_input_seconds'] * audio['sample_rate'] * 2:
             raise ValueError('Invalid mono 16 kHz PCM input')
@@ -33,13 +33,29 @@ class Recognizer:
                 import numpy as np
                 samples = np.frombuffer(pcm, dtype='<i2').astype(np.float32) / 32768
                 s = self.settings
+                if diagnostics is not None:
+                    diagnostics.update(backend='faster_whisper',whisper_invoked=True,segments_seen=0,segments_accepted=0,
+                        segments_rejected=0,rejected_logprob=0,rejected_no_speech=0,accepted_empty_text=0)
                 segments, _ = self.model.transcribe(samples, language=s['language'], beam_size=s['beam_size'],
                     initial_prompt=s['initial_prompt'], vad_filter=s['vad_filter'],
                     condition_on_previous_text=False, temperature=0,
                     no_speech_threshold=s['no_speech_threshold'], log_prob_threshold=s['log_prob_threshold'])
-                return ' '.join(seg.text.strip() for seg in segments
-                                if seg.avg_logprob >= s['log_prob_threshold'] and seg.no_speech_prob < s['no_speech_threshold']).strip()
+                parts=[]
+                for seg in segments:
+                    log_ok=seg.avg_logprob>=s['log_prob_threshold']
+                    if diagnostics is None and not log_ok:continue # preserve original default short-circuit
+                    speech_ok=seg.no_speech_prob<s['no_speech_threshold']
+                    if diagnostics is not None:
+                        diagnostics['segments_seen']+=1;diagnostics['rejected_logprob']+=int(not log_ok)
+                        diagnostics['rejected_no_speech']+=int(not speech_ok)
+                        diagnostics['segments_rejected']+=int(not (log_ok and speech_ok))
+                    if log_ok and speech_ok:
+                        text=seg.text.strip();parts.append(text)
+                        if diagnostics is not None:
+                            diagnostics['segments_accepted']+=1;diagnostics['accepted_empty_text']+=int(not text)
+                return ' '.join(parts).strip()
             from vosk import KaldiRecognizer
+            if diagnostics is not None:diagnostics.update(backend='vosk',whisper_invoked=False)
             recognizer = KaldiRecognizer(self.model, audio['sample_rate'])
             parts = []
             for offset in range(0, len(pcm), 8000):

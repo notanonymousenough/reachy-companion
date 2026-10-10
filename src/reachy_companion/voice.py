@@ -5,6 +5,7 @@ import hmac
 import io
 import json
 import logging
+import math
 import re
 import subprocess
 import threading
@@ -73,6 +74,40 @@ class Pipeline:
         if hasattr(self, 'sounds') and self.sounds.classify(pcm[-int(self.config['conversation']['sound_reactions']['window_seconds']*32000):])['kind'] == 'music':
             return ''
         return self.stt.transcribe(pcm)
+
+    def transcribe_diagnostic(self, pcm):
+        """Opt-in per-request stage metadata only; no second inference or storage."""
+        if self.config['conversation'].get('recognition',{}).get('diagnostics_enabled') is not True:
+            raise ValueError('Transcription diagnostics are not enabled')
+        report=dict(prefilter_kind='unavailable',scores={},prefilter_skip=False,recognizer_invoked=False,
+            whisper_invoked=False,pcm_frames=len(pcm)//2)
+        if hasattr(self,'sounds'):
+            window=int(self.config['conversation']['sound_reactions']['window_seconds']*32000)
+            sound=self.sounds.classify(pcm[-window:]);kind=sound['kind']
+            report['prefilter_kind']=kind if kind in ('music','speech','silence','sound') else 'unknown'
+            report['prefilter_frames']=min(len(pcm),window)//2
+            for name in ('speech','music'):
+                value=sound.get(name)
+                if type(value) in (int,float) and math.isfinite(value) and 0<=value<=1:report['scores'][name]=value
+            report['prefilter_skip']=kind=='music'
+            if report['prefilter_skip']:
+                report['outcome']='music_prefilter_skipped_whisper'
+                return '',report
+        counts={};report['recognizer_invoked']=True
+        text=self.stt.transcribe(pcm,diagnostics=counts)
+        report.update(counts);report['outcome']='recognized' if text else ('whisper_empty' if report['whisper_invoked'] else 'recognizer_empty')
+        return text,report
+
+    def transcribe_response(self,payload):
+        if not isinstance(payload,dict):raise ValueError('Typed audio request required')
+        requested=payload.get('diagnostics',False)
+        if type(requested) is not bool:raise ValueError('Boolean diagnostics request required')
+        pcm=base64.b64decode(payload['pcm_base64'],validate=True)
+        if requested:text,diagnostics=self.transcribe_diagnostic(pcm)
+        else:text=self.transcribe(pcm)
+        result={'ok':True,'transcript':text,'decision':self.classify(text)}
+        if requested:result['diagnostics']=diagnostics
+        return result
 
     def classify(self, text):
         from .intents import classify, classify_with_model
@@ -336,8 +371,7 @@ def main(config, worker=False):
                     if not 0 < size <= config['limits']['max_request_bytes']:
                         raise ValueError('Invalid audio request size')
                     payload = json.loads(self.rfile.read(size))
-                    text = pipeline.transcribe(base64.b64decode(payload['pcm_base64'], validate=True))
-                    self.reply(200, {'ok': True, 'transcript': text, 'decision': pipeline.classify(text)})
+                    self.reply(200, pipeline.transcribe_response(payload))
                 except (ValueError, KeyError, TypeError) as exc:
                     self.reply(400, {'error': str(exc)})
                 except Exception:
