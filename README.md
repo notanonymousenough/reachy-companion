@@ -421,6 +421,8 @@ PC worker использует [Google YAMNet](https://www.tensorflow.org/hub/tu
 
 ## Автономный shadow/replay prototype
 
+Конечный распределённый audio runtime и его фактические результаты описаны в [realtime-audio.md](docs/autonomous-companion/realtime-audio.md): capture/PCM на Reachy, scheduler на Hub, STT/fast/main/TTS на PC. Полный двухраундовый голосовой прогон пока не принят: сеть отзывает lease; частичное физическое воспроизведение и восстановление микрофона проверены. Постоянная служба не включена.
+
 Первый изолированный slice запускается отдельно от текущих служб: typed contracts/epochs, bounded snapshots, непрерывный scheduler, PC model gateway и simulated actuator ledger. Main default — существующая9B; fast lane отдельно на ПК. [Команды, границы реализации и результаты проверок](docs/autonomous-companion/first-slice.md). Replay не выполняет inference и не управляет роботом; real-model shadow требует проверенных runtime/tokenizer/CPU metadata.
 
 Optional n8n workflow/broker: [развёртывание, проверки и rollback](docs/autonomous-companion/workflows.md). Существующий n8n сохранён; physical actors и real-model gates не включались.

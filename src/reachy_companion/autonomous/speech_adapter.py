@@ -12,9 +12,10 @@ class HttpTTS:
     def __init__(self,url,token,*,rate=16000,max_event=65536,timeout=5):
         self.url=url.rstrip('/')+'/stream/say';self.token=token;self.rate=rate;self.max_event=max_event;self.timeout=timeout
         self.lock=threading.Lock();self.response=None
+        self.opener=build_opener(ProxyHandler({}))
     def stream(self,text,cancel):
         request=Request(self.url,data=json.dumps({'text':text}).encode(),headers={'Authorization':'Bearer '+self.token,'Content-Type':'application/json'})
-        with build_opener(ProxyHandler({})).open(request,timeout=self.timeout) as response:
+        with self.opener.open(request,timeout=self.timeout) as response:
             with self.lock:self.response=response
             try:
                 while not cancel.is_set():
@@ -132,23 +133,27 @@ class SpeechAdapter:
         self.cancelled=threading.Event();cancel=self.cancelled
         authority=self.authority
         def work():
-            report=dict(request_id=proposal['request_id'],tts_complete=False)
+            started=time.monotonic()
+            report=dict(request_id=proposal['request_id'],tts_complete=False,tts_frames=0,producer_started_at=started)
             try:
                 if cancel.is_set():return
                 stream=self.playback.begin(authority,proposal['request_id'],deadline=min(proposal['deadline'],time.monotonic()+60))
                 report['stream_id']=stream
                 if cancel.is_set():return
                 for pcm in self.tts.stream(proposal['text'],cancel):
+                    if 'tts_first_pcm_s' not in report:report['tts_first_pcm_s']=time.monotonic()-started
                     if cancel.is_set():break
                     size=self.playback.chunk_frames*2
                     for offset in range(0,len(pcm),size):
                         if not self.playback.push(stream,pcm[offset:offset+size]):raise RuntimeError('Late TTS chunk withdrawn')
+                        report['tts_frames']+=len(pcm[offset:offset+size])//2
                 if not cancel.is_set():report['tts_complete']=self.playback.finish(stream)
             except Exception as exc:
                 report['error']=type(exc).__name__
                 self.playback.interrupt('tts_failure',preserve=False,wait=False)
             finally:
                 report['cancelled']=cancel.is_set()
+                report['producer_elapsed_s']=time.monotonic()-started
                 with self.lock:self.receipts=(self.receipts+[report])[-32:]
         self.worker=threading.Thread(target=work,daemon=True);self.worker.start()
 

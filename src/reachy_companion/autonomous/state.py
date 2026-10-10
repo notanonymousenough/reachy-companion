@@ -41,6 +41,7 @@ class State:
         self.motion_allowed=False;self.quiet=False;self.motion_proposals=deque(maxlen=1)
         self.speech_attached=False;self.speech_proposals=deque(maxlen=1)
         self.speech_operator_signature=None
+        self.audio_source_bound=False
 
     def set_speech_operator(self,receipt):
         signature=(tuple(receipt['binding']),receipt['microphone_enabled'],receipt['quiet'],receipt['privacy_all'])
@@ -118,6 +119,11 @@ class State:
             self.candidate_kinds[ref] = "main"
             self.current_utterance = text
             self.record('new_turn')
+            if event.get('audio'):
+                audio=event['audio']
+                self.record('audio_turn',source_boot=audio['source_boot'],sequence=audio['sequence'],
+                    lineage_id=audio['lineage_id'],origin=audio['origin'],
+                    speaker_identity='unknown',confirmed=False,capture_age_ms=audio['capture_age_ms'])
         elif kind == 'workflow':
             value = event.get('value')
             if not isinstance(value, str) or len(value)>256:
@@ -241,7 +247,7 @@ class State:
                     speech_epoch=self.authority.speech_epoch),
             sim=dict(origin='simulated', mood=0, arousal=0.2, fatigue=0, curiosity=0.5,
                      confidence=None, social_need=0, transition_reasons=[]),
-            scene='Actual bounded antenna17 owner; any fixture sensors are synthetic. Camera semantics unavailable.' if self.actor_binding else 'Shadow actors; camera observations include age bounds and provenance.' if self.context_sensors else 'Shadow/replay. No physical sensor or actuator connected.',
+            scene='Actual bounded antenna17 owner; any fixture sensors are synthetic. Camera semantics unavailable.' if self.actor_binding else 'Authenticated audio capture source and measured device playback; speaker identity unknown. Camera semantics unavailable.' if self.audio_source_bound else 'Shadow actors; camera observations include age bounds and provenance.' if self.context_sensors else 'Shadow/replay. No physical sensor or actuator connected.',
             sensors=([s.view(now, self.muted) for s in list(self.sensors.values())[:12-len(self.context_sensors)]]+self.context_view(now)),
             prev=list(self.previous), dialogue='' if self.muted or self.privacy else self.current_utterance,
             memory=[] if self.privacy else [dict(alias=alias,type=item['epistemic_type'],summary=item['content']) for alias,item in self.memory_items.items() if self.memory_valid(item)], personality='Ричи: краткий, прямой, любопытный.',

@@ -87,13 +87,14 @@ class ReplayGateway:
 
 
 class Scheduler:
-    def __init__(self, config, gateway, motion_adapter=None, speech_adapter=None):
+    def __init__(self, config, gateway, motion_adapter=None, speech_adapter=None, audio_adapter=None):
         # Compile/import schema machinery before admitting clock ticks.
         for name in ('FastView','FastChoice','MemoryItem'):validator(name)
         self.config, self.gateway = config, gateway
         self.state = State(gateway.boot_id, config)
         self.motion_adapter=motion_adapter
         self.speech_adapter=speech_adapter;self.state.speech_attached=speech_adapter is not None
+        self.audio_adapter=audio_adapter
         self.actor_job=self.motion_job=None;self.next_actor=0
         if motion_adapter:
             self.state.muted=True
@@ -109,6 +110,7 @@ class Scheduler:
 
     def ingest(self, event, now=None):
         if self.closed:return
+        if self.audio_adapter and event.get('type')=='operator':self.audio_adapter.interrupt()
         if self.speech_adapter and event.get('type') in ('operator','utterance'):
             self.speech_adapter.interrupt('human_utterance' if event['type']=='utterance' else 'operator',False)
         self.state.ingest(event, time.monotonic() if now is None else now)
@@ -131,6 +133,11 @@ class Scheduler:
         if self.speech_adapter:
             receipt=self.speech_adapter.operator_view()
             if receipt:self.state.set_speech_operator(receipt)
+        else:receipt=None
+        if self.audio_adapter:
+            self.state.audio_source_bound=self.audio_adapter.status()['source_boot'] is not None
+            event=self.audio_adapter.advance(self.state.authority,receipt)
+            if event:self.ingest(event,now)
         if self.motion_adapter:
             if self.actor_job and self.actor_job.future.done():
                 try:self.state.set_actor(self.actor_job.future.result())
@@ -236,6 +243,7 @@ class Scheduler:
             time.sleep(min(0.01, self.config['period_s']/10))
         # Stop new admission, invalidate any pending action; no model cancellation claim.
         if self.speech_adapter:self.speech_adapter.close()
+        if self.audio_adapter:self.audio_adapter.close()
         self.closed=True
         motion_stopped=self.motion_adapter.close() if self.motion_adapter else True
         self.state.ingest(dict(type='operator', muted=True),time.monotonic())
@@ -253,6 +261,9 @@ class Scheduler:
         if self.speech_adapter:
             report['speech']=self.speech_adapter.status()
             report['execution_busy']['speech']=report['speech']['execution_busy'] or report['speech']['tts_execution_busy']
+        if self.audio_adapter:
+            report['audio']=self.audio_adapter.status()
+            report['execution_busy']['audio']=report['audio']['execution_busy']
         if output:
             from pathlib import Path
             path = Path(output)

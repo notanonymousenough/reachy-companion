@@ -54,6 +54,20 @@ class ExpressionTests(unittest.TestCase):
         a.stop_speaker.assert_called_once();self.assertIsNone(a.resume_audio);self.assertTrue(a.microphone.enabled)
         self.assertTrue(a.voice('/say',{'text':'late fixture'})['cancelled'])
 
+    def test_policy_rpc_cas_requires_current_boot_and_preserves_human_withdrawal(self):
+        a=self.agent();policy=dict(motor_enabled=False,quiet=False,privacy_all=False)
+        for extra in (dict(expected_epoch=0),dict(expected_boot_id='old',expected_epoch=0),
+                      dict(expected_boot_id=a.agent_boot_id,expected_epoch=True),
+                      dict(expected_boot_id=a.agent_boot_id,expected_epoch=0,owner_id=None)):
+            with self.assertRaises((ValueError,RuntimeError)):a.set_motion_policy(dict(policy,**extra))
+        self.assertEqual(a.motion_policy.snapshot()['epoch'],0)
+        a.set_motion_policy(dict(policy,expected_boot_id=a.agent_boot_id,expected_epoch=0,owner_id='runtime'))
+        self.assertEqual(a.operator_status()['motion_policy_owner_id'],'runtime')
+        a.set_motion_policy(dict(policy,quiet=True))
+        with self.assertRaises(RuntimeError):
+            a.set_motion_policy(dict(policy,expected_boot_id=a.agent_boot_id,expected_epoch=1,expected_owner_id='runtime'))
+        self.assertTrue(a.operator_status()['motion_policy']['quiet'])
+
     def test_old_private_config_gets_expression_settings_after_pull(self):
         data = json.loads(self.config.filename.read_text())
         del data['conversation']['expressions']

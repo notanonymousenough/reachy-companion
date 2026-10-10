@@ -96,7 +96,16 @@ class Agent:
                 and policy['quiet'] is False and policy['privacy_all'] is False)
 
     def set_motion_policy(self,value):
-        result=self.motion_policy.save(value)
+        if not isinstance(value,dict):raise ValueError('Policy object required')
+        value=dict(value)
+        parameters={key:value.pop(key) for key in ('expected_boot_id','expected_epoch','owner_id','expected_owner_id') if key in value}
+        if parameters:
+            if (parameters.get('expected_boot_id')!=self.agent_boot_id or type(parameters.get('expected_epoch')) is not int
+                    or not 0<=parameters['expected_epoch']<2**63):raise RuntimeError('Complete current policy boot/epoch required')
+            if any(key in parameters and parameters[key] is None for key in ('owner_id','expected_owner_id')):
+                raise ValueError('Policy owner cannot be null')
+            parameters.pop('expected_boot_id')
+        result=self.motion_policy.save(value,**parameters)
         if result['quiet'] or result['privacy_all']:
             self.stop_speaker();self.resume_audio=None;self.pending_pcm=None
         if not result['motor_enabled'] or result['quiet'] or result['privacy_all']:self.expressions.hold()
@@ -170,10 +179,12 @@ class Agent:
         # Separate from /status: the native monitor must not recursively ask
         # its own IPC server for readiness while fetching operator authority.
         with self.microphone_lock:
+            policy,policy_owner=self.motion_policy.owned_snapshot()
             return dict(agent_boot_id=self.agent_boot_id,microphone_epoch=self.microphone_epoch,
                         microphone_owner_id=self.microphone_owner_id,
                         microphone_enabled=self.microphone.enabled,capture_active=self.capture_active,
-                        phase=self.phase,listening=self.listening.is_set(),microphone_state_error=self.microphone.error,motion_policy=self.motion_policy.snapshot())
+                        phase=self.phase,listening=self.listening.is_set(),microphone_state_error=self.microphone.error,
+                        motion_policy=policy,motion_policy_owner_id=policy_owner)
 
     def set_volume(self, percent):
         from .volume import validate_percent
