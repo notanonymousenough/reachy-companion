@@ -1,5 +1,6 @@
 import threading
 import json
+import os
 import socket
 import time
 import unittest
@@ -20,6 +21,44 @@ class Peer:
 
 
 class DatagramTests(unittest.TestCase):
+    def test_real_socket_receipt_survives_failure_close_and_caller_mutation(self):
+        sink=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);sink.bind(('127.0.0.1',0));self.addCleanup(sink.close)
+        client=PeerClient('http://127.0.0.1:1','t'*32,'controller')
+        transport=DatagramRenewal(client,'source',sink.getsockname()[1]);self.addCleanup(transport.close)
+        local=transport.socket.getsockname();peer=transport.socket.getpeername()
+        self.assertIsNone(transport.status()['socket_receipt'])
+        with self.assertRaises(socket.timeout):transport.renew()
+        status=transport.status();receipt=status['socket_receipt']
+        self.assertEqual((receipt['local_ipv4'],receipt['local_port']),local)
+        self.assertEqual((receipt['peer_ipv4'],receipt['peer_port']),peer)
+        self.assertEqual(receipt['pid'],os.getpid());self.assertEqual(receipt['source_boot'],'source')
+        self.assertEqual(receipt['controller'],'controller')
+        self.assertEqual(status['first_failed_attempt']['socket_receipt'],receipt)
+        # A received header's client port can be matched to this actual kernel tuple.
+        _,sender=sink.recvfrom(8193);self.assertEqual(sender,local)
+        transport.close();closed=transport.status()['first_close']
+        self.assertEqual(closed['socket_receipt'],receipt)
+        expected=dict(receipt)
+        status['socket_receipt']['pid']=0;status['first_failed_attempt']['socket_receipt']['pid']=0
+        closed['socket_receipt']['pid']=0
+        self.assertEqual(transport.status()['socket_receipt']['pid'],os.getpid())
+        self.assertEqual(transport.status()['first_close']['socket_receipt']['pid'],os.getpid())
+        transport.close();self.assertEqual(transport.status()['first_close']['socket_receipt'],expected)
+        self.assertNotIn('t'*32,json.dumps(transport.status()));self.assertNotIn('nonce',json.dumps(transport.status()))
+
+    def test_socket_receipt_rejects_invalid_kernel_tuple_before_send(self):
+        client=PeerClient('http://127.0.0.1:1','t'*32,'controller')
+        transport=DatagramRenewal(client,'source',1);transport.socket.close()
+        class InvalidSocket:
+            def getsockname(self):return self.local
+            def getpeername(self):return ('127.0.0.1',1)
+        transport.socket=InvalidSocket()
+        for address in (('127.0.0.1',True),('127.0.0.1',0),('127.0.0.1','1'),('::1',1),('0.0.0.0',1),('127.0.0.1',)):
+            with self.subTest(address=address):
+                transport.socket.local=address
+                with self.assertRaises(ValueError):transport.capture_socket_receipt()
+                self.assertIsNone(transport.status()['socket_receipt'])
+
     def test_challenge_expiry_single_use_sequence_and_withdrawal(self):
         peer=Peer();server=LeaseDatagramServer(peer,'t'*32,'127.0.0.1',0);self.addCleanup(server.close)
         def hello():return server.handle(dict(kind='hello',source_boot='boot',controller='owner',echo='e'*32))
@@ -49,8 +88,10 @@ class DatagramTests(unittest.TestCase):
 
     def test_exchange_phase_failure_tail_is_bounded_and_contains_no_secrets(self):
         client=PeerClient('http://127.0.0.1:1','t'*32,'controller')
-        transport=DatagramRenewal(client,'source',1);transport.socket.close()
+        transport=DatagramRenewal(client,'source',1);local=transport.socket.getsockname();remote=transport.socket.getpeername();transport.socket.close()
         class NoReplies:
+            def getsockname(self):return local
+            def getpeername(self):return remote
             def setblocking(self,value):self.blocking=value
             def settimeout(self,value):self.blocking=True
             def send(self,raw):return len(raw)
@@ -76,8 +117,10 @@ class DatagramTests(unittest.TestCase):
     def test_lost_ack_first_failure_is_preserved_and_fresh_next_exchange_succeeds(self):
         peer=Peer();server=LeaseDatagramServer(peer,'t'*32,'127.0.0.1',0);self.addCleanup(server.close)
         client=PeerClient('http://127.0.0.1:1','t'*32,'owner')
-        transport=DatagramRenewal(client,'boot',1);transport.socket.close()
+        transport=DatagramRenewal(client,'boot',1);local=transport.socket.getsockname();remote=transport.socket.getpeername();transport.socket.close()
         class LocalExchange:
+            def getsockname(self):return local
+            def getpeername(self):return remote
             def __init__(self):self.answer=None;self.drop_ack=True
             def setblocking(self,value):self.blocking=value
             def settimeout(self,value):self.blocking=True
@@ -103,8 +146,10 @@ class DatagramTests(unittest.TestCase):
 
     def test_late_previous_ack_is_rejected_during_current_challenge_without_renewal(self):
         client=PeerClient('http://127.0.0.1:1','t'*32,'owner')
-        transport=DatagramRenewal(client,'boot',1);transport.socket.close();sent=[]
+        transport=DatagramRenewal(client,'boot',1);local=transport.socket.getsockname();remote=transport.socket.getpeername();transport.socket.close();sent=[]
         class LateAck:
+            def getsockname(self):return local
+            def getpeername(self):return remote
             def setblocking(self,value):self.blocking=value
             def settimeout(self,value):self.blocking=True
             def send(self,raw):sent.append(verified(transport.secret,raw)['kind']);return len(raw)

@@ -4,6 +4,9 @@ Challenges expire on the device clock after 100 ms and are consumed once.
 Neither hello nor a delayed renewal can revive a withdrawn device owner.
 """
 import hashlib
+import copy
+import ipaddress
+import os
 from collections import Counter,deque
 import hmac
 import json
@@ -132,9 +135,26 @@ class DatagramRenewal:
         self.last_send=None;self.last_ack=None;self.ack_sequence=None
         self.diagnostics_lock=threading.Lock();self.exchange_phase='idle';self.exchange_tail=deque(maxlen=16)
         self.attempts=0;self.attempt_started=None;self.first_failed_attempt=None;self.last_receive=None
+        self.socket_receipt=None;self.first_close=None
         self.source=source_boot;self.controller=client.controller;self.secret=key(client.token,source_boot);self.sequence=0
         self.socket=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
         self.socket.connect((endpoint.hostname,port));self.socket.settimeout(.04)
+    def capture_socket_receipt(self):
+        """Sample the connected kernel socket before its first hello; not delivery proof."""
+        with self.diagnostics_lock:
+            if self.socket_receipt is not None:return
+            local=self.socket.getsockname();peer=self.socket.getpeername();pid=os.getpid()
+            for address in (local,peer):
+                if (not isinstance(address,tuple) or len(address)!=2 or not isinstance(address[0],str)
+                        or type(address[1]) is not int or not 1<=address[1]<=65535):
+                    raise ValueError('Typed UDP socket address')
+                if ipaddress.IPv4Address(address[0]).is_unspecified:raise ValueError('Bound UDP socket address')
+            if type(pid) is not int or pid<=0:raise ValueError('Typed process identity')
+            if any(not isinstance(value,str) or not value or len(value)>256 for value in (self.source,self.controller)):
+                raise ValueError('Typed UDP socket binding')
+            self.socket_receipt=dict(origin='connected_udp_socket_before_first_hello',pid=pid,
+                source_boot=self.source,controller=self.controller,local_ipv4=local[0],local_port=local[1],
+                peer_ipv4=peer[0],peer_port=peer[1],captured_monotonic=time.monotonic())
     def receive(self):
         raw=self.socket.recv(8193);self.last_receive=time.monotonic()
         return verified(self.secret,raw)
@@ -152,6 +172,7 @@ class DatagramRenewal:
                 if self.first_failed_attempt is None:
                     now=time.monotonic()
                     self.first_failed_attempt=dict(source_boot=self.source,attempt=self.attempts,phase=phase,
+                        socket_receipt=copy.deepcopy(self.socket_receipt),
                         sequence=self.sequence,ack_sequence=self.ack_sequence,error_kind=kind,
                         elapsed_ms=max(0,(now-self.attempt_started)*1000),
                         last_send_age_ms=None if self.last_send is None else max(0,(now-self.last_send)*1000),
@@ -165,6 +186,7 @@ class DatagramRenewal:
             try:self.socket.recv(8193)
             except BlockingIOError:break
         self.socket.settimeout(.04)
+        self.record('socket_binding');self.capture_socket_receipt()
         began=time.monotonic();echo=secrets.token_hex(16)
         self.record('hello_send');self.last_send=time.monotonic()
         self.socket.send(signed(self.secret,dict(kind='hello',source_boot=self.source,controller=self.controller,echo=echo)))
@@ -183,8 +205,14 @@ class DatagramRenewal:
         with self.diagnostics_lock:
             tail=[dict(age_ms=max(0,(now-item['at'])*1000),phase=item['phase'],sequence=item['sequence'],attempt=item['attempt'],error_kind=item['error_kind']) for item in self.exchange_tail]
             phase=self.exchange_phase
-        return dict(source_boot=self.source,sequence=self.sequence,ack_sequence=self.ack_sequence,attempts=self.attempts,first_failed_attempt=self.first_failed_attempt,exchange_phase=phase,exchange_tail=tail,
+            receipt=copy.deepcopy(self.socket_receipt);failed=copy.deepcopy(self.first_failed_attempt);closed=copy.deepcopy(self.first_close)
+        return dict(source_boot=self.source,sequence=self.sequence,ack_sequence=self.ack_sequence,attempts=self.attempts,socket_receipt=receipt,first_close=closed,first_failed_attempt=failed,exchange_phase=phase,exchange_tail=tail,
             last_receive_age_ms=None if self.last_receive is None else max(0,(now-self.last_receive)*1000),
             last_send_age_ms=None if self.last_send is None else max(0,(now-self.last_send)*1000),
             last_ack_age_ms=None if self.last_ack is None else max(0,(now-self.last_ack)*1000))
-    def close(self):self.socket.close()
+    def close(self):
+        with self.diagnostics_lock:
+            if self.first_close is None:
+                self.first_close=dict(socket_receipt=copy.deepcopy(self.socket_receipt),
+                    sequence=self.sequence,ack_sequence=self.ack_sequence,exchange_phase=self.exchange_phase)
+        self.socket.close()
