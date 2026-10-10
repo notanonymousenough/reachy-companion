@@ -191,6 +191,36 @@ class ExpressionTests(unittest.TestCase):
         self.assertFalse(a.listening.is_set())
         self.assertFalse(a.microphone.enabled)
 
+    def test_agent_boot_and_saved_epoch_fence_restart(self):
+        first=self.agent();first.set_microphone(False)
+        second=self.agent()
+        self.assertNotEqual(first.agent_boot_id,second.agent_boot_id)
+        self.assertEqual(first.microphone_epoch,second.microphone_epoch)
+        self.assertFalse(second.listening.is_set())
+        self.assertFalse(second.microphone.enabled)
+
+    def test_mute_holds_expression_instead_of_scheduling_new_neutral_motion(self):
+        a=self.agent();a.expressions=Mock()
+        a.set_microphone(False)
+        a.expressions.hold.assert_called_once()
+        a.expressions.set.assert_not_called()
+
+    def test_muted_manual_voice_and_play_never_start_compute_audio_or_motion(self):
+        a=self.agent();a.set_microphone(False);a.expressions=Mock();a.request=Mock()
+        with patch('reachy_companion.agent.subprocess.Popen') as popen:
+            self.assertTrue(a.manual('/say',{'text':'fixture'})['cancelled'])
+            a.play('not decoded because muted',a.microphone_epoch)
+        popen.assert_not_called();a.request.assert_not_called();a.expressions.set.assert_not_called()
+
+    def test_microphone_write_failure_revokes_playback_and_listening(self):
+        a=self.agent();a.playback_process=Mock();a.playback_process.poll.return_value=None
+        a.pending_pcm=(a.microphone_epoch,b'fixture');a.resume_audio={'fixture':True}
+        with patch('reachy_companion.microphone.os.fsync',side_effect=OSError('fixture fsync')):
+            with self.assertRaises(OSError):a.set_microphone(True)
+        self.assertFalse(a.microphone.enabled);self.assertFalse(a.listening.is_set())
+        self.assertIsNone(a.pending_pcm);self.assertIsNone(a.resume_audio)
+        a.playback_process.terminate.assert_called_once()
+
     def test_mute_during_startup_prevents_wake_and_greeting(self):
         a = self.agent()
         paths = []

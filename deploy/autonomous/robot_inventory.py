@@ -30,7 +30,7 @@ def main():
     operator = get('http://127.0.0.1:'+str(agent.port)+'/status', True)
     report = dict(mode='read_only_robot_inventory', physical_commands=0,
                   operator={key: operator[key] for key in ('microphone_enabled','capture_active','phase',
-                    'operator_epoch','microphone_epoch','speech_epoch','inventory_error') if key in operator}, native={})
+                    'agent_boot_id','operator_epoch','microphone_epoch','speech_epoch','microphone_state_error','inventory_error') if key in operator}, native={})
     for name, path in [('daemon','daemon/status'), ('ownership','daemon/robot-app-lock-status'),
                        ('moves','move/running'), ('motors','motors/status'), ('media','media/status'),
                        ('camera_specs','camera/specs')]:

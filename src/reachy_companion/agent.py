@@ -16,6 +16,7 @@ import subprocess
 import threading
 import time
 import wave
+from uuid import uuid4
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.request import Request, build_opener, ProxyHandler
 from urllib.error import HTTPError
@@ -34,7 +35,8 @@ class Agent:
         from .microphone import MicrophoneState
         self.microphone = MicrophoneState(config.path(config['paths']['data_dir']) / 'microphone-state.json',
                                           config['conversation']['listen_on_start'])
-        self.microphone_epoch = 0
+        self.agent_boot_id = str(uuid4())
+        self.microphone_epoch = self.microphone.epoch
         self.microphone_lock = threading.Lock()
         self.playback_process = None
         self.voice_response = None
@@ -88,15 +90,40 @@ class Agent:
             self.microphone_epoch += 1
             self.listening.clear()
             if not enabled:
-                self.expressions.set('neutral')
+                self.microphone.enabled = False
+                self.expressions.hold()
                 self.pending_pcm = None
                 self.resume_audio = None
                 self.stop_speaker()
-            self.microphone.save(enabled)
+            try:
+                self.microphone.save(enabled)
+            except (OSError, ValueError):
+                self.expressions.hold()
+                self.pending_pcm = None
+                self.resume_audio = None
+                self.stop_speaker()
+                raise
             self.sounds.reset()
             if enabled:
                 self.listening.set()
-        return {'ok': True, 'microphone_enabled': enabled, 'capture_active': self.capture_active}
+        return {'ok': True, 'microphone_enabled': enabled, 'capture_active': self.capture_active,
+                'agent_boot_id': self.agent_boot_id, 'microphone_epoch': self.microphone_epoch}
+
+    def status(self):
+        with self.microphone_lock:
+            return {'listening': self.listening.is_set(), 'phase': self.phase,
+                             'agent_boot_id': self.agent_boot_id, 'microphone_epoch': self.microphone_epoch,
+                             'threshold_rms': self.threshold, 'last_error': self.last_error,
+                             'last_transcript': self.last_transcript, 'turns': self.turns,
+                             'microphone_enabled': self.microphone.enabled,
+                             'interruptions': self.interruptions, 'resumable_reply': self.resume_audio is not None, 'barge_in_error': self.barge_in_error,
+                             'volume_percent': self.volume.percent,
+                             'volume_control_enabled': self.audio.get('playback_mixer', {}).get('enabled', False),
+                             'capture_active': self.capture_active,
+                             'sound_mode': 'music' if self.sounds.music else 'conversation', 'sound_error': self.sounds.last_error,
+                             'microphone_state_error': self.microphone.error,
+                             'expression': self.expressions.last_expression,
+                             'expression_error': self.expressions.last_error}
 
     def set_volume(self, percent):
         from .volume import validate_percent
@@ -236,7 +263,7 @@ class Agent:
                 self.capture_active = False
 
     def play(self, encoded, epoch=None):
-        if not encoded:
+        if not encoded or not self.microphone.enabled or (epoch is not None and epoch != self.microphone_epoch):
             return
         self.phase = 'speaking'
         wav = base64.b64decode(encoded, validate=True)
@@ -246,7 +273,7 @@ class Agent:
                               stdin=subprocess.PIPE, stderr=subprocess.PIPE) as process:
             self.playback_process = process
             try:
-                if epoch is not None and epoch != self.microphone_epoch:
+                if not self.microphone.enabled or (epoch is not None and epoch != self.microphone_epoch):
                     process.terminate()
                     return
                 _, error = process.communicate(wav, timeout=seconds + self.config['timeouts']['playback_margin'])
@@ -264,7 +291,7 @@ class Agent:
         monitor = None
         self.current_reply_text = replay.get('spoken_text', '') if replay else ''
         def cancelled():
-            return epoch != self.microphone_epoch or self.stopping.is_set()
+            return not self.microphone.enabled or epoch != self.microphone_epoch or self.stopping.is_set()
         def interrupted():
             return bool(monitor and monitor.interrupted.is_set())
         def cancelled_result():
@@ -281,7 +308,8 @@ class Agent:
             try:
                 self.play(response.get('audio_base64', ''), epoch)
             finally:
-                self.expressions.set('neutral')
+                self.expressions.hold()
+                if not cancelled():self.expressions.set('neutral')
             return response
         item = Request(self.config['network']['voice_url'] + '/stream' + path,
                        data=json.dumps(payload).encode(),
@@ -446,7 +474,8 @@ class Agent:
                         self.resume_audio['deadline'] = (self.last_voice_at or time.monotonic()) + self.config['conversation']['interaction']['resume_after_empty_seconds']
             finally:
                 self.expressions.hold()
-                self.expressions.set('neutral')
+                if self.microphone.enabled and epoch == self.microphone_epoch:
+                    self.expressions.set('neutral')
 
     def run(self):
         greeted = False
@@ -454,7 +483,10 @@ class Agent:
             if not self.listening.wait(timeout=1):
                 if not self.audio_lock.locked():
                     self.phase = 'paused'
-                    self.expressions.set('neutral')
+                    if self.microphone.enabled:
+                        self.expressions.set('neutral')
+                    else:
+                        self.expressions.hold()
                 continue
             try:
                 with self.audio_lock:
@@ -599,18 +631,7 @@ def main(config, test_speaker=False):
             if self.path != '/status':
                 self.reply(404, {'error': 'Not found'})
                 return
-            self.reply(200, {'listening': agent.listening.is_set(), 'phase': agent.phase,
-                             'threshold_rms': agent.threshold, 'last_error': agent.last_error,
-                             'last_transcript': agent.last_transcript, 'turns': agent.turns,
-                             'microphone_enabled': agent.microphone.enabled,
-                             'interruptions': agent.interruptions, 'resumable_reply': agent.resume_audio is not None, 'barge_in_error': agent.barge_in_error,
-                             'volume_percent': agent.volume.percent,
-                             'volume_control_enabled': agent.audio.get('playback_mixer', {}).get('enabled', False),
-                             'capture_active': agent.capture_active,
-                             'sound_mode': 'music' if agent.sounds.music else 'conversation', 'sound_error': agent.sounds.last_error,
-                             'microphone_state_error': agent.microphone.error,
-                             'expression': agent.expressions.last_expression,
-                             'expression_error': agent.expressions.last_error})
+            self.reply(200, agent.status())
 
         def do_POST(self):
             if not self.auth():
