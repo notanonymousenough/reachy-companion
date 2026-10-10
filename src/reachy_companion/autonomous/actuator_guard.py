@@ -107,6 +107,12 @@ class ActuatorGuard:
         self.db.execute('PRAGMA synchronous=FULL')
         self.db.execute('CREATE TABLE IF NOT EXISTS state (singleton INTEGER PRIMARY KEY CHECK(singleton=1), value TEXT NOT NULL)')
         self.db.execute('CREATE TABLE IF NOT EXISTS commands (id TEXT PRIMARY KEY, lease_id TEXT NOT NULL)')
+        self.db.execute('CREATE TABLE IF NOT EXISTS ordered_watermark (singleton INTEGER PRIMARY KEY CHECK(singleton=1), sequence INTEGER NOT NULL)')
+        row=self.db.execute('SELECT sequence FROM ordered_watermark WHERE singleton=1').fetchone()
+        self.high_watermark=row[0] if row else 0
+        if type(self.high_watermark) is not int or not 0<=self.high_watermark<2**63:
+            raise GuardRejected('Ordered ledger unknown')
+        self.storage_failed=False
         self.mutex = threading.RLock()
         self.clock, self.ttl, self.poll, self.stop = clock, ttl, poll, stop
         self.robot_boot_id = uid()
@@ -154,7 +160,11 @@ class ActuatorGuard:
             self.sequence = -1
             # Tombstones survive lease/boot changes. Re-arming cannot replay an
             # already admitted command under freshly rebound authority.
-            self.write('active')
+            try:self.write('active')
+            except sqlite3.Error:
+                self.storage_failed=self.quarantined=True
+                self.lease=None
+                raise
             try:self.output.arm(self.lease,self.deadline)
             except GuardRejected:
                 self.revoke_locked();raise
@@ -176,6 +186,40 @@ class ActuatorGuard:
             deadline = self.clock()+self.ttl
             self.output.extend(lease,deadline)
             self.deadline = deadline
+
+    def admit_ordered(self, sequence, lease=None):
+        """One durable global watermark, never evicted or reset across boots.
+
+        A request carries its issued sequence unchanged. New authenticated
+        owners obtain the persisted floor before issuing fresh requests. Boot
+        and session gates remain the caller's responsibility. Stop bypasses
+        this ledger and this SQLite mutex through emergency_output_stop.
+        """
+        with self.mutex:
+            if lease is not None:self.check(lease)
+            if self.closed or self.quarantined or self.storage_failed:
+                raise GuardRejected('Ordered authority unavailable')
+            if type(sequence) is not int or not self.high_watermark<sequence<2**63:
+                raise GuardRejected('Ordered sequence already consumed or invalid')
+            try:
+                with self.transaction():
+                    self.db.execute('INSERT OR REPLACE INTO ordered_watermark VALUES (1,?)',(sequence,))
+            except sqlite3.Error:
+                self.storage_failed=self.quarantined=True
+                self.emergency_output_stop()
+                raise
+            self.high_watermark=sequence
+            if lease is not None:self.check(lease)
+
+    def emergency_output_stop(self):
+        """RAM-only verified withdrawal; cannot wait behind a durable transaction.
+
+        Durable reconciliation is performed by the ordinary watchdog later.
+        An old active row remains crash-quarantined if storage is unavailable.
+        """
+        lease=self.lease
+        if lease is None:return self.output.known
+        return self.output.revoke(lease)
 
     def admit(self, lease, command_id):
         """Persist intent BEFORE dispatch. Duplicate returns False, never replay.

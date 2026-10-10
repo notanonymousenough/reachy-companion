@@ -1,0 +1,20 @@
+# Install explicitly only after owner/profile acceptance; not enabled by default.
+[Unit]
+Description=Reachy native antenna owner and verified factory rollback supervisor
+After=reachy-voice-agent.service reachy-mini-daemon.service
+Requires=reachy-voice-agent.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/pollen/reachy-shadow
+Environment=PYTHONPATH=/home/pollen/reachy-shadow/src
+# duration_s=0 opts into continuous lifecycle. A disabled profile refuses start.
+# A fresh output is required for every start; start wrapper generates it.
+ExecStart=/venvs/mini_daemon/bin/python /home/pollen/reachy-shadow/native_owner_start.py --service-config /home/pollen/reachy-shadow/native-motion.local.json --production-root /home/pollen/reachy-companion
+Restart=no
+KillMode=process
+TimeoutStopSec=20s
+
+[Install]
+WantedBy=multi-user.target

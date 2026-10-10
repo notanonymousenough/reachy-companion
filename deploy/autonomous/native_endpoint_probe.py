@@ -35,15 +35,22 @@ def main():
             raise SystemExit(2)
         time.sleep(.05)
     report['operator_before']={key:status[key] for key in ('agent_boot_id','microphone_epoch','microphone_enabled','capture_active','phase')}
-    common=dict(agent_boot_id=status['agent_boot_id'],operator_epoch=status['microphone_epoch'],actor_boot_id=actor['actor_boot_id'])
+    common=dict(agent_boot_id=status['agent_boot_id'],operator_epoch=status['microphone_epoch'],actor_boot_id=actor['actor_boot_id'],session_id=actor['session_id'],motor_epoch=actor['policy']['epoch'])
+    command_sequence=actor['command_high_watermark']
+    def payload(kind,**extra):
+        nonlocal command_sequence
+        command_sequence+=1
+        return dict(common,kind=kind,command_sequence=command_sequence,**extra)
     if args.replay_fixture:
         fixture=json.loads(args.replay_fixture.read_text())
+        if 'motion_receipts' in fixture:fixture=fixture['motion_receipts'][0]
         hub.boot_id=fixture['hub_boot_id']
         report['restart_ready']=actor['ready'];report['restart_quarantined']=actor['quarantined']
         report['replay_rejections']=[]
         for rebound in (False,True):
             old=dict(fixture['trajectory'])
-            if rebound:old['actor_boot_id']=actor['actor_boot_id']
+            if rebound:
+                old['actor_boot_id']=actor['actor_boot_id'];old['session_id']=actor['session_id']
             try:hub.native_motion(old,command_id=fixture['command_id']);report['replay_rejections'].append(False)
             except Exception:report['replay_rejections'].append(True)
         report['after']=hub.agent('/status')['motion_actor']
@@ -52,11 +59,11 @@ def main():
         print(json.dumps(report))
         if not report['accepted']:raise SystemExit(2)
         return
-    def call(kind,**extra):return hub.native_motion(dict(common,kind=kind,**extra))
+    def call(kind,**extra):return hub.native_motion(payload(kind,**extra))
     lease=call('arm',motor_enabled=True,quiet=False,privacy_all=False)['lease_id']
     report['arm']=lease
     trajectory_id='endpoint-'+hub.boot_id
-    trajectory=dict(common,kind='trajectory',lease_id=lease,offset_radians=math.radians(2),duration_s=2 if args.failure_mode else 1)
+    trajectory=payload('trajectory',lease_id=lease,offset_radians=math.radians(2),duration_s=2 if args.failure_mode else 1)
     report['dispatch']=hub.native_motion(trajectory,command_id=trajectory_id)
     if args.failure_mode:
         report.update(trajectory=trajectory,command_id=trajectory_id,hub_boot_id=hub.boot_id,owner_failure_observed=False)

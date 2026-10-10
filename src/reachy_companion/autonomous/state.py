@@ -37,6 +37,20 @@ class State:
         self.counts = Counter()
         self.consumed = deque(maxlen=128)
         self.focus = None
+        self.actor_binding=None;self.actor_signature=None;self.actor_deadline=0
+        self.motion_allowed=False;self.quiet=False;self.motion_proposals=deque(maxlen=1)
+
+    def set_actor(self,receipt):
+        # Trusted adapter receipt only, never a model/operator event payload.
+        signature=(tuple(sorted(receipt['binding'].items())),tuple(sorted(receipt['policy'].items())),receipt['microphone_enabled'])
+        if signature!=self.actor_signature:
+            self.actor_signature=signature
+            self.authority=replace(self.authority,operator_epoch=self.authority.operator_epoch+1,
+                robot_boot_id=receipt['binding']['actor_boot_id'],microphone_epoch=receipt['binding']['operator_epoch'])
+            self.revision+=1
+        self.actor_binding=dict(receipt['binding']);self.actor_deadline=receipt['received']+.3
+        self.muted=not receipt['microphone_enabled'];self.quiet=receipt['policy']['quiet'];self.privacy=receipt['policy']['privacy_all']
+        self.motion_allowed=receipt['motion_allowed']
 
     def record(self, kind, **values):
         self.counts[kind] += 1
@@ -208,17 +222,17 @@ class State:
                 ready.append(dict(alias=task.task_id, summary=task.result[:256],
                                   expires_at=expires.isoformat().replace('+00:00', 'Z')))
         view = dict(schema_version='1.1', at=utc(), mode='ACTIVE',
-            op=dict(microphone_enabled=not self.muted, privacy_all=self.privacy, quiet=False,
-                    motion_allowed=False, operator_epoch=self.authority.operator_epoch,
+            op=dict(microphone_enabled=not self.muted, privacy_all=self.privacy, quiet=self.quiet,
+                    motion_allowed=self.motion_allowed and now<self.actor_deadline and not self.privacy and not self.quiet, operator_epoch=self.authority.operator_epoch,
                     microphone_epoch=self.authority.microphone_epoch, interaction_epoch=self.authority.interaction_epoch,
                     speech_epoch=self.authority.speech_epoch),
             sim=dict(origin='simulated', mood=0, arousal=0.2, fatigue=0, curiosity=0.5,
                      confidence=None, social_need=0, transition_reasons=[]),
-            scene='Shadow actors; camera observations include age bounds and provenance.' if self.context_sensors else 'Shadow/replay. No physical sensor or actuator connected.',
+            scene='Actual bounded antenna17 owner; any fixture sensors are synthetic. Camera semantics unavailable.' if self.actor_binding else 'Shadow actors; camera observations include age bounds and provenance.' if self.context_sensors else 'Shadow/replay. No physical sensor or actuator connected.',
             sensors=([s.view(now, self.muted) for s in list(self.sensors.values())[:12-len(self.context_sensors)]]+self.context_view(now)),
             prev=list(self.previous), dialogue='' if self.muted or self.privacy else self.current_utterance,
             memory=[] if self.privacy else [dict(alias=alias,type=item['epistemic_type'],summary=item['content']) for alias,item in self.memory_items.items() if self.memory_valid(item)], personality='Ричи: краткий, прямой, любопытный.',
-            principles='No invented perception. Muted blocks speech. Simulated actions only.', goal=None,
+            principles='No invented perception. Muted blocks speech. Motion attentive means only a finite antenna17 target <=2 degrees, never head/body; only when motion_allowed.' if self.actor_binding else 'No invented perception. Muted blocks speech. Simulated actions only.', goal=None,
             pending=pending[:8], ready=ready[:4],
             candidates=[dict(alias=k, kind=self.candidate_kinds[k], summary=v[:256]) for k,v in self.candidates.items()][:8],
             evidence_aliases=[])
@@ -247,8 +261,11 @@ class State:
             self.record('decision_stale', request_id=binding.request_id); return None
         if binding.request_id in self.consumed:
             self.record('decision_duplicate'); return None
-        # This slice has no tool broker, goal changes, motions, or direct short speech.
-        if value.get('say') or value.get('motion') or value.get('goal_review') or value.get('e'):
+        motion=value.get('motion')
+        if motion and (motion!='attentive' or not self.motion_allowed or now>=self.actor_deadline or self.quiet or self.privacy
+                or not self.actor_binding or value.get('start') or value.get('commit')):
+            self.record('motion_capability_rejected');return None
+        if value.get('say') or value.get('goal_review') or value.get('e'):
             self.record('capability_rejected'); return None
         focus = value.get('focus')
         known = set(binding.candidates) | set(binding.ready)
@@ -273,6 +290,10 @@ class State:
         self.previous.append(value['a'] + ': ' + value['why'])
         self.focus = focus
         self.record('decision_accepted', request_id=binding.request_id, activity=value['a'])
+        if motion:
+            self.motion_proposals.append(dict(motion=motion,request_id=binding.request_id,authority=binding.authority,
+                actual_binding=dict(self.actor_binding),deadline=min(binding.deadline,now+.5)))
+            self.record('motion_proposed',request_id=binding.request_id)
         if commit:
             task = self.tasks.get(commit)
             if not task or task.status != 'ready' or task.authority != self.authority or now > task.expires:

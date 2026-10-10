@@ -7,8 +7,28 @@ from .contracts import decode
 
 def load(path):
     config = decode(Path(path).read_text())
-    if config['version'] != 1 or config['actuators'] != 'simulated' or config['export_enabled']:
-        raise ValueError('This slice only supports simulated actuators and disabled export')
+    if config['version'] != 1 or config['actuators'] not in ('simulated','bounded_native_antenna17') or config['export_enabled']:
+        raise ValueError('Unsupported actor mode/export')
+    motion=config.get('motion',{'enabled':False})
+    if type(motion.get('enabled')) is not bool or (config['actuators']=='bounded_native_antenna17')!=motion['enabled']:
+        raise ValueError('Explicit bounded native motion opt-in required')
+    if motion['enabled']:
+        if (not isinstance(motion.get('hub_config_path'),str) or not motion['hub_config_path']
+                or type(motion.get('cooldown_s')) not in (int,float) or not 3<=motion['cooldown_s']<=60
+                or type(motion.get('heartbeat_s')) not in (int,float) or not .02<=motion['heartbeat_s']<=.05):
+            raise ValueError('Native adapter settings')
+        endpoint=urlsplit(motion.get('agent_url',''))
+        transport=motion.get('transport','loopback_ssh')
+        permitted=endpoint.hostname in ('127.0.0.1','localhost','::1')
+        if transport=='trusted_private_lan':
+            import ipaddress
+            try:
+                address=ipaddress.ip_address(endpoint.hostname)
+                permitted=any(address in ipaddress.ip_network(net) for net in ('10.0.0.0/8','172.16.0.0/12','192.168.0.0/16'))
+            except ValueError:permitted=False
+        if (transport not in ('loopback_ssh','trusted_private_lan') or not permitted or endpoint.scheme!='http'
+                or endpoint.username or endpoint.password or endpoint.query or endpoint.fragment):
+            raise ValueError('Native actor requires explicit loopback SSH or trusted private LAN transport')
     for key in ('period_s', 'fast_deadline_s', 'http_timeout_s', 'task_timeout_s', 'proposal_ttl_s'):
         if type(config[key]) not in (int, float) or not 0 < config[key] <= 120:
             raise ValueError('Invalid timing: ' + key)

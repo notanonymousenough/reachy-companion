@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "enabled": false,
+  "listen": "127.0.0.1",
+  "port": 8775,
+  "socket_path": "/home/pollen/reachy-shadow/native-managed.sock",
+  "policy_path": "/home/pollen/reachy-shadow/motion-policy.local.json",
+  "duration_s": 60,
+  "camera_policy_path": "/home/pollen/reachy-shadow/video-policy.local.json",
+  "stop_bound_s": 0.5,
+  "guard_directory": "/home/pollen/reachy-shadow/native-runtime-guard"
+}

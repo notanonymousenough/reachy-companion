@@ -13,6 +13,9 @@ import subprocess
 import sys
 import time
 import threading
+import signal
+import socket
+import stat
 from urllib.request import Request, build_opener, ProxyHandler
 
 FACTORY = 'reachy-mini-daemon.service'
@@ -170,6 +173,11 @@ def recover(args):
 
 def supervisor(args):
     if os.geteuid() != 0: raise RuntimeError('Root supervisor required to audit all serial owners')
+    profile=None
+    if getattr(args,'service_config',None):
+        from reachy_companion.autonomous.native_config import load
+        profile=load(args.service_config)
+        if not profile['enabled'] or not args.runtime_service:raise RuntimeError('Managed native profile gate')
     before = operator(args.production_root)
     config_hash = hashlib.sha256((args.production_root/'config.local.json').read_bytes()).hexdigest()
     def run(*command, timeout=8):
@@ -209,6 +217,7 @@ def supervisor(args):
         base+=['--runtime-service']
     if getattr(args,'acknowledge_recovered_stop',False):base+=['--acknowledge-recovered-stop']
     if getattr(args,'camera_policy',None):base+=['--camera-policy',str(args.camera_policy)]
+    if getattr(args,'service_config',None):base+=['--service-config',str(args.service_config)]
     # Independent systemd recovery handles supervisor loss. It kills only the
     # isolated child unit before opening serial, verifies release, then restores.
     rollback = Path(__file__).with_name('native_actor_rollback.sh')
@@ -225,7 +234,12 @@ def supervisor(args):
     import uuid
     owner = str(uuid.uuid4())
     with MARKER.open('x') as output: output.write(owner)
-    failure_done=threading.Event();failure_thread=None
+    failure_done=threading.Event();failure_thread=None;renew_thread=None
+    prior_handlers={}
+    if profile:
+        def terminate(*_):raise InterruptedError('Managed owner stopped')
+        for kind in (signal.SIGTERM,signal.SIGINT):
+            prior_handlers[kind]=signal.signal(kind,terminate)
     try:
         # Schedule recovery before the condition/reload/stop transition. If
         # drop-in creation fails, the no-intent recovery only restores service.
@@ -241,6 +255,43 @@ def supervisor(args):
             raise RuntimeError('Factory restart fence was not enforced')
         if serial_owners(): raise RuntimeError('Factory condition fence admitted another writer')
         if operator(args.production_root) != before: raise RuntimeError('Operator changed during transition')
+        if profile:
+            for name in (profile['socket_path'],profile['socket_path']+'.stop'):
+                path=Path(name)
+                if path.exists():
+                    info=path.stat()
+                    if not stat.S_ISSOCK(info.st_mode) or info.st_uid!=1000 or stat.S_IMODE(info.st_mode)!=0o600:
+                        raise RuntimeError('Unknown stale native socket owner')
+                    with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as peer:
+                        peer.settimeout(.3)
+                        try:peer.connect(name)
+                        except ConnectionRefusedError:pass
+                        else:raise RuntimeError('A prior native writer still accepts IPC')
+                    path.unlink()
+            def renew():
+                cfg=json.loads((args.production_root/'config.local.json').read_text())
+                token=Path(cfg['paths']['token_file'])
+                if not token.is_absolute():token=args.production_root/token
+                warmup=time.monotonic()+15
+                while not failure_done.wait(2):
+                    try:
+                        if MARKER.read_text()!=owner or DROPIN.read_text()!=CONDITION:raise RuntimeError('Owner fence lost')
+                        if leaf.with_suffix('.closing.json').exists():
+                            report['owner_closing']=True;return
+                        request=Request(f"http://127.0.0.1:{profile['port']}/status",headers={'Authorization':'Bearer '+token.read_text().strip()})
+                        with build_opener(ProxyHandler({})).open(request,timeout=1) as response:state=json.loads(response.read(16384))['motion_actor']
+                        if (not state['ready'] or not state['kernel_exclusive']
+                                or 'reachy-native-finite-actor.service' not in Path(f"/proc/{state['writer_pid']}/cgroup").read_text()):
+                            raise RuntimeError('Managed native owner unhealthy')
+                        warmup=0
+                        run('systemctl','restart','reachy-native-fence-rollback.timer',timeout=2)
+                        report['watchdog_renewals']=report.get('watchdog_renewals',0)+1
+                    except Exception:
+                        if time.monotonic()<warmup:continue
+                        report['owner_health_failure']=True
+                        subprocess.run(['systemctl','stop','reachy-native-finite-actor.service'],timeout=3)
+                        return
+            renew_thread=threading.Thread(target=renew,daemon=True);renew_thread.start()
         command = base + ['--child'] + (['--motor-test'] if args.motor_test else [])
         if getattr(args,'inject_owner_failure',False):
             def inject():
@@ -263,9 +314,11 @@ def supervisor(args):
                     except Exception:pass
             failure_thread=threading.Thread(target=inject,daemon=True);failure_thread.start()
         # Unit has a separate hard lifetime; no per-task Arc mount or second writer.
+        duration=profile['duration_s'] if profile else 9
+        properties=['--property=TimeoutStopSec=5s' if profile else '--property=TimeoutStopSec=1s']
+        if duration:properties+=['--property=RuntimeMaxSec='+str(duration+(6 if profile else 3))+'s']
         run('systemd-run', '--unit=reachy-native-finite-actor', '--collect', '--wait',
-            '--property=RuntimeMaxSec=12s', '--property=TimeoutStopSec=1s',
-            *command, timeout=15)
+            *properties,*command,timeout=duration+(9 if profile else 6) if duration else None)
         report['child'] = json.loads(leaf.read_text())
         report['accepted'] = report['child']['accepted']
     except Exception as exc:
@@ -274,6 +327,8 @@ def supervisor(args):
     finally:
         failure_done.set()
         if failure_thread:failure_thread.join(1)
+        if renew_thread:renew_thread.join(4)
+        for kind,handler in prior_handlers.items():signal.signal(kind,handler)
         try:
             # Rollback performs stop/release/unmask/start in that order.
             recovery = run('/bin/bash', str(rollback), str(Path(__file__).resolve()),
@@ -318,6 +373,7 @@ def main():
     parser.add_argument('--inject-owner-failure',action='store_true')
     parser.add_argument('--acknowledge-recovered-stop',action='store_true')
     parser.add_argument('--camera-policy',type=Path)
+    parser.add_argument('--service-config',type=Path)
     parser.add_argument('--child', action='store_true')
     parser.add_argument('--recover', action='store_true')
     parser.add_argument('--intent', type=Path)

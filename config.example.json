@@ -2,7 +2,8 @@
   "version": 1,
   "guarded_motion": {
     "enabled": false,
-    "socket_path": "data/native-motion.sock"
+    "socket_path": "data/native-motion.sock",
+    "policy_path": "data/motion-policy.json"
   },
   "network": {
     "hub_url": "http://reachy-hub.lan:8080",

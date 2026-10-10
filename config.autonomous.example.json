@@ -101,5 +101,12 @@
     "video_url": null,
     "video_token_env": "REACHY_VIDEO_TOKEN",
     "video_poll_s": 0.5
+  },
+  "motion": {
+    "enabled": false,
+    "hub_config_path": "config.local.json",
+    "agent_url": "http://127.0.0.1:8775",
+    "cooldown_s": 4,
+    "heartbeat_s": 0.04
   }
 }

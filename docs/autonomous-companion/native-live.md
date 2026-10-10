@@ -1,6 +1,6 @@
 # Конечный native actor и первое распознавание изображения
 
-2026-10-10. Это ограниченные hardware/PC эксперименты. Production `guarded_motion.enabled` остаётся false; Agent endpoint связан с reusable native IPC runtime и проверен в конечной managed systemd-сессии; непрерывный production owner ещё не развёрнут. Speech/ALSA consumed cursor и production semantic-camera admission не приняты.
+2026-10-10. Это ограниченные hardware/PC эксперименты. Production `guarded_motion.enabled` остаётся false; Agent endpoint связан с reusable native IPC runtime и проверен в конечной managed systemd-сессии. Добавлены постоянный managed lifecycle и bounded adapter существующего autonomous scheduler; они проверяются в конечных сессиях, непрерывный production owner ещё не развёрнут. Speech/ALSA consumed cursor и production semantic-camera admission не приняты.
 
 ## Единственный writer и восстановление
 
@@ -66,3 +66,43 @@ Actual `camera-native-coexist-live2.json` принят: один Producer пол
 Private camera semantic inference по-прежнему запрещён до retention admission для prepare_image/upload, effective image/context/VRAM budget и TTL/lineage acceptance. Synthetic9B result выше не меняет этот gate; новые private uploads, model loads и audio commands на этом этапе отсутствуют.
 
 164 local regression tests прошли, включая actual Unix proxy/peer receipts, expiry/dedupe/no revival, stale boot/epoch, authoritative policy withdrawal, crash quarantine/explicit recovery ledger, absolute position wrap rejection и unknown camera shutdown без удаления socket. Production flag остаётся off; continuous ownership, quiet/motor operator wiring, precise tracking/head/body, semantic-camera admission и speech consumed cursor остаются следующими отдельными этапами.
+
+## Managed owner, ordered protocol и actual scheduler
+
+Следующий этап заменяет native UUID tombstone на **ordered-native-v2**. Каждый arm/trajectory/heartbeat несёт неизменяемый `command_sequence`; одна durable SQLite строка хранит глобальный high watermark. Fsync предшествует admission, floor не сбрасывается при смене lease, actor boot, Hub boot или recovery audit. Новый owner сначала читает floor и выпускает новую последовательность. Runtime также проверяет случайный session nonce, actual Agent boot/microphone epoch, actor boot, motor-policy epoch и единственный Hub binding на весь runtime. Переименование UUID не возвращает старую sequence. Новая sequence обозначает новую выдачу команды, а не retry старой. Старый UUID ledger сохраняется для legacy API, native маршрут его больше не заполняет. При максимальном int63 или storage error новые команды запрещены.
+
+Revoke приобретённого lease не расходует sequence и проходит через отдельный socket `.stop`, независимо от обычного IPC listener, SQLite mutex, capacity и доступности текущего operator provider. Он всё ещё требует точный acquired owner/session/lease/epoch binding и verified physical hold. RAM withdrawal не разрешает новый output; watchdog позже согласует durable state. Потеря этой записи сохраняет crash quarantine. Локальные проверки блокируют SQLite отдельной транзакцией и подтверждают independent stop; отдельно проверены closed storage, sequence exhaustion и closing lifecycle. Это simulated driver tests, не новые физические измерения.
+
+`native_ordered_probe.py --duration 60` провёл **60.050s / 538 heartbeat**, high watermark539, одна watermark row, ноль UUID rows. После нового boot обе старые arm-команды — с прежним boot и с rebound actor/session — отвергнуты; new driver writes0. Этот long probe использует simulated driver, не hardware или inference. Быстрая regression дополнительно проходит600 heartbeat.
+
+`MotionPolicy` сохраняет exact bool `motor_enabled`, `quiet`, `privacy_all` и monotonically increasing epoch атомарно, с fsync и mode600. Default motor grant=false. Corrupt/unknown policy запрещает движение; numeric truthiness не даёт разрешение. Authenticated Agent `/motion-policy` и Hub `/control/motion-policy` не меняют microphone state. Runtime захватывает исходный epoch; withdrawal делает его unready, возврат flags не восстанавливает старый lease. Privacy закрывает camera relay. Production handler реализован в коде; actual experiment использует изолированный HTTP adapter и отдельный shadow policy file, существующий production Agent не обновлялся.
+
+`config.native-motion.example.json` явно default-disabled и задаёт HTTP listen/port, Unix socket, policy/guard/camera paths и duration. Duration0 выбирает continuous managed lifecycle; example ограничен60s. `native_owner_start.py` выдаёт fresh per-start UUID/receipt, сохраняет recovery intents и durable ledger, отказывается от unknown owner marker. Он удаляет только старые **completed, factory-restored** receipts, не активные intents. `reachy-native-owner.service` — готовый unit template, ещё не установлен и не enabled. Root supervisor продлевает независимый30s rollback timer раз в2s только при совпадении своего owner marker/fence, exact child cgroup/PID, authenticated readiness и kernel exclusivity. После graceful closing marker продление прекращается; последнее rollback deadline остаётся вооружённым до verified release. SIGTERM/INT выполняет тот же cleanup. Обычный service restart требует старый UART owner-free, verified release/factory restoration и новую identity; automatic quarantine acknowledgement отсутствует. Continuous0 поддержан конфигурацией, но круглосуточная эксплуатация этим конечным тестом не доказана.
+
+Hub `MotionAdapter` добавлен к существующему `Scheduler`, `RemoteGateway` и FastChoice contracts. Actual actor/operator binding обновляет State; stale model response или proposal deadline не допускается. Только свежий model `explore/attentive` вызывает typed arm/trajectory. Антенна17 имеет отдельный motor grant при mic=false; speech остаётся muted. Во время движения используется лёгкий `/operator` poll, чтобы проверить смену motor/mic epoch без лишней загрузки serial IPC. Сам worker и lease самостоятельно останавливаются при отсутствии heartbeat. Максимум одна motion job, cooldown≥3s, receipts≤32; failure закрывает дальнейшее motion admission. Нет deterministic host gesture fallback, head/body, PCM output или private image inputs. Default autonomous actuator mode остаётся simulator.
+
+Actual PC fast inference использует существующий0.8B Q8 model с GPU8/CPU8 в конечном gateway; already-loaded9B main/context32K сохранён. Synthetic invitation попадает в обычный scheduler sensor contract, не в actuator permission. Старый prompt трактовал mic mute как запрет всех действий и выдавал wait; отдельный motion prompt и typed schema разделяют speech/motor permission. Actual `native-scheduler-hub-live7.json` содержит **три свежих model proposals и три принятых физических движения** при target−2°/+2°/−2°, duration2s, heartbeat1.2s. Измеренные displacement: **9ticks/0.791°, 10ticks/0.879°, 10ticks/0.879°**. Expiry heartbeat→verified hold **434.657ms** и **429.415ms**; explicit revoke request→verified **255.157ms** (heartbeat→verified293.032ms). Во всех трёх ≥200ms feedback, range1tick, velocity≤0.00752rad/s, trajectory updates after hold0. Это три samples, не P95 и не hard realtime claim.
+
+**Полная live7 приёмка false**: последующая серия300 idle heartbeat прервалась после Wi-Fi/request gap; final high watermark261, lease expired, verified idle hold436.629ms. Это не прежний256-UUID capacity gate. Root65s managed session имела31 successful watchdog renewals, lifecycle closed/verified release all9 torque0, factory active/ready/disabled/no moves; operator boot/epoch0/micfalse/capturefalse/paused и private config совпали. Предыдущие live5/live6 также не приняты как движение: actual displacement2ticks, хотя hold446.565/430.900ms был verified. Порог≥3ticks и stop bound500ms не ослаблены.
+
+Следующая ревизия уменьшает конкурирующий actor poll и idle heartbeat interval до20ms, использует TTL240ms и более частый hold feedback read (5ms вместо20ms, окно по-прежнему≥200ms). Это оставляет тот же500ms acceptance и unknown→quarantine; новый live результат ещё требуется. 175 local regression tests прошли для этой ревизии, включая invalidation pending model proposal при смене policy во время busy operator poll. Не объявлять idle heartbeat acceptance, policy-withdrawal end-to-end acceptance или continuous production rollout по live7.
+
+Воспроизводимые локальные проверки (Python environment должен включать project test dependencies):
+
+```sh
+PYTHONPATH=src python -m unittest discover -s tests -q
+PYTHONPATH=src python deploy/autonomous/native_ordered_probe.py --duration 60 --output /tmp/native-ordered-fresh.json
+```
+
+Finite actual commands после явного разрешения hardware transition, с private settings/token files и fresh output paths:
+
+```sh
+# Robot: root establishes all-writer fence; duration is read from local profile.
+sudo /venvs/mini_daemon/bin/python native_actor_probe.py --production-root /home/pollen/reachy-companion --runtime-service --service-config /home/pollen/reachy-shadow/native-motion.local.json --output /home/pollen/reachy-shadow/owner-fresh.json
+# Hub: existing finite PC gateway must already be ready. No private image/audio input.
+PYTHONPATH=src python native_scheduler_probe.py --config /home/deploy/reachy-shadow/motion-hub.local.json --token-file /home/deploy/reachy-shadow/token.local --companion-config /home/deploy/reachy-companion/config.local.json --output /home/deploy/reachy-shadow/scheduler-fresh.json
+# Separate new owner session: replay old issued payload without changing its sequence.
+PYTHONPATH=src python native_endpoint_probe.py --config /home/deploy/reachy-companion/config.local.json --agent-url http://192.168.2.158:8775 --replay-fixture /home/deploy/reachy-shadow/scheduler-fresh.json --output /home/deploy/reachy-shadow/replay-fresh.json
+```
+
+`trusted_private_lan` transport требует явного opt-in и RFC1918 IPv4 endpoint; default `loopback_ssh` допускает только loopback. Не направлять private credentials/inputs на произвольный host. Actual production mic/config/grants не менялись. Camera semantic retention/effective image cap gate остаётся false; speech consumed cursor/interruption — отдельный следующий этап.

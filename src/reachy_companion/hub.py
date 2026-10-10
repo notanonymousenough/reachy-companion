@@ -213,7 +213,7 @@ def serve(hub):
                     return
                 try:
                     value = hub.agent('/status')
-                    self.reply(200, {key: value.get(key) for key in ('microphone_enabled', 'capture_active', 'phase', 'expression', 'expression_error', 'volume_percent', 'volume_control_enabled', 'resumable_reply', 'motion_actor', 'agent_boot_id', 'microphone_epoch')})
+                    self.reply(200, {key: value.get(key) for key in ('microphone_enabled', 'capture_active', 'phase', 'expression', 'expression_error', 'volume_percent', 'volume_control_enabled', 'resumable_reply', 'motion_actor', 'agent_boot_id', 'microphone_epoch', 'motion_policy')})
                 except Exception:
                     self.reply(503, {'error': 'Robot agent unavailable'})
                 return
@@ -232,7 +232,7 @@ def serve(hub):
             if not hmac.compare_digest(token, 'Bearer ' + hub.config.token):
                 self.reply(401, {'error': 'Bearer token required'})
                 return
-            if self.path in ('/actions/expression', '/control/microphone', '/control/volume'):
+            if self.path in ('/actions/expression', '/control/microphone', '/control/volume', '/control/motion-policy'):
                 try:
                     size = int(self.headers.get('Content-Length', 0))
                     if not 0 < size <= hub.config['limits']['max_agent_request_bytes']:
@@ -246,6 +246,8 @@ def serve(hub):
                             raise ValueError('Expected volume_percent')
                         validate_percent(payload['volume_percent'])
                         value = hub.agent('/volume', payload)
+                    elif self.path == '/control/motion-policy':
+                        value=hub.agent('/motion-policy',payload)
                     elif self.path == '/control/microphone':
                         if set(payload) != {'enabled'} or not isinstance(payload['enabled'], bool):
                             raise ValueError('enabled must be boolean')

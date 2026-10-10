@@ -35,6 +35,8 @@ class Agent:
         from .microphone import MicrophoneState
         self.microphone = MicrophoneState(config.path(config['paths']['data_dir']) / 'microphone-state.json',
                                           config['conversation']['listen_on_start'])
+        from .motion_policy import MotionPolicy
+        self.motion_policy=MotionPolicy(config.path(config['guarded_motion']['policy_path']))
         self.agent_boot_id = str(uuid4())
         self.microphone_epoch = self.microphone.epoch
         self.microphone_lock = threading.Lock()
@@ -124,7 +126,7 @@ class Agent:
                              'interruptions': self.interruptions, 'resumable_reply': self.resume_audio is not None, 'barge_in_error': self.barge_in_error,
                              'resume_blocked_reason': self.resume_blocked_reason,
                              'playback_cursor_provenance': 'wall_time_estimate',
-                             'motion_actor': motion_status,
+                             'motion_actor': motion_status,'motion_policy':self.motion_policy.snapshot(),
                              'volume_percent': self.volume.percent,
                              'volume_control_enabled': self.audio.get('playback_mixer', {}).get('enabled', False),
                              'capture_active': self.capture_active,
@@ -142,7 +144,7 @@ class Agent:
         with self.microphone_lock:
             return dict(agent_boot_id=self.agent_boot_id,microphone_epoch=self.microphone_epoch,
                         microphone_enabled=self.microphone.enabled,capture_active=self.capture_active,
-                        phase=self.phase,microphone_state_error=self.microphone.error)
+                        phase=self.phase,microphone_state_error=self.microphone.error,motion_policy=self.motion_policy.snapshot())
 
     def set_volume(self, percent):
         from .volume import validate_percent
@@ -695,6 +697,11 @@ def main(config, test_speaker=False):
                     if not 0 < size <= config['limits']['max_agent_request_bytes']:
                         raise ValueError('Invalid request size')
                     value = agent.set_volume(json.loads(self.rfile.read(size))['volume_percent'])
+                elif self.path == '/motion-policy':
+                    size=int(self.headers.get('Content-Length',0))
+                    if not 0<size<=4096:raise ValueError('Policy request bound')
+                    from .autonomous.contracts import decode
+                    value=agent.motion_policy.save(decode(self.rfile.read(size)))
                 elif self.path == '/microphone':
                     size = int(self.headers.get('Content-Length', 0))
                     if not 0 < size <= config['limits']['max_agent_request_bytes']:

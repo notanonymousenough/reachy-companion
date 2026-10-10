@@ -32,12 +32,15 @@ class MotionProxy:
         self.enabled, self.socket_path, self.operator = enabled, Path(socket_path), operator
 
     def ipc(self, value):
-        info = self.socket_path.stat()
+        path=self.socket_path
+        if isinstance(value,dict) and isinstance(value.get('payload'),dict) and value['payload'].get('kind')=='revoke':
+            path=Path(str(path)+'.stop')
+        info = path.stat()
         if not stat.S_ISSOCK(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o600:
             raise RuntimeError('Native socket ownership unknown')
         with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as connection:
             connection.settimeout(.8)
-            connection.connect(str(self.socket_path))
+            connection.connect(str(path))
             if hasattr(socket,'SO_PEERCRED'):
                 pid, uid, _ = struct.unpack('3i',connection.getsockopt(socket.SOL_SOCKET,socket.SO_PEERCRED,12))
                 if uid != os.getuid(): raise RuntimeError('Native peer ownership unknown')
@@ -64,8 +67,9 @@ class MotionProxy:
         for key in ('command_id','hub_boot_id'):
             if not isinstance(envelope[key],str) or not 1 <= len(envelope[key]) <= 128: raise ValueError('Command identity')
         payload = envelope['payload']
-        operator = self.operator()
-        if (not isinstance(payload,dict) or payload.get('agent_boot_id') != operator['agent_boot_id']
+        emergency=isinstance(payload,dict) and payload.get('kind')=='revoke'
+        operator = self.operator() if not emergency else None
+        if not emergency and (not isinstance(payload,dict) or payload.get('agent_boot_id') != operator['agent_boot_id']
                 or type(payload.get('operator_epoch')) is not int
                 or payload['operator_epoch'] != operator['microphone_epoch']):
             raise RuntimeError('Stale Agent/operator binding')

@@ -244,7 +244,7 @@ class HoldActor:
                                 max_range_radians=max(ranges), max_velocity_radians_s=velocity,
                                 samples=len(window), trajectory_updates_after_hold=0)
                 window.popleft()
-            self.done.wait(self.period)
+            self.done.wait(min(self.period,.005))
         return dict(verified=False, profile='hold_current_pose', started=started,
                     completed=time.monotonic(), reason='feedback_not_settled_before_deadline')
 

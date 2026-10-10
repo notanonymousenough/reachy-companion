@@ -87,9 +87,14 @@ class ReplayGateway:
 
 
 class Scheduler:
-    def __init__(self, config, gateway):
+    def __init__(self, config, gateway, motion_adapter=None):
         self.config, self.gateway = config, gateway
         self.state = State(gateway.boot_id, config)
+        self.motion_adapter=motion_adapter
+        self.actor_job=self.motion_job=None;self.next_actor=0
+        if motion_adapter:
+            self.state.muted=True
+            motion_adapter.hub.boot_id=self.state.authority.hub_boot_id
         self.fast_job = self.main_job = None
         self.binding = self.main_task = None
         self.next_tick = 0
@@ -107,6 +112,20 @@ class Scheduler:
 
     def advance(self, now=None):
         now = time.monotonic() if now is None else now
+        if self.motion_adapter:
+            if self.actor_job and self.actor_job.future.done():
+                try:self.state.set_actor(self.actor_job.future.result())
+                except Exception:
+                    self.state.motion_allowed=False;self.state.record('actor_authority_unavailable')
+                self.actor_job=None
+            if not self.actor_job and now>=self.next_actor:
+                self.actor_job=Job(self.motion_adapter.refresh);self.next_actor=now+.1
+            if self.motion_job and self.motion_job.future.done():
+                try:
+                    report=self.motion_job.future.result()
+                    self.state.record('motion_completed' if report['accepted'] else 'motion_failed',request_id=report['request_id'])
+                except Exception:self.state.record('motion_failed')
+                self.motion_job=None
         if self.config.get('context',{}).get('enabled') and hasattr(self.gateway,'context'):
             if self.context_job and self.context_job.future.done():
                 request_id,authority,started=self.context_binding
@@ -146,6 +165,11 @@ class Scheduler:
                     task = None
                 else:
                     task = self.state.apply(choice, self.binding, now)
+                if self.state.motion_proposals:
+                    proposal=self.state.motion_proposals.popleft()
+                    if self.motion_adapter and not self.motion_job:
+                        self.motion_job=Job(self.motion_adapter.execute,proposal)
+                    else:self.state.record('motion_execution_busy')
                 if task:
                     self.main_task = task
                     self.main_job = Job(self.gateway.main, task)
@@ -156,6 +180,7 @@ class Scheduler:
         if self.fast_job and now > self.binding.deadline and not self.expiry_logged:
             self.state.record('fast_deadline_expired')
             self.expiry_logged = True
+        if self.motion_adapter and self.state.actor_binding is None:return
         if now < self.next_tick:
             return
         # No catch-up burst. Skipped busy ticks remain explicit gaps.
@@ -185,12 +210,14 @@ class Scheduler:
             self.advance(now)
             time.sleep(min(0.01, self.config['period_s']/10))
         # Stop new admission, invalidate any pending action; no model cancellation claim.
+        if self.motion_adapter:self.motion_adapter.close()
         self.ingest(dict(type='operator', muted=True))
         report = dict(mode='replay' if isinstance(self.gateway, ReplayGateway) else 'real_model_shadow',
-                      actuators='simulated', counts=dict(self.state.counts),
+                      actuators='bounded_native_antenna17' if self.motion_adapter else 'simulated', counts=dict(self.state.counts),
                       execution_busy=dict(fast=bool(self.fast_job and not self.fast_job.future.done()),
                                           main=bool(self.main_job and not self.main_job.future.done())),
                       ledger=list(self.state.ledger), authority=self.state.authority.wire())
+        if self.motion_adapter:report['motion_receipts']=list(self.motion_adapter.receipts)
         if output:
             from pathlib import Path
             path = Path(output)
