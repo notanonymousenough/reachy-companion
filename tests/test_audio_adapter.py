@@ -83,6 +83,22 @@ class AudioTests(unittest.TestCase):
                     self.assertGreater(adapter.status()['counts']['stale'],0)
                 finally:release.set()
 
+    def test_rejected_owned_echo_advances_replay_fence_without_superseding_stop(self):
+        release=threading.Event();entered=threading.Event();calls=[]
+        def stt(pcm):calls.append(1);entered.set();release.wait(2);return 'стоп'
+        adapter=self.setup_adapter(stt);self.poll(adapter);self.submit(adapter,1);self.poll(adapter)
+        self.assertTrue(entered.wait(.5))
+        try:
+            self.assertFalse(self.submit(adapter,2,origin='owned_playback',echo_reference='actual-stream'))
+            self.assertFalse(self.submit(adapter,2))
+            self.assertTrue(adapter.status()['execution_busy']);self.assertEqual(calls,[1])
+            release.set();self.drain(adapter)
+            event=self.poll(adapter);self.assertEqual(event['text'],'стоп')
+            self.assertEqual(event['audio']['sequence'],1);self.assertIsNone(self.poll(adapter))
+            self.assertEqual(adapter.status()['last_sequence'],2)
+            self.assertEqual(adapter.status()['latest_utterance_sequence'],1)
+        finally:release.set()
+
     def test_latest_stop_survives_superseded_completion_without_epoch_change(self):
         for newest,withdraw in ((2,False),(3,False),(3,True)):
             with self.subTest(newest=newest,withdraw=withdraw):

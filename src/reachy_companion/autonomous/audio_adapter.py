@@ -40,7 +40,7 @@ class AudioAdapter:
         self.lock = threading.RLock()
         self.source = None
         self.source_generation = -1
-        self.sequence = -1
+        self.sequence = self.latest_utterance_sequence = -1
         self.authority = self.operator_signature = None
         self.operator_deadline = 0
         self.allowed = False
@@ -57,6 +57,7 @@ class AudioAdapter:
             if self.closed or generation <= self.source_generation:
                 return False
             self.source, self.source_generation, self.sequence = boot, generation, -1
+            self.latest_utterance_sequence=-1
             self._withdraw()
             return True
 
@@ -131,7 +132,7 @@ class AudioAdapter:
         return (not self.closed and self.allowed and now < self.operator_deadline
                 and generation == self.generation and observation['authority'] == self.authority
                 and observation['operator_signature'] == self.operator_signature
-                and observation['source_boot'] == self.source and observation['sequence']==self.sequence
+                and observation['source_boot'] == self.source and observation['sequence']==self.latest_utterance_sequence
                 and now < observation['deadline'])
 
     def submit(self, pcm, *, source_boot, sequence, captured_end, authority,
@@ -158,6 +159,7 @@ class AudioAdapter:
             if origin == 'owned_playback':
                 self.counts['echo'] += 1
                 return False
+            self.latest_utterance_sequence=sequence
             if self.pending:
                 self.counts['overwritten'] += 1
             self.pending = dict(pcm=pcm, pcm_sha256=hashlib.sha256(pcm).hexdigest(),
@@ -182,4 +184,4 @@ class AudioAdapter:
         with self.lock:
             return dict(execution_busy=bool(self.job and self.job.is_alive()),
                         pending=self.pending is not None, source_boot=self.source,
-                        last_sequence=self.sequence, counts=dict(self.counts))
+                        last_sequence=self.sequence,latest_utterance_sequence=self.latest_utterance_sequence, counts=dict(self.counts))
