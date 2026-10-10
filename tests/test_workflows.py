@@ -98,11 +98,40 @@ class WorkflowTests(unittest.TestCase):
         store=self.store(':memory:',invoke,pending_cap=1)
         try:
             store.submit(body());wait(store,'t1/a1','running');store.cancel('t1/a1')
+            self.assertEqual(store.active_executions,1)
             store.submit(body(task='t2'))
             time.sleep(.01)
             self.assertEqual(len(calls),1) # cancel did not release actual permit
             release.set();wait(store,'t2/a1','succeeded')
         finally:release.set()
+    def test_note_opt_in_transform_dedupe_and_restart(self):
+        request={**body(value='  public\t arithmetic\n result: 6  '),'capability':'workflow.normalize_note'}
+        default=self.store(':memory:',echo)
+        with self.assertRaises(ValueError):default.submit(request)
+        calls=[]
+        def invoke(value):calls.append(value);return broker.expected_result(value)
+        store=self.store(self.path,invoke,normalize_notes=True);store.submit(request)
+        result=wait(store,'t1/a1','succeeded')
+        self.assertEqual(result['result']['value'],'public arithmetic result: 6')
+        store.close();restored=self.store(self.path,invoke,normalize_notes=True)
+        self.assertEqual(restored.submit(request),result);self.assertEqual(len(calls),1)
+        with self.assertRaises(FileExistsError):restored.submit({**request,'capability':'workflow.synthetic_echo'})
+        restored.close()
+
+    def test_note_empty_extra_arguments_and_wrong_transform_are_rejected(self):
+        store=self.store(':memory:',echo,normalize_notes=True)
+        request={**body(),'capability':'workflow.normalize_note'}
+        for arguments in ({'value':' \n\t\r '},{'value':'ok','url':'http://untrusted'},{'value':'x'*257}):
+            with self.assertRaises(ValueError):store.submit({**request,'arguments':arguments})
+        store.submit({**request,'arguments':{'value':'  changed  '}})
+        wait(store,'t1/a1','execution_unknown');self.assertTrue(store.quarantined)
+
+    def test_note_expressions_are_data_and_ascii_whitespace_preserves_unicode(self):
+        store=self.store(':memory:',broker.expected_result,normalize_notes=True)
+        request={**body(value='  {{$env.SECRET}}\t\u00a0 public  '),'capability':'workflow.normalize_note'}
+        store.submit(request);result=wait(store,'t1/a1','succeeded')
+        self.assertEqual(result['result']['value'],'{{$env.SECRET}} \u00a0 public')
+
     def test_optional_workflow_uses_typed_candidate_and_fresh_commit(self):
         cfg=load(ROOT/'config.autonomous.example.json');cfg.update(period_s=.005)
         cfg['workflows']['enabled']=True

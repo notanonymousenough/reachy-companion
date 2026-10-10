@@ -1,4 +1,4 @@
-"""Standalone optional VPS broker. One allowlisted synthetic workflow; no controls."""
+"""Standalone optional VPS broker. Explicit typed text workflows; no controls."""
 import hashlib
 import hmac
 import json
@@ -24,8 +24,20 @@ def decode(raw):
     return json.loads(raw, parse_constant=reject, object_pairs_hook=unique)
 
 
+def note_value(value):
+    return re.sub(r'[ \t\r\n]+',' ',value.strip(' \t\r\n'))
+
+
+def expected_result(body):
+    value=body['arguments']['value']
+    if body['capability']=='workflow.normalize_note':value=note_value(value)
+    return dict(task_id=body['task_id'],attempt_id=body['attempt_id'],value=value)
+
+
 class Store:
-    def __init__(self, path, invoke, capacity=1024, pending_cap=8):
+    def __init__(self, path, invoke, capacity=1024, pending_cap=8, *, normalize_notes=False):
+        if type(normalize_notes) is not bool:raise ValueError('Exact capability opt-in required')
+        self.capabilities=('workflow.synthetic_echo','workflow.normalize_note') if normalize_notes else ('workflow.synthetic_echo',)
         self.db = sqlite3.connect(path, check_same_thread=False)
         self.db.row_factory = sqlite3.Row
         self.lock = threading.RLock()
@@ -33,6 +45,7 @@ class Store:
         self.permit = threading.Semaphore(1)
         self.queue = queue.Queue(maxsize=pending_cap)
         self.closed = False
+        self.active_executions=0
         self.db.execute('PRAGMA journal_mode=WAL')
         self.db.execute('CREATE TABLE IF NOT EXISTS tasks (key TEXT PRIMARY KEY, digest TEXT, body TEXT, deadline REAL, status TEXT, result TEXT)')
         self.db.execute('CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT)')
@@ -84,12 +97,13 @@ class Store:
     def submit(self, body):
         if not isinstance(body, dict) or set(body) != {'capability','task_id','attempt_id','deadline_at','arguments'}:
             raise ValueError('Invalid task envelope')
-        if body['capability'] != 'workflow.synthetic_echo': raise ValueError('Unknown capability')
+        if body['capability'] not in self.capabilities: raise ValueError('Unknown capability')
         for field in ('task_id','attempt_id'):
             if not isinstance(body[field], str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', body[field]): raise ValueError('Invalid identity')
         args = body['arguments']
         if not isinstance(args, dict) or set(args) != {'value'} or not isinstance(args['value'], str) or len(args['value']) > 256:
             raise ValueError('Invalid arguments')
+        if body['capability']=='workflow.normalize_note' and not note_value(args['value']):raise ValueError('Empty note')
         if not isinstance(body['deadline_at'], str) or not body['deadline_at'].endswith('Z'): raise ValueError('UTC deadline required')
         deadline = datetime.fromisoformat(body['deadline_at'].replace('Z','+00:00')).timestamp()
         raw = json.dumps(body, sort_keys=True, separators=(',',':'))
@@ -129,9 +143,10 @@ class Store:
                     return
                 row = self._row(key); body = decode(row['body'])
                 self.db.execute("UPDATE tasks SET status='running' WHERE key=?", (key,)); self.db.commit()
+                self.active_executions+=1
             try:
                 result = self.invoke(body)
-                expected = dict(task_id=body['task_id'], attempt_id=body['attempt_id'], value=body['arguments']['value'])
+                expected = expected_result(body)
                 if result != expected: raise ValueError('Workflow output identity/shape mismatch')
                 status = 'succeeded'
             except Exception:
@@ -140,18 +155,25 @@ class Store:
                     self.quarantined = True
                     self.db.execute("INSERT OR REPLACE INTO metadata VALUES('quarantined','true')"); self.db.commit()
             with self.lock:
+                self.active_executions-=1
                 if self.status(key)['status'] != 'running': return
                 self.db.execute('UPDATE tasks SET status=?, result=? WHERE key=?', (status,json.dumps(result) if result else None,key))
                 self.db.commit()
 
 
 class N8n:
-    def __init__(self, url, token):
+    def __init__(self, url, token, *, normalize_notes=False):
         self.url, self.token = url, token
+        self.normalize_notes=normalize_notes
         self.opener = build_opener(ProxyHandler({}))
     def __call__(self, body):
         payload = dict(task_id=body['task_id'], attempt_id=body['attempt_id'], value=body['arguments']['value'])
-        request = Request(self.url, data=json.dumps(payload).encode(), headers={'Content-Type':'application/json','X-Companion-Token':self.token})
+        url=self.url
+        if body['capability']=='workflow.normalize_note':
+            if not self.normalize_notes or not url.endswith('/companion-synthetic-echo'):raise ValueError('Note route not configured')
+            url=url[:-len('companion-synthetic-echo')]+'companion-normalize-note'
+        elif body['capability']!='workflow.synthetic_echo':raise ValueError('Unknown route')
+        request = Request(url, data=json.dumps(payload).encode(), headers={'Content-Type':'application/json','X-Companion-Token':self.token})
         with self.opener.open(request, timeout=15) as response: raw = response.read(8193)
         if len(raw)>8192: raise ValueError('Oversized response')
         return decode(raw)
@@ -171,7 +193,11 @@ def create_server(store, token, bind='127.0.0.1', port=5679):
             self.reply(401, {'error':'unauthorized'}); return False
         def do_GET(self):
             if not self.authenticated(): return
-            if self.path=='/health': self.reply(200, {'ok':not store.quarantined,'quarantined':store.quarantined,'capabilities':['workflow.synthetic_echo'],'controls':False}); return
+            if self.path=='/health':
+                with store.lock:
+                    value=dict(ok=not store.quarantined,quarantined=store.quarantined,capabilities=list(store.capabilities),controls=False,
+                        execution_busy=store.active_executions>0,pending_tasks=store.db.execute("SELECT count(*) FROM tasks WHERE status='queued'").fetchone()[0])
+                self.reply(200,value);return
             try:
                 if not self.path.startswith('/tasks/'): raise KeyError()
                 self.reply(200, store.status(self.path.removeprefix('/tasks/')))
@@ -206,6 +232,9 @@ def create_server(store, token, bind='127.0.0.1', port=5679):
 
 
 if __name__=='__main__':
+    flag=os.environ.get('WORKFLOW_NORMALIZE_NOTES','false')
+    if flag not in ('true','false'):raise ValueError('Explicit note capability flag required')
+    notes=flag=='true'
     store = Store(os.environ.get('WORKFLOW_DB','/data/tasks.sqlite'),
-                  N8n(os.environ['WORKFLOW_URL'],os.environ['WORKFLOW_WEBHOOK_TOKEN']))
+                  N8n(os.environ['WORKFLOW_URL'],os.environ['WORKFLOW_WEBHOOK_TOKEN'],normalize_notes=notes),normalize_notes=notes)
     with create_server(store,os.environ['WORKFLOW_BROKER_TOKEN'],bind='0.0.0.0',port=8080) as server: server.serve_forever()

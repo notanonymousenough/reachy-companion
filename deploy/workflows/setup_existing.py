@@ -15,6 +15,7 @@ def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--base-url',default='http://127.0.0.1:5678')
     parser.add_argument('--owner-email')
+    parser.add_argument('--capability',choices=('workflow.synthetic_echo','workflow.normalize_note'),default='workflow.synthetic_echo')
     args=parser.parse_args()
     os.umask(0o077)
     root=Path(__file__).resolve().parent
@@ -48,17 +49,27 @@ def main():
     if not state.get('credential_id'):
         credential=call('POST','/rest/credentials',dict(name='Reachy companion webhook only',type='httpHeaderAuth',data={'name':'X-Companion-Token','value':values['WORKFLOW_WEBHOOK_TOKEN']}))
         state['credential_id']=credential['id']; admin.write_text(json.dumps(state))
-    if not state.get('workflow_id'):
-        workflow=json.loads((root/'synthetic-echo.json').read_text())
-        for node in workflow['nodes']:
-            if 'credentials' in node: node['credentials']['httpHeaderAuth']['id']=state['credential_id']
-        workflow={k:workflow[k] for k in ('name','nodes','connections','settings')}
+    note=args.capability=='workflow.normalize_note'
+    key='note_workflow_id' if note else 'workflow_id'
+    template=json.loads((root/('normalize-note.json' if note else 'synthetic-echo.json')).read_text())
+    for node in template['nodes']:
+        if 'credentials' in node:node['credentials']['httpHeaderAuth']['id']=state['credential_id']
+    if not state.get(key):
+        workflow={k:template[k] for k in ('name','nodes','connections','settings')}
         created=call('POST','/rest/workflows',workflow)
-        state.update(workflow_id=created['id'],version_id=created['versionId']);admin.write_text(json.dumps(state))
-    workflow=call('GET','/rest/workflows/'+state['workflow_id'])
+        state[key]=created['id'];admin.write_text(json.dumps(state))
+    workflow=call('GET','/rest/workflows/'+state[key])
+    def semantics(value):
+        nodes=[]
+        for node in value['nodes']:
+            nodes.append({**{field:node.get(field) for field in ('id','name','type','typeVersion','parameters','webhookId')},
+                'credentials':{kind:data.get('id') for kind,data in node.get('credentials',{}).items()}})
+        return nodes,value['connections']
+    if semantics(workflow)!=semantics(template) or any(workflow['settings'].get(field)!=value for field,value in template['settings'].items()):
+        raise RuntimeError('Owned workflow semantics/retention changed; review required')
     if not workflow.get('active'):
-        call('POST','/rest/workflows/'+state['workflow_id']+'/activate',dict(versionId=workflow['versionId']))
-    print(json.dumps({'workflow_id':state['workflow_id'],'capability':'workflow.synthetic_echo','secrets_displayed':False}))
+        call('POST','/rest/workflows/'+state[key]+'/activate',dict(versionId=workflow['versionId']))
+    print(json.dumps({'workflow_id':state[key],'capability':args.capability,'secrets_displayed':False}))
 
 
 if __name__=='__main__':main()

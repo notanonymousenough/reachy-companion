@@ -69,6 +69,8 @@ def load(path):
     if type(workflows.get('enabled', False)) is not bool:
         raise ValueError('Workflow enable flag must be boolean')
     if workflows:
+        if workflows.get('capability','workflow.synthetic_echo') not in ('workflow.synthetic_echo','workflow.normalize_note'):
+            raise ValueError('Static workflow capability required')
         for key in ('http_timeout_s', 'poll_s'):
             if type(workflows[key]) not in (int, float) or not 0 < workflows[key] <= 10:
                 raise ValueError('Invalid workflow timing')

@@ -11,6 +11,7 @@ services:
       WORKFLOW_WEBHOOK_TOKEN: ${WORKFLOW_WEBHOOK_TOKEN:?required}
       WORKFLOW_BROKER_TOKEN: ${WORKFLOW_BROKER_TOKEN:?required}
       WORKFLOW_DB: /data/tasks.sqlite
+      WORKFLOW_NORMALIZE_NOTES: ${WORKFLOW_NORMALIZE_NOTES:-false}
     volumes: ["./broker.py:/app/broker.py:ro", "broker_data:/data"]
     networks: [existing_n8n]
     mem_limit: 96m

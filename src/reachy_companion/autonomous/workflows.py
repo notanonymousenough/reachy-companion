@@ -2,6 +2,7 @@
 from datetime import datetime, timezone, timedelta
 import json
 import os
+import re
 import time
 from urllib.request import Request, build_opener, ProxyHandler
 from .contracts import decode
@@ -12,6 +13,8 @@ class WorkflowClient:
         if not config['enabled'] or not config['broker_url']:
             raise ValueError('Optional workflow broker disabled/unconfigured')
         self.config=config
+        self.capability=config.get('capability','workflow.synthetic_echo')
+        if self.capability not in ('workflow.synthetic_echo','workflow.normalize_note'):raise ValueError('Static workflow capability required')
         self.token=os.environ.get(config['token_env'],'')
         if len(self.token)<32: raise ValueError('Workflow auth missing')
         self.opener=build_opener(ProxyHandler({}))
@@ -27,8 +30,12 @@ class WorkflowClient:
         remaining=min(60,max(0,task.deadline-time.monotonic()))
         if remaining<=0: raise TimeoutError('task already expired')
         if len(task.prompt)>256: raise ValueError('synthetic argument cap')
+        expected_value=task.prompt
+        if self.capability=='workflow.normalize_note':
+            expected_value=re.sub(r'[ \t\r\n]+',' ',task.prompt.strip(' \t\r\n'))
+            if not expected_value:raise ValueError('Empty note')
         deadline=datetime.now(timezone.utc)+timedelta(seconds=remaining)
-        body=dict(capability='workflow.synthetic_echo',task_id=task.task_id,attempt_id=task.attempt_id,
+        body=dict(capability=self.capability,task_id=task.task_id,attempt_id=task.attempt_id,
                   deadline_at=deadline.isoformat().replace('+00:00','Z'),arguments={'value':task.prompt})
         path='/tasks/'+task.task_id+'/'+task.attempt_id
         result=self.call('/tasks',body)
@@ -37,7 +44,7 @@ class WorkflowClient:
                 raise ValueError('Workflow authority mismatch')
             if result['status']=='succeeded':
                 output=result['result']
-                if output != dict(task_id=task.task_id,attempt_id=task.attempt_id,value=task.prompt):
+                if output != dict(task_id=task.task_id,attempt_id=task.attempt_id,value=expected_value):
                     raise ValueError('Workflow result schema mismatch')
                 return output['value']
             if result['status'] not in ('queued','running'): raise RuntimeError('Workflow terminal '+result['status'])

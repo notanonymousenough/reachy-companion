@@ -1,0 +1,86 @@
+{
+  "id": "reachyNormalizeNote",
+  "name": "Reachy prepare short note (no controls)",
+  "active": false,
+  "nodes": [
+    {
+      "id": "webhook",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "companion-normalize-note",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "companion-normalize-note",
+        "authentication": "headerAuth",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "reachyWebhookAuth",
+          "name": "Reachy webhook auth"
+        }
+      }
+    },
+    {
+      "id": "normalize",
+      "name": "Normalize note",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        240,
+        0
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "task_id",
+              "name": "task_id",
+              "value": "={{ $json.body.task_id }}",
+              "type": "string"
+            },
+            {
+              "id": "attempt_id",
+              "name": "attempt_id",
+              "value": "={{ $json.body.attempt_id }}",
+              "type": "string"
+            },
+            {
+              "id": "value",
+              "name": "value",
+              "value": "={{ $json.body.value.replace(/^[ \\t\\r\\n]+|[ \\t\\r\\n]+$/g, '').replace(/[ \\t\\r\\n]+/g, ' ') }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Normalize note",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "none",
+    "saveExecutionProgress": false,
+    "saveManualExecutions": false
+  }
+}
