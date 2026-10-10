@@ -1,4 +1,8 @@
 import json
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
 import threading
 import unittest
 from urllib.error import HTTPError
@@ -24,6 +28,11 @@ class ControlTests(unittest.TestCase):
         self.assertTrue(result['stop_requested']);self.assertNotIn('stop_known',result)
         self.assertTrue(stop.is_set());self.assertTrue(client.status()['stop_requested'])
 
+    def test_client_rejects_a_stop_acknowledgement_for_another_owner(self):
+        client=SessionClient('http://127.0.0.1:1','t'*32,'controller')
+        client._request=lambda *args:dict(controller='controller',source_boot='source',session_boot='old-session',stop_requested=True)
+        with self.assertRaises(ValueError):client.stop('current-session','source')
+
     def test_new_session_rejects_old_stop_even_with_same_controller_and_source(self):
         old,client,_=self.server();binding=client.status()
         new,client,stop=self.server()
@@ -42,7 +51,7 @@ class ControlTests(unittest.TestCase):
             execution_busy={key:False for key in ('fast','main','audio','speech','peer_poll','lease','context','context_revoke','context_terminal_revoke')})
         device=dict(controller='controller',source_boot='source',capture_closed=True,microphone_restored=True,
             lease_datagram_execution_busy=False,playback=dict(stop_known=True,execution_busy=False),
-            peer_status=dict(closed=True,watch_execution_busy=False,operator_execution_busy=False),
+            peer_status=dict(source_boot='source',closed=True,watch_execution_busy=False,operator_execution_busy=False),
             operator_after=dict(agent_boot_id='agent',microphone_epoch=2,microphone_enabled=False,capture_active=False,
                 phase='paused',microphone_state_error=None,microphone_owner_present=False))
         return hub,device
@@ -56,8 +65,25 @@ class ControlTests(unittest.TestCase):
         hub,device=self.receipts();device['source_boot']='other'
         with self.assertRaises(ValueError):self.audit(hub,device)
 
+    def test_cleanup_cli_exit_status_reflects_final_proof_without_live_admission(self):
+        root=Path(__file__).resolve().parents[1];hub,device=self.receipts()
+        with tempfile.TemporaryDirectory() as directory:
+            hub_path=Path(directory)/'hub.json';device_path=Path(directory)/'device.json'
+            hub_path.write_text(json.dumps(hub));device_path.write_text(json.dumps(device))
+            command=[sys.executable,str(root/'deploy/autonomous/realtime_audio_control.py'),'check-cleanup',
+                '--controller','controller','--session-boot','session','--source-boot','source',
+                '--hub-receipt',str(hub_path),'--device-receipt',str(device_path)]
+            good=subprocess.run(command,cwd=root,text=True,capture_output=True,timeout=5)
+            self.assertEqual(good.returncode,0,good.stderr)
+            result=json.loads(good.stdout);self.assertTrue(result['receipt_cleanup_verified'])
+            self.assertFalse(result['live_readiness_verified']);self.assertFalse(result['voice_acceptance'])
+            hub['execution_busy']['main']=True;hub_path.write_text(json.dumps(hub))
+            busy=subprocess.run(command,cwd=root,text=True,capture_output=True,timeout=5)
+            self.assertEqual(busy.returncode,2,busy.stderr)
+            self.assertFalse(json.loads(busy.stdout)['receipt_cleanup_verified'])
+
     def test_unknown_receipts_busy_slots_and_missing_proof_prevent_cleanup_claim(self):
-        for section in ('hub_busy','device_capture','device_stop','watch','mic_owner','datagram','context','missing_slot'):
+        for section in ('hub_busy','device_capture','device_stop','watch','mic_owner','datagram','context','missing_slot','foreign_peer','invalid_epoch','transport','tcp_udp_busy'):
             hub,device=self.receipts()
             if section=='hub_busy':hub['execution_busy']['main']=True
             elif section=='device_capture':device.pop('capture_closed')
@@ -66,5 +92,9 @@ class ControlTests(unittest.TestCase):
             elif section=='mic_owner':device['operator_after'].pop('microphone_owner_present')
             elif section=='datagram':device.pop('lease_datagram_execution_busy')
             elif section=='context':hub['context_enabled']=True
-            else:hub['execution_busy'].pop('context_terminal_revoke')
+            elif section=='missing_slot':hub['execution_busy'].pop('context_terminal_revoke')
+            elif section=='foreign_peer':device['peer_status']['source_boot']='old-source'
+            elif section=='invalid_epoch':device['operator_after']['microphone_epoch']=-1
+            elif section=='transport':hub.pop('lease_transport')
+            else:hub['lease_transport']='tcp';device['lease_datagram_execution_busy']=True
             self.assertFalse(self.audit(hub,device)['receipt_cleanup_verified'],section)

@@ -9,7 +9,8 @@ from .contracts import decode,uid
 
 
 def create_server(token,controller,source_boot,stop,read_status,*,port=8790):
-    if len(token)<32 or not isinstance(controller,str) or not 1<=len(controller)<=128:
+    if (len(token)<32 or not isinstance(controller,str) or not 1<=len(controller)<=128
+            or not isinstance(source_boot,str) or not 1<=len(source_boot)<=128):
         raise ValueError('Owned session control required')
     session_boot=uid();slots=threading.BoundedSemaphore(2)
     binding=dict(controller=controller,source_boot=source_boot,session_boot=session_boot)
@@ -64,7 +65,11 @@ class SessionClient(PeerClient):
         return decode(raw)
     def status(self):return self._request('/status')
     def stop(self,session_boot,source_boot):
-        return self._request('/stop',dict(controller=self.controller,session_boot=session_boot,source_boot=source_boot))
+        binding=dict(controller=self.controller,session_boot=session_boot,source_boot=source_boot)
+        result=self._request('/stop',binding)
+        if result!=dict(stop_requested=True,**binding) or result.get('stop_requested') is not True:
+            raise ValueError('Session stop acknowledgement mismatch')
+        return result
 
 
 def cleanup_receipts(hub,device,*,controller,session_boot,source_boot):
@@ -92,15 +97,19 @@ def cleanup_receipts(hub,device,*,controller,session_boot,source_boot):
     playback=device.get('playback',{})
     if playback.get('stop_known') is not True or playback.get('execution_busy') is not False:errors.append('device_stop_unknown')
     peer=device.get('peer_status',{})
-    if peer.get('closed') is not True or peer.get('watch_execution_busy') is not False or peer.get('operator_execution_busy') is not False:
+    if (peer.get('source_boot')!=source_boot or peer.get('closed') is not True or peer.get('watch_execution_busy') is not False
+            or peer.get('operator_execution_busy') is not False):
         errors.append('device_owner_busy_or_unknown')
-    if hub.get('lease_transport')=='udp' and device.get('lease_datagram_execution_busy') is not False:errors.append('device_datagram_busy')
+    if hub.get('lease_transport') not in ('tcp','udp'):errors.append('lease_transport_unknown')
+    if (hub.get('lease_transport')=='udp' or 'lease_datagram_execution_busy' in device) and device.get('lease_datagram_execution_busy') is not False:
+        errors.append('device_datagram_busy')
     operator=device.get('operator_after',{})
     if (device.get('microphone_restored') is not True or operator.get('microphone_enabled') is not False
             or operator.get('capture_active') is not False or operator.get('phase')!='paused'
             or 'microphone_state_error' not in operator or operator['microphone_state_error'] is not None
             or operator.get('microphone_owner_present') is not False
-            or not isinstance(operator.get('agent_boot_id'),str) or type(operator.get('microphone_epoch')) is not int):
+            or not isinstance(operator.get('agent_boot_id'),str) or not 1<=len(operator['agent_boot_id'])<=256
+            or type(operator.get('microphone_epoch')) is not int or not 0<=operator['microphone_epoch']<2**63):
         errors.append('operator_cleanup_unknown')
     return dict(receipt_cleanup_verified=not errors,errors=errors,controller=controller,session_boot=session_boot,
         source_boot=source_boot,live_readiness_verified=False,voice_acceptance=hub.get('accepted') is True,
