@@ -131,18 +131,33 @@ class DatagramRenewal:
         endpoint=urlsplit(client.url)
         self.last_send=None;self.last_ack=None;self.ack_sequence=None
         self.diagnostics_lock=threading.Lock();self.exchange_phase='idle';self.exchange_tail=deque(maxlen=16)
+        self.attempts=0;self.attempt_started=None;self.first_failed_attempt=None;self.last_receive=None
         self.source=source_boot;self.controller=client.controller;self.secret=key(client.token,source_boot);self.sequence=0
         self.socket=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
         self.socket.connect((endpoint.hostname,port));self.socket.settimeout(.04)
-    def receive(self):return verified(self.secret,self.socket.recv(8193))
+    def receive(self):
+        raw=self.socket.recv(8193);self.last_receive=time.monotonic()
+        return verified(self.secret,raw)
     def record(self,phase,error_kind=None):
         with self.diagnostics_lock:
             self.exchange_phase=phase
-            self.exchange_tail.append(dict(at=time.monotonic(),phase=phase,sequence=self.sequence,error_kind=error_kind))
+            self.exchange_tail.append(dict(at=time.monotonic(),phase=phase,sequence=self.sequence,attempt=self.attempts,error_kind=error_kind))
     def renew(self):
+        with self.diagnostics_lock:self.attempts+=1;self.attempt_started=time.monotonic()
         try:self.exchange()
         except Exception as exc:
-            self.record('failed:'+self.exchange_phase,type(exc).__name__);raise
+            phase=self.exchange_phase;kind=type(exc).__name__
+            self.record('failed:'+phase,kind)
+            with self.diagnostics_lock:
+                if self.first_failed_attempt is None:
+                    now=time.monotonic()
+                    self.first_failed_attempt=dict(source_boot=self.source,attempt=self.attempts,phase=phase,
+                        sequence=self.sequence,ack_sequence=self.ack_sequence,error_kind=kind,
+                        elapsed_ms=max(0,(now-self.attempt_started)*1000),
+                        last_send_age_ms=None if self.last_send is None else max(0,(now-self.last_send)*1000),
+                        last_receive_age_ms=None if self.last_receive is None else max(0,(now-self.last_receive)*1000),
+                        last_ack_age_ms=None if self.last_ack is None else max(0,(now-self.last_ack)*1000))
+            raise
     def exchange(self):
         self.record('drain')
         self.socket.setblocking(False)
@@ -166,9 +181,10 @@ class DatagramRenewal:
     def status(self):
         now=time.monotonic()
         with self.diagnostics_lock:
-            tail=[dict(age_ms=max(0,(now-item['at'])*1000),phase=item['phase'],sequence=item['sequence'],error_kind=item['error_kind']) for item in self.exchange_tail]
+            tail=[dict(age_ms=max(0,(now-item['at'])*1000),phase=item['phase'],sequence=item['sequence'],attempt=item['attempt'],error_kind=item['error_kind']) for item in self.exchange_tail]
             phase=self.exchange_phase
-        return dict(source_boot=self.source,sequence=self.sequence,ack_sequence=self.ack_sequence,exchange_phase=phase,exchange_tail=tail,
+        return dict(source_boot=self.source,sequence=self.sequence,ack_sequence=self.ack_sequence,attempts=self.attempts,first_failed_attempt=self.first_failed_attempt,exchange_phase=phase,exchange_tail=tail,
+            last_receive_age_ms=None if self.last_receive is None else max(0,(now-self.last_receive)*1000),
             last_send_age_ms=None if self.last_send is None else max(0,(now-self.last_send)*1000),
             last_ack_age_ms=None if self.last_ack is None else max(0,(now-self.last_ack)*1000))
     def close(self):self.socket.close()

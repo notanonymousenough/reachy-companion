@@ -59,14 +59,64 @@ class DatagramTests(unittest.TestCase):
                 raise socket.timeout()
             def close(self):pass
         transport.socket=NoReplies()
+        first=None
         for _ in range(10):
             with self.assertRaises(socket.timeout):transport.renew()
+            if first is None:first=transport.status()['first_failed_attempt']
+            self.assertEqual(transport.status()['first_failed_attempt'],first)
         status=transport.status();self.assertEqual(len(status['exchange_tail']),16)
         self.assertEqual(status['exchange_phase'],'failed:challenge_wait')
         self.assertEqual(status['exchange_tail'][-1]['error_kind'],'TimeoutError')
         self.assertIsNone(status['ack_sequence']);self.assertIsNotNone(status['last_send_age_ms'])
+        self.assertEqual(status['attempts'],10);self.assertEqual(first['attempt'],1)
+        self.assertEqual(first['phase'],'challenge_wait');self.assertEqual(first['error_kind'],'TimeoutError')
         self.assertNotIn('t'*32,json.dumps(status))
         self.assertNotIn('nonce',json.dumps(status));self.assertNotIn('mac',json.dumps(status))
+
+    def test_lost_ack_first_failure_is_preserved_and_fresh_next_exchange_succeeds(self):
+        peer=Peer();server=LeaseDatagramServer(peer,'t'*32,'127.0.0.1',0);self.addCleanup(server.close)
+        client=PeerClient('http://127.0.0.1:1','t'*32,'owner')
+        transport=DatagramRenewal(client,'boot',1);transport.socket.close()
+        class LocalExchange:
+            def __init__(self):self.answer=None;self.drop_ack=True
+            def setblocking(self,value):self.blocking=value
+            def settimeout(self,value):self.blocking=True
+            def send(self,raw):
+                self.answer=server.handle(verified(transport.secret,raw));return len(raw)
+            def recv(self,size):
+                if not self.blocking or self.answer is None:raise BlockingIOError()
+                answer,self.answer=self.answer,None
+                if answer['kind']=='accepted' and self.drop_ack:
+                    self.drop_ack=False;raise socket.timeout()
+                return signed(transport.secret,answer)
+            def close(self):pass
+        transport.socket=LocalExchange()
+        with self.assertRaises(socket.timeout):transport.renew()
+        failed=transport.status()['first_failed_attempt']
+        self.assertEqual(failed['phase'],'ack_wait');self.assertEqual(failed['sequence'],1)
+        self.assertEqual(peer.calls,1);self.assertIsNone(transport.status()['ack_sequence'])
+        transport.renew()
+        self.assertEqual(peer.calls,2);self.assertEqual(transport.status()['ack_sequence'],2)
+        self.assertEqual(transport.status()['first_failed_attempt'],failed)
+        self.assertEqual(transport.status()['attempts'],2)
+        self.assertNotIn('nonce',json.dumps(transport.status()))
+
+    def test_late_previous_ack_is_rejected_during_current_challenge_without_renewal(self):
+        client=PeerClient('http://127.0.0.1:1','t'*32,'owner')
+        transport=DatagramRenewal(client,'boot',1);transport.socket.close();sent=[]
+        class LateAck:
+            def setblocking(self,value):self.blocking=value
+            def settimeout(self,value):self.blocking=True
+            def send(self,raw):sent.append(verified(transport.secret,raw)['kind']);return len(raw)
+            def recv(self,size):
+                if not self.blocking:raise BlockingIOError()
+                return signed(transport.secret,dict(kind='accepted',source_boot='boot',sequence=0))
+            def close(self):pass
+        transport.socket=LateAck()
+        with self.assertRaises(ValueError):transport.renew()
+        self.assertEqual(sent,['hello']);self.assertEqual(transport.sequence,0)
+        failed=transport.status()['first_failed_attempt']
+        self.assertEqual(failed['phase'],'challenge_wait');self.assertEqual(failed['error_kind'],'ValueError')
 
     def test_actual_udp_exchange_does_not_renew_after_scheduler_stall(self):
         actual=dict(agent_boot_id='agent',microphone_epoch=2,microphone_owner_id='owner',microphone_enabled=True,
