@@ -55,3 +55,5 @@ Compute boot никогда не меняется из completion envelope. Init
 Подготовка local lease/ownership guard,87tests и ограничения hardware integration описаны в [actuator-guard.md](actuator-guard.md). Полный FastView теперь default; актуальная full shadow acceptance — в [pc-live.md](pc-live.md).
 
 Реальная camera-only acquisition и PC pixel processing, включая unknown capture time gate: [perception-live.md](perception-live.md). Semantic vision и physical actors пока не приняты.
+
+Persistent owner memory/corrections/forget/restart и asynchronous camera cache теперь интегрированы в canonical L0/L1: [context-live.md](context-live.md). Опция выключена по умолчанию; RAM scheduler и simulated actors сохранены.

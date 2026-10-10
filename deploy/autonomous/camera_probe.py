@@ -68,6 +68,18 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for key in ('production-root','frame','output'): parser.add_argument('--'+key,type=Path,required=True)
     args = parser.parse_args()
+    owned_frame(args, run)
+
+
+def owned_frame(args, operation):
+    if args.frame.exists(): raise FileExistsError('Select a new raw artifact path')
+    try:
+        return operation(args)
+    finally:
+        args.frame.unlink(missing_ok=True)
+
+
+def run(args):
     process = None
     def shutdown(signum, frame):
         if process is not None and process.is_alive():

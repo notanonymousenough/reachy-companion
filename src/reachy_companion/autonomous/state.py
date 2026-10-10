@@ -26,6 +26,11 @@ class State:
         self.candidates = {}
         self.candidate_kinds = {}
         self.current_utterance = ''
+        self.memory_items = {}
+        self.context_sensors = []
+        self.memory_store_id = None
+        self.memory_revision = -1
+        self.context_received = None
         self.tasks = {}
         self.previous = deque(maxlen=3)
         self.ledger = deque(maxlen=self.config['ledger_cap'])
@@ -58,6 +63,9 @@ class State:
             if not isinstance(event.get('muted'), bool):
                 raise ValueError('operator muted must be boolean')
             self.muted = event['muted']
+            if 'privacy_all' in event:
+                if type(event['privacy_all']) is not bool:raise ValueError('Privacy flag must be boolean')
+                self.privacy=event['privacy_all']
             self.current_utterance = ''
             self.candidates.clear()
             self.candidate_kinds.clear()
@@ -112,12 +120,74 @@ class State:
             raise ValueError('unknown replay event')
         self.revision += 1
 
+    def update_context(self,value,now,roundtrip_s=0):
+        memory=value['memory'];items=memory['items']
+        if len(items)>8 or type(memory['revision']) is not int or memory['revision']<0:raise ValueError('Context memory bound')
+        if not isinstance(memory['store_id'],str) or not 1<=len(memory['store_id'])<=128:raise ValueError('Memory store identity')
+        if self.memory_store_id is not None and self.memory_store_id!=memory['store_id']:raise ValueError('Memory store changed without owner handshake')
+        if self.memory_store_id==memory['store_id'] and memory['revision']<self.memory_revision:
+            self.record('context_stale');return False
+        next_items={}
+        for item in items:
+            validate('MemoryItem',item)
+            if item['status']!='active' or len(item['content'])>256:raise ValueError('Context memory projection')
+            alias=item['id']+':'+str(item['version'])
+            if len(alias)>256 or alias in next_items:raise ValueError('Memory alias bound/duplicate')
+            next_items[alias]=item
+        if len(value['sensors'])>1:raise ValueError('Latest-only camera slot')
+        for sensor in value['sensors']:
+            validate('FastView',{**self.snapshot(now),'sensors':[sensor]})
+            bounds=sensor.get('age_bounds_ms')
+            if bounds and bounds['upper'] is not None:
+                if bounds['upper']<bounds['lower']:raise ValueError('Invalid age interval')
+                bounds['upper']+=max(0,int(roundtrip_s*1000))
+        self.memory_items=next_items;self.memory_store_id=memory['store_id'];self.memory_revision=memory['revision']
+        self.context_sensors=json.loads(json.dumps(value['sensors']));self.context_received=now
+        for task in self.tasks.values():
+            if task.status in ('running','ready','failed') and not self.memory_current(task):
+                task.status='discarded';task.result=None
+                self.record('task_memory_invalidated',task_id=task.task_id)
+                if (task.authority==self.authority and task.kind=='main' and not self.muted and not self.privacy
+                        and self.current_utterance and not self.candidates):
+                    ref=uid();self.candidates[ref]=self.current_utterance;self.candidate_kinds[ref]='main'
+                    self.record('memory_retry_candidate')
+        self.record('context_updated',memory_revision=self.memory_revision)
+        return True
+
+    def memory_digest(self,alias):
+        item=self.memory_items.get(alias)
+        if item and not self.memory_valid(item):return None
+        return hashlib.sha256(json.dumps(item,sort_keys=True,ensure_ascii=False).encode()).hexdigest() if item else None
+
+    @staticmethod
+    def memory_valid(item):
+        now=datetime.now(timezone.utc)
+        start=datetime.fromisoformat(item['valid_from'].replace('Z','+00:00'))
+        end=datetime.fromisoformat(item['valid_until'].replace('Z','+00:00')) if item['valid_until'] else None
+        return start<=now and (end is None or now<end)
+
+    def memory_current(self,task):
+        return all(self.memory_digest(alias)==digest for alias,digest in task.memory_dependencies)
+
+    def context_view(self,now):
+        sensors=json.loads(json.dumps(self.context_sensors))
+        elapsed=max(0,int((now-self.context_received)*1000)) if self.context_received is not None else 0
+        for sensor in sensors:
+            if self.privacy:
+                sensor.update(state='disabled',summary='',age_ms=None)
+                sensor.pop('lineage_id',None);sensor.pop('source_id',None)
+            elif 'age_bounds_ms' in sensor:
+                sensor['age_bounds_ms']['lower']+=elapsed
+                if sensor['age_bounds_ms']['upper'] is not None:sensor['age_bounds_ms']['upper']+=elapsed
+                if sensor['age_bounds_ms']['lower']>2000:sensor['state']='stale'
+        return sensors
+
     def collect(self, now):
         for task in self.tasks.values():
             if task.status == 'running' and now > task.deadline:
                 task.status = 'expired'
                 self.record('task_expired', task_id=task.task_id)
-            if task.status == 'ready' and (now > task.expires or task.authority != self.authority):
+            if task.status == 'ready' and (now > task.expires or task.authority != self.authority or not self.memory_current(task)):
                 task.status = 'discarded'; task.result = None
                 self.record('proposal_discarded', task_id=task.task_id)
         # Bounded terminal history; active execution accounted separately by scheduler.
@@ -144,10 +214,10 @@ class State:
                     speech_epoch=self.authority.speech_epoch),
             sim=dict(origin='simulated', mood=0, arousal=0.2, fatigue=0, curiosity=0.5,
                      confidence=None, social_need=0, transition_reasons=[]),
-            scene='Shadow/replay. No physical sensor or actuator connected.',
-            sensors=[s.view(now, self.muted) for s in self.sensors.values()],
+            scene='Shadow actors; camera observations include age bounds and provenance.' if self.context_sensors else 'Shadow/replay. No physical sensor or actuator connected.',
+            sensors=([s.view(now, self.muted) for s in list(self.sensors.values())[:12-len(self.context_sensors)]]+self.context_view(now)),
             prev=list(self.previous), dialogue='' if self.muted or self.privacy else self.current_utterance,
-            memory=[], personality='Ричи: краткий, прямой, любопытный.',
+            memory=[] if self.privacy else [dict(alias=alias,type=item['epistemic_type'],summary=item['content']) for alias,item in self.memory_items.items() if self.memory_valid(item)], personality='Ричи: краткий, прямой, любопытный.',
             principles='No invented perception. Muted blocks speech. Simulated actions only.', goal=None,
             pending=pending[:8], ready=ready[:4],
             candidates=[dict(alias=k, kind=self.candidate_kinds[k], summary=v[:256]) for k,v in self.candidates.items()][:8],
@@ -191,6 +261,8 @@ class State:
             self.record('muted_action_rejected'); return None
         if start and (start['input_ref'] not in binding.candidates or start['type'] != self.candidate_kinds.get(start['input_ref'])):
             self.record('alias_rejected'); return None
+        if start and self.config.get('context',{}).get('enabled') and self.memory_store_id is None:
+            self.record('context_not_ready');return None
         if commit and commit not in binding.ready:
             self.record('alias_rejected'); return None
         dependencies = dict(binding.dependencies)
@@ -214,6 +286,10 @@ class State:
                 self.record('task_admission_rejected'); return None
             task = Task(uid(), uid(), ref, self.candidates.pop(ref), self.authority, now,
                         now+self.config['task_timeout_s'], kind=self.candidate_kinds.pop(ref))
+            if task.kind=='main' and (self.memory_items or self.context_sensors):
+                active_memory={alias:item for alias,item in self.memory_items.items() if self.memory_valid(item)}
+                task.prompt=dict(schema_version='context-1',utterance=task.prompt,memory=list(active_memory.values()),observations=self.context_view(now))
+                task.memory_dependencies=tuple((alias,hashlib.sha256(json.dumps(item,sort_keys=True,ensure_ascii=False).encode()).hexdigest()) for alias,item in active_memory.items())
             self.tasks[task.task_id] = task
             self.record('task_started', task_id=task.task_id)
             return task
@@ -221,7 +297,7 @@ class State:
 
     def complete(self, task_id, attempt_id, authority, result, now, error=None):
         task = self.tasks.get(task_id)
-        if not task or task.attempt_id != attempt_id or task.authority != authority or authority != self.authority or now > task.deadline or task.status != 'running':
+        if not task or task.attempt_id != attempt_id or task.authority != authority or authority != self.authority or now > task.deadline or task.status != 'running' or not self.memory_current(task):
             if task and task.attempt_id == attempt_id and task.authority == authority and task.status == 'running':
                 task.status = 'discarded'
             self.record('task_result_stale', task_id=task_id); return

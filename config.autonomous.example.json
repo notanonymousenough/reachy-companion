@@ -90,5 +90,16 @@
     "token_env": "REACHY_WORKFLOW_TOKEN",
     "http_timeout_s": 2,
     "poll_s": 0.1
+  },
+  "context": {
+    "enabled": false,
+    "memory_path": "data/autonomous-memory.sqlite3",
+    "namespaces": [
+      "conversation"
+    ],
+    "refresh_s": 0.5,
+    "video_url": null,
+    "video_token_env": "REACHY_VIDEO_TOKEN",
+    "video_poll_s": 0.5
   }
 }

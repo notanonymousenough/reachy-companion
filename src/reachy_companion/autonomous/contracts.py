@@ -86,7 +86,7 @@ class Task:
     task_id: str
     attempt_id: str
     input_ref: str
-    prompt: str
+    prompt: str | dict
     authority: Authority
     created: float
     deadline: float
@@ -94,3 +94,4 @@ class Task:
     result: str | None = None
     expires: float = 0
     kind: str = "main"
+    memory_dependencies: tuple = ()

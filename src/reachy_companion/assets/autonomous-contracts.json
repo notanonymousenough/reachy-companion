@@ -2820,41 +2820,7 @@
         "sensors": {
           "type": "array",
           "items": {
-            "type": "object",
-            "properties": {
-              "id": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 256
-              },
-              "state": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 256
-              },
-              "age_ms": {
-                "anyOf": [
-                  {
-                    "type": "integer",
-                    "minimum": 0
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "summary": {
-                "type": "string",
-                "maxLength": 256
-              }
-            },
-            "required": [
-              "id",
-              "state",
-              "age_ms",
-              "summary"
-            ],
-            "additionalProperties": false
+            "$ref": "#/$defs/FastSensorView"
           },
           "maxItems": 12
         },
@@ -3124,6 +3090,79 @@
         "causality",
         "result_deadline_at",
         "aliases"
+      ],
+      "additionalProperties": false
+    },
+    "FastSensorView": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "state": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "age_ms": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "summary": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "age_bounds_ms": {
+          "type": "object",
+          "properties": {
+            "lower": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "upper": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          },
+          "required": [
+            "lower",
+            "upper"
+          ],
+          "additionalProperties": false
+        },
+        "gaps": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2147483647
+        },
+        "lineage_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "source_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      },
+      "required": [
+        "id",
+        "state",
+        "age_ms",
+        "summary"
       ],
       "additionalProperties": false
     }

@@ -36,3 +36,5 @@ Hub владеет непрерывным когнитивным циклом и
 Optional VPS/n8n этап, результаты и эксплуатация: [workflows.md](workflows.md).
 
 Реальный PC audit, tokenizer adapters, конечные model measurements и acceptance failures: [pc-live.md](pc-live.md).
+
+Актуальная интеграция persistent memory и latest-only camera в canonical state, реальные corrections/forget/privacy прогоны и ограничения: [context-live.md](context-live.md).

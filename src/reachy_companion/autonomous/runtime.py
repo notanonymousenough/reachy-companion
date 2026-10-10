@@ -60,6 +60,10 @@ class RemoteGateway:
             raise ValueError('attempt identity mismatch')
         return result
 
+    def context(self,request_id,query,privacy_all,authority):
+        return self.call('/context',dict(request_id=request_id,data=dict(query=query,privacy_all=privacy_all,
+                        hub_boot_id=authority.hub_boot_id,operator_epoch=authority.operator_epoch)))
+
 
 class ReplayGateway:
     """Explicit deterministic fixture backend; never represented as model inference."""
@@ -90,6 +94,9 @@ class Scheduler:
         self.binding = self.main_task = None
         self.next_tick = 0
         self.expiry_logged = False
+        self.context_job=None
+        self.context_binding=None
+        self.next_context=0
 
     def ingest(self, event, now=None):
         self.state.ingest(event, time.monotonic() if now is None else now)
@@ -100,6 +107,20 @@ class Scheduler:
 
     def advance(self, now=None):
         now = time.monotonic() if now is None else now
+        if self.config.get('context',{}).get('enabled') and hasattr(self.gateway,'context'):
+            if self.context_job and self.context_job.future.done():
+                request_id,authority,started=self.context_binding
+                try:
+                    result=self.context_job.future.result()
+                    if result['request_id']!=request_id or result['compute_boot_id']!=authority.compute_boot_id or authority!=self.state.authority:
+                        raise ValueError('Stale context authority')
+                    self.state.update_context(result['output'],now,now-started)
+                except Exception:self.state.record('context_failed')
+                self.context_job=self.context_binding=None
+            if not self.context_job and now>=self.next_context:
+                request_id=uid();self.context_binding=(request_id,self.state.authority,now)
+                self.context_job=Job(self.gateway.context,request_id,self.state.current_utterance,self.state.privacy,self.state.authority)
+                self.next_context=now+self.config['context'].get('refresh_s',.5)
         # Poll done futures without waiting; worker threads never mutate hub state.
         if self.main_job and self.main_job.future.done():
             task = self.main_task

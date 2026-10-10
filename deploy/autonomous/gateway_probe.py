@@ -19,6 +19,7 @@ def main():
         parser.add_argument('--' + key, type=Path, required=True)
     parser.add_argument('--duration', type=int, choices=range(20, 121), default=60)
     parser.add_argument('--threads', type=int, choices=(2, 4, 8), default=4)
+    parser.add_argument('--video-token-file',type=Path)
     args = parser.parse_args()
     cfg = load(args.config)
     fast_url = urlsplit(cfg['models']['fast']['base_url'])
@@ -32,6 +33,9 @@ def main():
     if marker.exists():
         raise RuntimeError('Previous unknown execution requires operator audit before another gateway')
     os.environ[cfg['gateway']['token_env']] = args.token_file.read_text().strip()
+    if cfg.get('context',{}).get('video_url'):
+        if args.video_token_file is None:parser.error('Video token file required for enabled producer')
+        os.environ[cfg['context']['video_token_env']]=args.video_token_file.read_text().strip()
     import socket
     for port in (fast_url.port, cfg['gateway']['port']):
         with socket.socket() as check:
@@ -60,13 +64,14 @@ def main():
             while time.monotonic()<end: time.sleep(.1)
         finally:
             if api:
-                api.shutdown(); api.server_close()
+                api.shutdown()
                 end = time.monotonic()+cfg['http_timeout_s']+2
                 while any(api.gateway.health()['busy'].values()) and time.monotonic()<end:
                     time.sleep(.1)
                 report['health'] = api.gateway.health()
                 if any(report['health']['busy'].values()) or report['health']['quarantined']:
                     marker.write_text(json.dumps(report['health']), encoding='utf-8')
+                api.server_close()
             process.terminate()
             try: process.wait(timeout=5)
             except subprocess.TimeoutExpired: process.kill(); process.wait(timeout=5)

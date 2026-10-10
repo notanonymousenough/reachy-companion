@@ -20,6 +20,20 @@ def load(path):
     if not config['gateway']['token_env']:
         raise ValueError('Gateway credentials must be supplied through environment')
     workflows = config.get('workflows', {})
+    context = config.get('context', {})
+    if context:
+        if type(context.get('enabled')) is not bool:raise ValueError('Context enable flag')
+        if context.get('enabled'):
+            if not context.get('memory_path') or not 1<=len(context.get('namespaces',[]))<=4:raise ValueError('Context memory configuration')
+            for key,default in [('refresh_s',.5),('video_poll_s',.5)]:
+                value=context.get(key,default)
+                if type(value) not in (int,float) or not .1<=value<=10:raise ValueError('Context timing bound')
+            if context.get('video_url'):
+                endpoint=urlsplit(context['video_url'])
+                if (endpoint.scheme!='http' or endpoint.hostname not in ('localhost','127.0.0.1','::1')
+                        or endpoint.username or endpoint.password or endpoint.query or endpoint.fragment
+                        or not context.get('video_token_env')):
+                    raise ValueError('Video transport requires loopback SSH and token')
     if type(workflows.get('enabled', False)) is not bool:
         raise ValueError('Workflow enable flag must be boolean')
     if workflows:
