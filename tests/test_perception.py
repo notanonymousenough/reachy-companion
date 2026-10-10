@@ -58,6 +58,10 @@ class PixelTests(unittest.TestCase):
             (root/'config.local.json').write_text('{"paths":{"token_file":"token"},"network":{"agent_url":"http://127.0.0.1:8770"}}')
             policy=root/'policy.json';policy.write_text('{"camera_enabled":true,"privacy_all":false}')
             producer=module.Producer(SimpleNamespace(production_root=root,policy_file=policy))
+            identities=[producer.source_ids() for _ in range(3)]
+            self.assertEqual(len({x['frame_id'] for x in identities}),3)
+            self.assertEqual(len({x['lineage_id'] for x in identities}),1)
+            self.assertTrue(all(x['independent_episode_verified'] is False for x in identities))
             scope=dict(hub_boot_id='hub',compute_boot_id='pc',operator_epoch=0)
             message=dict(scope=scope,privacy_all=False,seq=0)
             self.assertIsNone(producer.packet())
@@ -70,6 +74,7 @@ class PixelTests(unittest.TestCase):
                 self.assertIsNone(producer.latest);self.assertIsNone(producer.packet())
                 with self.assertRaises(ValueError):producer.set_policy({**message,'seq':2})
                 producer.set_policy({**message,'scope':{**scope,'hub_boot_id':'new'},'seq':0})
+                self.assertEqual(producer.source_ids()['lineage_id'],identities[0]['lineage_id'])
                 with self.assertRaises(ValueError):producer.set_policy({**message,'seq':99})
             with patch.object(module.time,'monotonic',return_value=12):self.assertIsNone(producer.packet())
 

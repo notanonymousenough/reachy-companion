@@ -11,6 +11,7 @@ from urllib.request import Request, build_opener, ProxyHandler
 
 def process_hint(command):
     """Export only fixed known roles, never arguments, paths or environment."""
+    command=[arg for arg in command if arg]
     if b'-m' in command:
         index=command.index(b'-m')
         if command[index+1:index+2]==[b'reachy_companion'] and command[-2:]==[b'agent',b'serve']:return 'companion_agentserve'

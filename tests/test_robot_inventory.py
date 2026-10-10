@@ -10,7 +10,7 @@ inventory=importlib.util.module_from_spec(spec);spec.loader.exec_module(inventor
 
 class RobotInventoryTests(unittest.TestCase):
     def test_fixed_roles_never_export_unknown_script_or_arguments(self):
-        self.assertEqual(inventory.process_hint([b'python',b'-u',b'-m',b'reachy_companion',b'--config',b'/private/config',b'agent',b'serve']), 'companion_agentserve')
+        self.assertEqual(inventory.process_hint([b'python',b'-u',b'-m',b'reachy_companion',b'--config',b'/private/config',b'agent',b'serve',b'']), 'companion_agentserve')
         self.assertEqual(inventory.process_hint([b'python',b'/venvs/bin/reachy-mini-daemon',b'private']), 'factory_reachy_mini_daemon')
         self.assertEqual(inventory.process_hint([b'python',b'/private/user-script.py',b'private']), 'unknown_python_entrypoint')
     def test_file_only_pcm_inventory_reports_shared_plugin_without_cursor_attestation(self):

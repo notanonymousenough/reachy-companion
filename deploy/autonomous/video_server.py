@@ -19,6 +19,9 @@ class Producer:
         self.args=args;self.lock=threading.Lock();self.latest=None;self.scope=None
         self.privacy_all=True;self.policy_seq=-1;self.policy_deadline=0
         self.retired=deque(maxlen=128);self.boot_id=str(uuid4());self.seq=0;self.gaps=0;self.frames=0
+        # Frames from one producer run are correlated evidence. Reopening the
+        # reader/privacy transitions cannot manufacture independent episodes.
+        self.capture_lineage_id=str(uuid4())
         self.done=threading.Event()
         config=json.loads((args.production_root/'config.local.json').read_text())
         token_path=Path(config['paths']['token_file'])
@@ -60,6 +63,9 @@ class Producer:
             metadata,payload=self.latest
             raw=json.dumps(metadata).encode()
             return struct.pack('!I',len(raw))+raw+payload
+    def source_ids(self):
+        return dict(frame_id=str(uuid4()),lineage_id=self.capture_lineage_id,
+                    lineage_scope='producer_capture_session',independent_episode_verified=False)
     def capture(self):
         from importlib.metadata import version
         import numpy as np
@@ -92,7 +98,7 @@ class Producer:
                     if running==Gst.CLOCK_TIME_NONE:running=None
                     clock=camera.pipeline.get_clock();clock_now=int(clock.get_time());base=int(camera.pipeline.get_base_time())
                     ppm=b'P6\n320 180\n255\n'+frame[::4,::4,::-1].copy().tobytes()
-                    metadata=dict(producer_boot_id=self.boot_id,seq=self.seq,frame_id=str(uuid4()),lineage_id=str(uuid4()),
+                    metadata=dict(producer_boot_id=self.boot_id,seq=self.seq,**self.source_ids(),
                                   scope=scope,frame_sha256=hashlib.sha256(ppm).hexdigest(),sdk_version=version('reachy-mini'),
                                   audio_initialised=False,pts_ns=pts,buffer_running_time_ns=running,
                                   consumer_clock_ns=clock_now,consumer_base_time_ns=base,
