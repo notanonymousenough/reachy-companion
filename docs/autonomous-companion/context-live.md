@@ -81,3 +81,11 @@ Optional non-null `MemoryItem.claim` нормализуется NFC/outer whites
 В той же namespace для exact subject/predicate/scope/value и пересекающихся half-open valid intervals новый active ID с такой же polarity отвергается как duplicate; противоположная polarity — direct contradiction. Rejection происходит внутри той же `BEGIN IMMEDIATE` транзакции до version/revision writes. Supporting evidence следует объединять owner CAS на одном item; correction/retraction prior item остаётся явной owner operation. Разные values **не** считаются автоматически несовместимыми: predicate cardinality не задана. Разные scopes/intervals и explicit fiction разделены; proposed/disputed items не получают active recall. Это точная structured-claim проверка, не semantic contradiction detector или automatic consolidation. Existing duplicates не удаляются автоматически.
 
 Finite `claim_probe.py` на actual Windows PC/Python3.12.9:7/7checks — duplicate/direct negation rejected, rejected transactions unchanged, correction survives reopen, forget removes item/versions and survives reopen, revoked root reimport rejected. Только новый synthetic fixture namespace/temporary DB; existing context store не используется. Probe fixtures удалены, models_called0/physical_commands0/traits_or_policy_written0.140local regression tests проверяют CAS, scopes/time boundaries, multivalued predicates, Unicode expansion/empty keys и finite typed values. Model/HTTP memory-write endpoint по-прежнему отсутствует; personality/policy auto-writes выключены.
+
+## Cross-component audio memory fixture
+
+`tests/test_audio_memory_integration.py` joins the actual AudioAdapter admission path, SQLite MemoryStore and State speech fence using explicitly synthetic STT/PCM. An unknown, unconfirmed audio turn supplies only digest/lineage provenance. A proposed note is absent from recall; active preference requires explicit trusted-owner confirmation. Owner CAS correction invalidates a ready answer before its delayed speech commit, and forget prevents replay of the same sensor lineage. No physical capture, model inference, automatic runtime memory write or speaker identity is claimed by this fixture.
+
+```text
+PYTHONPATH=src <validation-python> -m unittest discover -s tests -p test_audio_memory_integration.py
+```
