@@ -1,5 +1,6 @@
 import copy
 from datetime import datetime, timezone
+from jsonschema.exceptions import ValidationError
 import hashlib
 import json
 from pathlib import Path
@@ -38,6 +39,56 @@ class MemoryTests(unittest.TestCase):
         with self.assertRaises(MemoryConflict):self.store.commit(item(1),0)
         self.store.commit(item(1),0,confirmed=True)
         self.assertEqual(len(self.store.recall()['items']),1)
+
+    def test_claim_duplicate_negation_rejected_and_owner_correction_still_works(self):
+        first=item();first['claim']=dict(subject=' fixture-user ',predicate='likes',value='jazz',polarity='positive',scope='fixture')
+        self.store.commit(first,None,confirmed=True)
+        second={**item(), 'id':'fixture-second','claim':{**first['claim'],'subject':'fixture-user'}}
+        for polarity in ('positive','negative'):
+            second['claim']['polarity']=polarity
+            with self.assertRaises(MemoryConflict):self.store.commit(second,None,confirmed=True)
+        self.assertEqual(self.store.recall()['revision'],1)
+        self.assertEqual(self.store.count('versions'),1)
+        corrected={**first,'version':1,'claim':{**first['claim'],'polarity':'negative'}}
+        self.store.commit(corrected,0,confirmed=True)
+        self.assertEqual(self.store.recall()['items'][0]['claim']['polarity'],'negative')
+        self.assertEqual(first['claim']['subject'],' fixture-user ')
+
+    def test_claim_comparison_respects_scope_interval_and_multivalued_predicates(self):
+        first=item();first['claim']=dict(subject='fixture-user',predicate='likes',value='jazz',polarity='positive',scope='fixture')
+        first['valid_until']='2026-10-10T00:00:00Z';self.store.commit(first,None,confirmed=True)
+        for suffix,changes in [('scope',dict(claim={**first['claim'],'scope':'other'})),
+                                ('interval',dict(valid_from=first['valid_until'],valid_until=None)),
+                                ('value',dict(claim={**first['claim'],'value':'rock'}))]:
+            self.store.commit({**first,'id':'fixture-'+suffix,**changes},None,confirmed=True)
+
+    def test_claim_numeric_boolean_and_unicode_identity(self):
+        first=item();first['claim']=dict(subject='fixture-user',predicate='label',value='cafe\u0301',polarity='positive',scope='fixture')
+        self.store.commit(first,None,confirmed=True)
+        with self.assertRaises(MemoryConflict):
+            self.store.commit({**first,'id':'fixture-copy','claim':{**first['claim'],'value':'café'}},None,confirmed=True)
+        for suffix,value in [('bool',True),('number',1)]:
+            self.store.commit({**first,'id':'fixture-'+suffix,'claim':{**first['claim'],'value':value}},None,confirmed=True)
+        with self.assertRaises(MemoryConflict):
+            self.store.commit({**first,'id':'fixture-number-copy','claim':{**first['claim'],'value':1.0}},None,confirmed=True)
+
+    def test_empty_or_unicode_expanded_claim_keys_cannot_bypass_bound(self):
+        first=item();first['claim']=dict(subject='fixture',predicate='likes',value='jazz',polarity='positive',scope='fixture')
+        for subject in ('  ','\u0344'*200):
+            with self.assertRaises((ValueError,ValidationError)):self.store.commit({**first,'claim':{**first['claim'],'subject':subject}},None,confirmed=True)
+        self.assertEqual(self.store.count('versions'),0)
+
+    def test_contradicting_proposal_cannot_promote_until_owner_retracts_old_claim(self):
+        first=item();first['claim']=dict(subject='fixture-user',predicate='likes',value='jazz',polarity='positive',scope='fixture')
+        self.store.commit(first,None,confirmed=True)
+        proposal={**first,'id':'fixture-proposal','status':'proposed','claim':{**first['claim'],'polarity':'negative'}}
+        self.store.commit(proposal,None)
+        self.assertEqual(len(self.store.recall()['items']),1)
+        with self.assertRaises(MemoryConflict):self.store.commit({**proposal,'version':1,'status':'active'},0,confirmed=True)
+        self.assertEqual(self.store.recall()['revision'],2)
+        self.store.commit({**first,'version':1,'status':'retracted'},0,confirmed=True)
+        self.store.commit({**proposal,'version':1,'status':'active'},0,confirmed=True)
+        self.assertEqual(self.store.recall()['items'][0]['id'],'fixture-proposal')
     def test_cas_correction_immutable_version_and_restart(self):
         self.store.commit(item(),None,confirmed=True)
         with self.assertRaises(MemoryConflict):self.store.commit(item(1,'wrong base'),None,confirmed=True)

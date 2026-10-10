@@ -5,6 +5,7 @@ from pathlib import Path
 import re
 import sqlite3
 import threading
+import unicodedata
 from .contracts import uid, validate
 
 
@@ -12,6 +13,22 @@ class MemoryConflict(ValueError): pass
 
 
 def stamp(value): return datetime.fromisoformat(value.replace('Z','+00:00'))
+
+
+def normalized_claim(claim):
+    if claim is None:return None
+    claim=dict(claim)
+    for key in ('subject','predicate','scope','value'):
+        if isinstance(claim[key],str):claim[key]=unicodedata.normalize('NFC',claim[key]).strip()
+    if any(not claim[key] for key in ('subject','predicate','scope')):raise ValueError('Empty canonical claim key')
+    return claim
+
+
+def same_claim_value(left,right):
+    # bool is not numeric evidence (True must not alias 1). No entity merging,
+    # synonym matching or assumed single-valued predicate cardinality.
+    if type(left) in (int,float) and type(right) in (int,float):return left==right
+    return type(left) is type(right) and left==right
 
 
 class MemoryStore:
@@ -59,6 +76,9 @@ class MemoryStore:
         item=json.loads(json.dumps(item,allow_nan=False));validate('MemoryItem',item)
         if item['namespace'] not in self.namespaces or len(item['id'])>128 or len(item['content'])>256 or len(json.dumps(item,ensure_ascii=False).encode())>4096:
             raise ValueError('Memory projection bound/namespace; no silent truncation')
+        item['claim']=normalized_claim(item['claim'])
+        validate('MemoryItem',item)
+        if len(json.dumps(item,ensure_ascii=False).encode())>4096:raise ValueError('Normalized memory projection bound')
         if item['valid_until'] is not None and stamp(item['valid_until'])<=stamp(item['valid_from']):raise ValueError('Invalid validity interval')
         if item['status']=='active' and item['epistemic_type'] in ('fact','preference') and confirmed is not True:
             raise MemoryConflict('Trusted confirmation required; model proposals cannot promote facts')
@@ -82,6 +102,20 @@ class MemoryStore:
                 if old:
                     previous=json.loads(self.db.execute('SELECT body FROM versions WHERE id=? AND version=?',(item['id'],actual)).fetchone()[0])
                     if previous['namespace']!=item['namespace']:raise MemoryConflict('Namespace immutable')
+                if item['status']=='active' and item['epistemic_type']!='fiction' and item['claim'] is not None:
+                    rows=self.db.execute('SELECT body FROM versions JOIN active USING(id,version) WHERE id<>?',(item['id'],)).fetchall()
+                    for row in rows:
+                        other=json.loads(row[0])
+                        if other['namespace']!=item['namespace'] or other['status']!='active' or other['epistemic_type']=='fiction' or other['claim'] is None:continue
+                        # Half-open validity intervals; historical/nonoverlapping
+                        # claims and different entity scopes remain separate.
+                        if ((item['valid_until'] is not None and stamp(item['valid_until'])<=stamp(other['valid_from']))
+                                or (other['valid_until'] is not None and stamp(other['valid_until'])<=stamp(item['valid_from']))):continue
+                        claim=normalized_claim(other['claim']);current=item['claim']
+                        if (any(claim[key]!=current[key] for key in ('subject','predicate','scope'))
+                                or not same_claim_value(claim['value'],current['value'])):continue
+                        if claim['polarity']==current['polarity']:raise MemoryConflict('Duplicate active claim; merge supporting evidence with owner CAS')
+                        raise MemoryConflict('Direct claim contradiction; owner correction/retraction required')
                 self.db.execute('INSERT INTO versions VALUES (?,?,?)',(item['id'],item['version'],json.dumps(item,ensure_ascii=False)))
                 self.db.execute('INSERT OR REPLACE INTO active VALUES (?,?)',(item['id'],item['version']))
                 self.bump();self.db.commit()
