@@ -38,3 +38,5 @@ Optional VPS/n8n этап, результаты и эксплуатация: [wo
 Реальный PC audit, tokenizer adapters, конечные model measurements и acceptance failures: [pc-live.md](pc-live.md).
 
 Актуальная интеграция persistent memory и latest-only camera в canonical state, реальные corrections/forget/privacy прогоны и ограничения: [context-live.md](context-live.md).
+
+Конечный native single-writer/hold, actual motor registers и первое synthetic image recognition на существующей9B: [native-live.md](native-live.md).
