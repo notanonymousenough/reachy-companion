@@ -5,7 +5,7 @@ import os
 import threading
 import time
 from urllib.request import Request, build_opener, ProxyHandler
-from .contracts import decode, uid
+from .contracts import decode, uid, validator
 from .state import State
 
 
@@ -88,6 +88,8 @@ class ReplayGateway:
 
 class Scheduler:
     def __init__(self, config, gateway, motion_adapter=None, speech_adapter=None):
+        # Compile/import schema machinery before admitting clock ticks.
+        for name in ('FastView','FastChoice','MemoryItem'):validator(name)
         self.config, self.gateway = config, gateway
         self.state = State(gateway.boot_id, config)
         self.motion_adapter=motion_adapter
@@ -126,6 +128,9 @@ class Scheduler:
     def advance(self, now=None):
         if self.closed:return
         now = time.monotonic() if now is None else now
+        if self.speech_adapter:
+            receipt=self.speech_adapter.operator_view()
+            if receipt:self.state.set_speech_operator(receipt)
         if self.motion_adapter:
             if self.actor_job and self.actor_job.future.done():
                 try:self.state.set_actor(self.actor_job.future.result())

@@ -40,6 +40,18 @@ class State:
         self.actor_binding=None;self.actor_signature=None;self.actor_deadline=0
         self.motion_allowed=False;self.quiet=False;self.motion_proposals=deque(maxlen=1)
         self.speech_attached=False;self.speech_proposals=deque(maxlen=1)
+        self.speech_operator_signature=None
+
+    def set_speech_operator(self,receipt):
+        signature=(tuple(receipt['binding']),receipt['microphone_enabled'],receipt['quiet'],receipt['privacy_all'])
+        if signature==self.speech_operator_signature:return
+        self.speech_operator_signature=signature
+        self.authority=replace(self.authority,operator_epoch=self.authority.operator_epoch+1,
+            microphone_epoch=receipt['binding'][1],speech_epoch=self.authority.speech_epoch+1)
+        self.revision+=1;self.candidates.clear();self.candidate_kinds.clear();self.current_utterance=''
+        self.speech_proposals.clear()
+        self.muted=not receipt['microphone_enabled'];self.quiet=receipt['quiet'];self.privacy=receipt['privacy_all']
+        self.record('speech_operator_changed')
 
     def set_actor(self,receipt):
         # Trusted adapter receipt only, never a model/operator event payload.

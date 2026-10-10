@@ -22,32 +22,51 @@ class Playback:
         self.generation=0;self.authority=None;self.policy_deadline=0;self.permitted=False;self.active=None;self.paused=None
         self.audio_stops={};self.motion_stop_job=None;self.motion_stop_result={}
         self.motion_stop_known=True;self.worker=None;self.stop_jobs=[];self.timeline=deque(maxlen=64);self.stop_known=True
+        self.reservation_busy=False;self.joint_job=None
 
     def record(self,kind,**fields):
         self.timeline.append(dict(kind=kind,at=self.clock(),**fields))
 
-    def operator(self,authority,*,microphone_enabled,quiet=False,privacy_all=False,valid_until=None):
+    def operator(self,authority,*,microphone_enabled,quiet=False,privacy_all=False,valid_until=None,wait=True):
         if any(type(x) is not bool for x in (microphone_enabled,quiet,privacy_all)):
             raise ValueError('Exact operator bools required')
         with self.lock:
             changed=self.authority!=authority or self.permitted!=(microphone_enabled and not quiet and not privacy_all)
             self.policy_deadline=self.clock()+.3 if valid_until is None else valid_until
             self.authority=authority;self.permitted=microphone_enabled and not quiet and not privacy_all
-        if changed:self.interrupt('operator',preserve=False)
+        if changed:self.interrupt('operator',preserve=False,wait=wait)
 
     def begin(self,authority,request_id,*,deadline):
         with self.lock:
             if (self.closed or self.quarantined or not self.permitted or authority!=self.authority
                     or type(deadline) not in (int,float) or not math.isfinite(deadline) or self.clock()>=deadline
+                    or self.clock()>=self.policy_deadline or self.reservation_busy
                     or not isinstance(request_id,str) or not 1<=len(request_id)<=128 or self.active or self.worker and self.worker.is_alive()
                     or any(j.is_alive() for j in self.stop_jobs)):
                 raise RuntimeError('Playback owner/admission unavailable')
-            self.generation+=1;stream=uid();self.backend.reserve(stream)
+            self.generation+=1;stream=uid()
             self.active=dict(stream_id=stream,generation=self.generation,authority=authority,request_id=request_id,
                 pcm=bytearray(),written=0,consumed=0,done=False,deadline=deadline,started=False)
             self.stop_known=False
-            self.worker=threading.Thread(target=self.run,args=(self.active,),daemon=True)
-            self.worker.start();return stream
+            s=self.active;self.reservation_busy=True
+        try:
+            self.backend.reserve(stream) # caller's output worker; never hold state lock
+            with self.lock:
+                allowed=self.current(s)
+                if allowed:
+                    self.worker=threading.Thread(target=self.run,args=(s,),daemon=True)
+                    self.worker.start()
+            if not allowed:
+                self.backend.stop(stream) # reap a delayed reservation without start/write
+                raise RuntimeError('Reservation authority withdrawn')
+            return stream
+        except Exception:
+            with self.lock:
+                if self.active is s:self.active=None
+                self.quarantined=True
+            raise
+        finally:
+            with self.lock:self.reservation_busy=False
 
     def push(self,stream,pcm):
         if not isinstance(pcm,bytes) or not pcm or len(pcm)%2 or len(pcm)>self.chunk_frames*2:
@@ -134,11 +153,15 @@ class Playback:
         r=result.get('receipt',{})
         return not job.is_alive() and r.get('stream_id')==stream and r.get('verified_stopped') is True
 
-    def interrupt(self,reason='human_activity',*,preserve=True):
+    def interrupt(self,reason='human_activity',*,preserve=True,wait=True):
         if reason=='echo':return self.status()  # self speech is not a human turn
         with self.lock:
             self.generation+=1;s=self.active;self.active=None;self.paused=None
             self.wake.set();self.stop_known=s is None and not (self.worker and self.worker.is_alive())
+            generation=self.generation
+            if self.joint_job and self.joint_job.is_alive():
+                self.stop_known=False
+                return self.status()
         known=True;motion_known=True;cursor=None
         if s:
             # One stop job per stream; repeated interrupts cannot spawn more
@@ -158,22 +181,36 @@ class Playback:
                     self.stop_jobs=[j for j in self.stop_jobs if j.is_alive()]+[self.motion_stop_job]
                     self.motion_stop_job.start()
                 motion_job=self.motion_stop_job;outcome=self.motion_stop_result
-            motion_job.join(self.stop_timeout)
-            motion_known=not motion_job.is_alive() and outcome.get('known') is True
-        if s:
-            job.join(self.stop_timeout);r=result.get('receipt',{})
-            known=not job.is_alive() and r.get('stream_id')==s['stream_id'] and r.get('verified_stopped') is True
-            try:cursor=self.cursor(s,r) if known else None
-            except Exception:cursor=None
-        with self.lock:
-            self.motion_stop_known=motion_known
-            self.stop_known=known and motion_known
-            if not self.stop_known:self.quarantined=True
-            if s and preserve and reason=='human_activity' and s['done'] and cursor is not None and cursor<len(s['pcm'])//2 and self.stop_known:
-                self.paused=dict(pcm=bytes(s['pcm']),cursor=cursor,authority=s['authority'],request_id=s['request_id'],
-                    interrupted_at=self.clock(),generation=self.generation,confirmed=False)
-            self.record('joint_stop',reason=reason,stream_id=s['stream_id'] if s else None,
-                consumed_frames=cursor,speech_stop_known=known,motion_stop_known=motion_known,resumable=self.paused is not None)
+                self.motion_stop_known=False
+        def complete():
+            known=True;motion_known=True;cursor=None
+            if self.motion:
+                motion_job.join(self.stop_timeout)
+                motion_known=not motion_job.is_alive() and outcome.get('known') is True
+            if s:
+                job.join(self.stop_timeout);r=result.get('receipt',{})
+                known=not job.is_alive() and r.get('stream_id')==s['stream_id'] and r.get('verified_stopped') is True
+                try:cursor=self.cursor(s,r) if known else None
+                except Exception:cursor=None
+            with self.lock:
+                self.motion_stop_known=motion_known
+                if not s:
+                    known=all(not j.is_alive() and r.get('receipt',{}).get('verified_stopped') is True
+                              for j,r in self.audio_stops.values())
+                self.stop_known=known and motion_known and not self.reservation_busy
+                if not self.stop_known:self.quarantined=True
+                if generation==self.generation and s and preserve and reason=='human_activity' and s['done'] and cursor is not None and cursor<len(s['pcm'])//2 and self.stop_known:
+                    self.paused=dict(pcm=bytes(s['pcm']),cursor=cursor,authority=s['authority'],request_id=s['request_id'],
+                        interrupted_at=self.clock(),generation=generation,confirmed=False)
+                self.record('joint_stop',reason=reason,stream_id=s['stream_id'] if s else None,
+                    consumed_frames=cursor,speech_stop_known=known,motion_stop_known=motion_known,resumable=self.paused is not None)
+        if wait:complete()
+        else:
+            with self.lock:
+                self.stop_known=False
+                self.joint_job=threading.Thread(target=complete,daemon=True)
+                self.stop_jobs=[j for j in self.stop_jobs if j.is_alive()]+[self.joint_job]
+                self.joint_job.start()
         return self.status()
 
     def confirm_no_utterance(self,*,since,until,authority):
@@ -192,10 +229,12 @@ class Playback:
             p=self.paused
             if (not p or not p['confirmed'] or self.clock()<p['interrupted_at']+3 or p['generation']!=self.generation
                     or p['authority']!=self.authority or not self.permitted or self.closed or self.quarantined
+                    or self.clock()>=self.policy_deadline or self.reservation_busy
                     or self.worker and self.worker.is_alive() or any(j.is_alive() for j in self.stop_jobs)):return None
             pcm=p['pcm'][p['cursor']*2:];self.paused=None
-            stream=self.begin(p['authority'],p['request_id'],deadline=self.clock()+60)
-            # Already-bounded retained PCM; copied only within the same authority.
+        stream=self.begin(p['authority'],p['request_id'],deadline=self.clock()+60)
+        with self.lock:
+            if not self.active or self.active['stream_id']!=stream:return None
             self.active['pcm'].extend(pcm);self.active['done']=True;self.wake.set()
             self.record('speech_resumed',stream_id=stream,from_consumed_frames=p['cursor'])
             return stream
@@ -205,7 +244,7 @@ class Playback:
     def status(self):
         with self.lock:
             self.stop_jobs=[j for j in self.stop_jobs if j.is_alive()]
-            return dict(execution_busy=bool(self.worker and self.worker.is_alive()) or any(j.is_alive() for j in self.stop_jobs),
+            return dict(execution_busy=self.reservation_busy or bool(self.worker and self.worker.is_alive()) or any(j.is_alive() for j in self.stop_jobs),
                 stop_known=self.stop_known,quarantined=self.quarantined,closed=self.closed,
                 resumable=self.paused is not None,timeline=list(self.timeline))
 
