@@ -14,11 +14,24 @@ from reachy_companion.autonomous.speech_adapter import HttpTTS
 from reachy_companion.autonomous.contracts import uid
 
 
+def agent(hub,path,payload=None):
+    """Bound operator polling separately from slow synthesis/transcription."""
+    request=Request(hub.config['network']['agent_url']+path,
+        data=None if payload is None else json.dumps(payload).encode(),
+        headers={'Authorization':'Bearer '+hub.config.token,'Content-Type':'application/json'})
+    with hub.http.open(request,timeout=.3 if payload is None else 1) as response:
+        return json.load(response)
+
+
 def cleanup(config,owner_file):
     if not owner_file.exists():return
-    owner=json.loads(owner_file.read_text());hub=Hub(Config(config));actual=hub.agent('/operator')
-    if actual['agent_boot_id']==owner['agent_boot_id'] and actual['microphone_epoch']==owner['owned_microphone_epoch']:
-        hub.agent('/microphone',dict(enabled=False))
+    owner=json.loads(owner_file.read_text());hub=Hub(Config(config));actual=agent(hub,'/operator')
+    if actual['agent_boot_id']!=owner['agent_boot_id']:return
+    if actual['microphone_epoch']==owner['owned_microphone_epoch'] and actual.get('microphone_owner_id')==owner['owner_id']:
+        agent(hub,'/microphone',dict(enabled=False,expected_boot_id=owner['agent_boot_id'],expected_epoch=owner['owned_microphone_epoch'],expected_owner_id=owner['owner_id']))
+    elif actual['microphone_epoch']==owner['initial_microphone_epoch']:
+        # Invalidate a delayed activation that has not acquired the mutex yet.
+        agent(hub,'/microphone',dict(enabled=False,expected_boot_id=owner['agent_boot_id'],expected_epoch=owner['initial_microphone_epoch']))
 
 
 def main():
@@ -27,21 +40,23 @@ def main():
     p.add_argument('--allow-capture-output',action='store_true');p.add_argument('--cleanup-only',action='store_true');a=p.parse_args()
     if a.cleanup_only:cleanup(a.config,a.owner_file);return
     if not a.allow_capture_output or a.output.exists() or a.owner_file.exists():raise ValueError('Explicit fresh finite physical voice practice required')
-    cfg=Config(a.config);hub=Hub(cfg);before=hub.agent('/operator')
+    cfg=Config(a.config);hub=Hub(cfg);before=agent(hub,'/operator')
     if before['microphone_enabled'] or before['capture_active'] or before['phase']!='paused':raise RuntimeError('Idle test owner baseline required')
     if before['motion_policy']['quiet'] or before['motion_policy']['privacy_all']:raise RuntimeError('Operator quiet/privacy blocks practice')
     question='Алиса, сколько будет два плюс два?';opener=build_opener(ProxyHandler({}));pcm=bytearray();captured=bytearray();capture=None;backend=None;stream=uid()
     report=dict(mode='one_finite_external_speaker_practice',accepted=False,question=question,rounds=1,
         private_cloud_inputs=0,automatic_repeat_wake_phrase=False,raw_audio_retained=False,operator_before=before,motor_commands=0)
-    owner=dict(agent_boot_id=before['agent_boot_id'],owned_microphone_epoch=before['microphone_epoch']+1)
+    owner=dict(agent_boot_id=before['agent_boot_id'],initial_microphone_epoch=before['microphone_epoch'],
+        owned_microphone_epoch=before['microphone_epoch']+1,owner_id=uid())
     with a.owner_file.open('x') as f:json.dump(owner,f);f.flush();__import__('os').fsync(f.fileno())
     try:
-        enabled=hub.agent('/microphone',dict(enabled=True,listen=False))
+        enabled=agent(hub,'/microphone',dict(enabled=True,listen=False,expected_boot_id=before['agent_boot_id'],expected_epoch=before['microphone_epoch'],owner_id=owner['owner_id']))
         report['microphone_enabled']=enabled['microphone_enabled'];owned_epoch=enabled['microphone_epoch']
-        if owned_epoch!=owner['owned_microphone_epoch']:raise RuntimeError('Operator changed during test activation')
+        if owned_epoch!=owner['owned_microphone_epoch'] or enabled.get('microphone_owner_id')!=owner['owner_id']:raise RuntimeError('Operator changed during test activation')
         def valid():
-            actual=hub.agent('/operator');policy=actual['motion_policy']
+            actual=agent(hub,'/operator');policy=actual['motion_policy']
             return (actual['agent_boot_id']==owner['agent_boot_id'] and actual['microphone_epoch']==owned_epoch
+                and actual.get('microphone_owner_id')==owner['owner_id']
                 and actual['microphone_enabled'] is True and not policy['quiet'] and not policy['privacy_all']
                 and policy['epoch']==before['motion_policy']['epoch'])
         start=time.monotonic();first=None
@@ -99,9 +114,16 @@ def main():
             try:capture.wait(timeout=1)
             except subprocess.TimeoutExpired:capture.kill();capture.wait(timeout=1)
             report['capture_reaped']=capture.poll() is not None
-        if backend:report['failure_speaker_stop']=backend.stop(stream)
-        pcm.clear();captured.clear();cleanup(a.config,a.owner_file)
-        report['operator_after']=hub.agent('/operator');report['microphone_restored']=report['operator_after']['microphone_enabled'] is False
+        if backend:
+            try:report['failure_speaker_stop']=backend.stop(stream)
+            except Exception as exc:report['speaker_stop_error']=type(exc).__name__;report['accepted']=False
+        pcm.clear();captured.clear()
+        report['microphone_restored']=False
+        try:
+            cleanup(a.config,a.owner_file)
+            report['operator_after']=agent(hub,'/operator')
+            report['microphone_restored']=report['operator_after']['microphone_enabled'] is False
+        except Exception as exc:report['cleanup_error']=type(exc).__name__
         report['accepted']=report['accepted'] and report['microphone_restored']
         with a.output.open('x') as f:json.dump(report,f,ensure_ascii=False,indent=2)
     print(json.dumps(report,ensure_ascii=False),flush=True)

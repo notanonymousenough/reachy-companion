@@ -39,6 +39,7 @@ class Agent:
         self.motion_policy=MotionPolicy(config.path(config['guarded_motion']['policy_path']))
         self.agent_boot_id = str(uuid4())
         self.microphone_epoch = self.microphone.epoch
+        self.microphone_owner_id = None
         self.microphone_lock = threading.Lock()
         self.playback_process = None
         self.voice_response = None
@@ -102,12 +103,24 @@ class Agent:
         if result['privacy_all']:self.listening.clear()
         return result
 
-    def set_microphone(self, enabled, listen=True):
+    def set_microphone(self, enabled, listen=True, *, expected_boot_id=None, expected_epoch=None,
+                       owner_id=None,expected_owner_id=None):
         if type(listen) is not bool:raise ValueError('listen must be boolean')
         if not isinstance(enabled, bool):
             raise ValueError('enabled must be boolean')
+        if expected_boot_id is not None or expected_epoch is not None:
+            if not isinstance(expected_boot_id,str) or not expected_boot_id or type(expected_epoch) is not int or not 0<=expected_epoch<2**63:
+                raise ValueError('Complete microphone authority required')
+        for owner in (owner_id,expected_owner_id):
+            if owner is not None and (not isinstance(owner,str) or not 1<=len(owner)<=128 or expected_boot_id is None):
+                raise ValueError('Bounded microphone owner requires authority')
         with self.microphone_lock:
+            if expected_boot_id is not None and (expected_boot_id!=self.agent_boot_id or expected_epoch!=self.microphone_epoch):
+                raise RuntimeError('Microphone authority changed')
+            if expected_owner_id is not None and expected_owner_id!=self.microphone_owner_id:
+                raise RuntimeError('Microphone owner changed')
             self.microphone_epoch += 1
+            self.microphone_owner_id=owner_id
             self.listening.clear()
             if not enabled:
                 self.microphone.enabled = False
@@ -127,7 +140,8 @@ class Agent:
             if enabled and listen:
                 self.listening.set()
         return {'ok': True, 'microphone_enabled': enabled, 'capture_active': self.capture_active,
-                'agent_boot_id': self.agent_boot_id, 'microphone_epoch': self.microphone_epoch,'listening':self.listening.is_set()}
+                'agent_boot_id': self.agent_boot_id, 'microphone_epoch': self.microphone_epoch,
+                'microphone_owner_id':self.microphone_owner_id,'listening':self.listening.is_set()}
 
     def status(self):
         motion_status = self.motion_actor_status()
@@ -157,6 +171,7 @@ class Agent:
         # its own IPC server for readiness while fetching operator authority.
         with self.microphone_lock:
             return dict(agent_boot_id=self.agent_boot_id,microphone_epoch=self.microphone_epoch,
+                        microphone_owner_id=self.microphone_owner_id,
                         microphone_enabled=self.microphone.enabled,capture_active=self.capture_active,
                         phase=self.phase,listening=self.listening.is_set(),microphone_state_error=self.microphone.error,motion_policy=self.motion_policy.snapshot())
 
@@ -728,8 +743,19 @@ def main(config, test_speaker=False):
                     if not 0 < size <= config['limits']['max_agent_request_bytes']:
                         raise ValueError('Invalid request size')
                     payload=json.loads(self.rfile.read(size))
-                    if set(payload) not in ({'enabled'},{'enabled','listen'}):raise ValueError('Microphone control fields')
-                    value = agent.set_microphone(payload['enabled'],payload.get('listen',True))
+                    if not isinstance(payload,dict):raise ValueError('Microphone control fields')
+                    fields=set(payload)
+                    authority={'expected_boot_id','expected_epoch'}
+                    if fields & authority and not authority<=fields:raise ValueError('Complete microphone authority required')
+                    if fields & authority and (not isinstance(payload['expected_boot_id'],str) or not payload['expected_boot_id'] or type(payload['expected_epoch']) is not int):
+                        raise ValueError('Complete microphone authority required')
+                    owners={'owner_id','expected_owner_id'}
+                    if fields & owners and (not authority<=fields or any(not isinstance(payload[key],str) or not 1<=len(payload[key])<=128 for key in fields & owners)):
+                        raise ValueError('Bounded microphone owner requires authority')
+                    if fields-authority-owners not in ({'enabled'},{'enabled','listen'}):raise ValueError('Microphone control fields')
+                    value = agent.set_microphone(payload['enabled'],payload.get('listen',True),
+                        expected_boot_id=payload.get('expected_boot_id'),expected_epoch=payload.get('expected_epoch'),
+                        owner_id=payload.get('owner_id'),expected_owner_id=payload.get('expected_owner_id'))
                 elif self.path in ('/ask', '/say'):
                     size = int(self.headers.get('Content-Length', 0))
                     if not 0 < size <= config['limits']['max_agent_request_bytes']:
