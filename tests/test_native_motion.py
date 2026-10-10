@@ -33,8 +33,10 @@ class NativeMotionTests(unittest.TestCase):
             driver = Driver.__new__(Driver)
             driver.vendor_profile_verified = vendor_verified
             def register(motor_id, address, length=1, **kwargs):
+                controls={10:0,20:0,36:885,38:1750,48:4095,52:0,80:0,82:0,84:200,
+                          100:885,102:1750,104:1620,108:0,112:0}
                 return {0: 1200 if motor_id < 17 else model, 70: health, 144: voltage,
-                        146: temperature, 64: torque, 11: 3, 34: 35, 32: 70, 63: shutdown}.get(address,0)
+                        146: temperature, 64: torque, 11: 3, 34: 35, 32: 70, 63: shutdown}.get(address,controls.get(address,0))
             driver.register = register
             driver.positions = lambda: (time.monotonic(), [0.]*9)
             return driver
@@ -113,6 +115,14 @@ class NativeMotionTests(unittest.TestCase):
             time.sleep(.05)
             self.assertEqual(actor.target_writes, count)
         finally: actor.close()
+
+    def test_relative_small_offset_cannot_wrap_across_absolute_position_limit(self):
+        driver=FixtureDriver();driver.pose[7]=math.pi-.001
+        actor=HoldActor(driver)
+        try:
+            with self.assertRaises(ValueError):actor.enqueue(.01,1,time.monotonic()+1)
+            self.assertFalse(driver.enabled)
+        finally:actor.close()
 
 
 if __name__ == '__main__': unittest.main()

@@ -114,6 +114,8 @@ class Driver:
         self.antenna_shutdown = self.register(17, 63, allow_alert=True)
         self.antenna_controls = {str(address): self.register(17, address, READ_WIDTHS[address], allow_alert=True)
                                 for address in (10, 20, 36, 38, 48, 52, 80, 82, 84, 100, 102, 104, 108, 112, 116, 132)}
+        expected_controls={10:0,20:0,36:885,38:1750,48:4095,52:0,80:0,82:0,84:200,
+                           100:885,102:1750,104:1620,108:0,112:0}
         if self.models != [1200]*7+[1190]*2 or any(self.torque):
             raise RuntimeError('Finite fixture requires verified supported motors and torque off')
         # Installed SDK1.11.0 read_hardware_errors deliberately filters only
@@ -123,6 +125,7 @@ class Driver:
         # exception, nor a reboot or change to protection registers.
         if for_motion and (not self.vendor_profile_verified
                            or self.antenna_shutdown != 52 or self.antenna_voltage_limits != [35, 70]
+                           or any(self.antenna_controls[str(key)]!=value for key,value in expected_controls.items())
                            or any(value not in (0, 1) for value in self.health)
                            or any(not 68 <= value <= 76 for value in self.voltage_decivolts)
                            or not 0 <= self.temperature < 45):
@@ -201,6 +204,8 @@ class HoldActor:
         if (type(offset) not in (float, int) or not math.isfinite(offset) or abs(offset) > math.radians(2)
                 or type(duration) not in (float, int) or not .4 <= duration <= 2):
             raise ValueError('Finite antenna trajectory exceeds bounds')
+        if not -math.pi <= self.origin[-2]+offset <= math.pi-TICK:
+            raise ValueError('Absolute antenna goal exceeds verified position-mode limits')
         with self.mutex:
             if self.plan or self.withdraw.is_set() or self.error or time.monotonic() >= deadline:
                 return False
@@ -279,11 +284,11 @@ class HoldActor:
             except Exception: pass
             self.stopped.set()
 
-    def close(self):
+    def close(self, *, close_driver=True):
         known = self.stop()
         self.done.set()
         self.thread.join(.5)
         if self.thread.is_alive(): raise RuntimeError('Native writer not reaped')
         if self.enabled: self.driver.release()
-        self.driver.close()
+        if close_driver: self.driver.close()
         return known

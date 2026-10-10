@@ -69,6 +69,9 @@ class Agent:
         self.chunk_bytes = self.audio['sample_rate'] * 2 * self.audio['chunk_ms'] // 1000
         from .sound_monitor import SoundMonitor
         self.sounds = SoundMonitor(self)
+        from .motion_proxy import MotionProxy
+        self.motion_proxy = MotionProxy(config['guarded_motion']['enabled'],
+                                        config.path(config['guarded_motion']['socket_path']),self.operator_status)
         self.vad_bytes = self.audio['sample_rate'] * 2 * self.audio['vad_frame_ms'] // 1000
 
     def stop_speaker(self, abort_stream=True):
@@ -111,6 +114,7 @@ class Agent:
                 'agent_boot_id': self.agent_boot_id, 'microphone_epoch': self.microphone_epoch}
 
     def status(self):
+        motion_status = self.motion_actor_status()
         with self.microphone_lock:
             return {'listening': self.listening.is_set(), 'phase': self.phase,
                              'agent_boot_id': self.agent_boot_id, 'microphone_epoch': self.microphone_epoch,
@@ -120,7 +124,7 @@ class Agent:
                              'interruptions': self.interruptions, 'resumable_reply': self.resume_audio is not None, 'barge_in_error': self.barge_in_error,
                              'resume_blocked_reason': self.resume_blocked_reason,
                              'playback_cursor_provenance': 'wall_time_estimate',
-                             'motion_actor': self.motion_actor_status(),
+                             'motion_actor': motion_status,
                              'volume_percent': self.volume.percent,
                              'volume_control_enabled': self.audio.get('playback_mixer', {}).get('enabled', False),
                              'capture_active': self.capture_active,
@@ -130,10 +134,15 @@ class Agent:
                              'expression_error': self.expressions.last_error}
 
     def motion_actor_status(self):
-        # Registration must follow native all-writer + physical stop acceptance.
-        # A microphone switch is not a motor permission or this gate's blocker.
-        return {'ready': False, 'enabled': self.config['guarded_motion']['enabled'],
-                'reason': 'native_writer_fence_and_verified_stop_unaccepted'}
+        return self.motion_proxy.status()
+
+    def operator_status(self):
+        # Separate from /status: the native monitor must not recursively ask
+        # its own IPC server for readiness while fetching operator authority.
+        with self.microphone_lock:
+            return dict(agent_boot_id=self.agent_boot_id,microphone_epoch=self.microphone_epoch,
+                        microphone_enabled=self.microphone.enabled,capture_active=self.capture_active,
+                        phase=self.phase,microphone_state_error=self.microphone.error)
 
     def set_volume(self, percent):
         from .volume import validate_percent
@@ -653,17 +662,24 @@ def main(config, test_speaker=False):
         def do_GET(self):
             if not self.auth():
                 return
-            if self.path != '/status':
+            if self.path not in ('/status','/operator'):
                 self.reply(404, {'error': 'Not found'})
                 return
-            self.reply(200, agent.status())
+            self.reply(200, agent.operator_status() if self.path=='/operator' else agent.status())
 
         def do_POST(self):
             if not self.auth():
                 return
             if self.path == '/actors/motion/native':
                 self.close_connection = True
-                self.reply(503, {'accepted': False, 'error': agent.motion_actor_status()['reason']})
+                try:
+                    size=int(self.headers.get('Content-Length',0))
+                    if not 0<size<=4096: raise ValueError('Native request size')
+                    from .autonomous.contracts import decode
+                    value=agent.motion_proxy.handle(decode(self.rfile.read(size)))
+                    self.reply(200 if value.get('accepted') is True else 409,value)
+                except Exception as exc:
+                    self.reply(409, {'accepted':False,'error':type(exc).__name__})
                 return
             try:
                 if self.path == '/pause':

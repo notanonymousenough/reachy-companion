@@ -12,6 +12,7 @@ from pathlib import Path
 import subprocess
 import sys
 import time
+import threading
 from urllib.request import Request, build_opener, ProxyHandler
 
 FACTORY = 'reachy-mini-daemon.service'
@@ -21,13 +22,14 @@ DROPIN = Path('/run/systemd/system/reachy-mini-daemon.service.d/90-reachy-native
 CONDITION = '[Unit]\nConditionPathExists=!/run/reachy-native-finite-owner.flag\n'
 
 
-def operator(root):
+def operator(root, endpoint='/status'):
+    if endpoint not in ('/status','/operator'): raise ValueError('Operator endpoint')
     config = json.loads((root/'config.local.json').read_text())
     token = Path(config['paths']['token_file'])
     if not token.is_absolute(): token = root/token
     from urllib.parse import urlsplit
     port = urlsplit(config['network']['agent_url']).port
-    request = Request(f'http://127.0.0.1:{port}/status', headers={'Authorization': 'Bearer '+token.read_text().strip()})
+    request = Request(f'http://127.0.0.1:{port}{endpoint}', headers={'Authorization': 'Bearer '+token.read_text().strip()})
     with build_opener(ProxyHandler({})).open(request, timeout=.3) as response:
         raw = response.read(65537)
     if len(raw) > 65536: raise RuntimeError('Operator receipt bound')
@@ -51,6 +53,9 @@ def serial_owners():
 
 
 def child(args):
+    if getattr(args,'runtime_service',False):
+        from native_runtime_service import serve
+        return serve(args)
     from reachy_companion.autonomous.native_motion import Driver, HoldActor, TICK
     from reachy_companion.autonomous.actuator_guard import ActuatorGuard
     from reachy_companion.autonomous.contracts import Authority
@@ -196,6 +201,14 @@ def supervisor(args):
     base = ['runuser', '-u', 'pollen', '--', 'env', 'PYTHONPATH='+str(package_root),
             '/venvs/mini_daemon/bin/python', str(Path(__file__).resolve()),
             '--production-root', str(args.production_root), '--output', str(leaf)]
+    if getattr(args,'runtime_service',False):
+        base[5:5]=['GST_PLUGIN_PATH=/opt/gst-plugins-rs/lib/aarch64-linux-gnu/:/usr/local/lib/aarch64-linux-gnu/gstreamer-1.0/',
+                   'LD_LIBRARY_PATH=/usr/local/lib/aarch64-linux-gnu/',
+                   'LIBCAMERA_IPA_MODULE_PATH=/usr/local/lib/aarch64-linux-gnu/libcamera/ipa',
+                   'LIBCAMERA_IPA_CONFIG_PATH=/usr/local/share/libcamera/ipa','MALLOC_ARENA_MAX=2']
+        base+=['--runtime-service']
+    if getattr(args,'acknowledge_recovered_stop',False):base+=['--acknowledge-recovered-stop']
+    if getattr(args,'camera_policy',None):base+=['--camera-policy',str(args.camera_policy)]
     # Independent systemd recovery handles supervisor loss. It kills only the
     # isolated child unit before opening serial, verifies release, then restores.
     rollback = Path(__file__).with_name('native_actor_rollback.sh')
@@ -212,6 +225,7 @@ def supervisor(args):
     import uuid
     owner = str(uuid.uuid4())
     with MARKER.open('x') as output: output.write(owner)
+    failure_done=threading.Event();failure_thread=None
     try:
         # Schedule recovery before the condition/reload/stop transition. If
         # drop-in creation fails, the no-intent recovery only restores service.
@@ -228,6 +242,26 @@ def supervisor(args):
         if serial_owners(): raise RuntimeError('Factory condition fence admitted another writer')
         if operator(args.production_root) != before: raise RuntimeError('Operator changed during transition')
         command = base + ['--child'] + (['--motor-test'] if args.motor_test else [])
+        if getattr(args,'inject_owner_failure',False):
+            def inject():
+                config=json.loads((args.production_root/'config.local.json').read_text())
+                token=Path(config['paths']['token_file'])
+                if not token.is_absolute():token=args.production_root/token
+                deadline=time.monotonic()+10
+                while not failure_done.wait(.05) and time.monotonic()<deadline:
+                    try:
+                        request=Request('http://127.0.0.1:8775/status',headers={'Authorization':'Bearer '+token.read_text().strip()})
+                        with build_opener(ProxyHandler({})).open(request,timeout=.3) as response:
+                            state=json.loads(response.read(16384))['motion_actor']
+                        pid=state['writer_pid']
+                        if (state['leased'] and state['max_displacement_radians']>=3*2*3.141592653589793/4096
+                                and MARKER.read_text()==owner
+                                and 'reachy-native-finite-actor.service' in Path(f'/proc/{pid}/cgroup').read_text()):
+                            run('systemctl','kill','--signal=SIGKILL','reachy-native-finite-actor.service',timeout=2)
+                            report['injected_owner_failure']=dict(writer_pid=pid,displacement_radians=state['max_displacement_radians'])
+                            return
+                    except Exception:pass
+            failure_thread=threading.Thread(target=inject,daemon=True);failure_thread.start()
         # Unit has a separate hard lifetime; no per-task Arc mount or second writer.
         run('systemd-run', '--unit=reachy-native-finite-actor', '--collect', '--wait',
             '--property=RuntimeMaxSec=12s', '--property=TimeoutStopSec=1s',
@@ -238,6 +272,8 @@ def supervisor(args):
         report['error'] = type(exc).__name__
         if leaf.exists(): report['child'] = json.loads(leaf.read_text())
     finally:
+        failure_done.set()
+        if failure_thread:failure_thread.join(1)
         try:
             # Rollback performs stop/release/unmask/start in that order.
             recovery = run('/bin/bash', str(rollback), str(Path(__file__).resolve()),
@@ -278,6 +314,10 @@ def main():
     parser.add_argument('--production-root', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--motor-test', action='store_true')
+    parser.add_argument('--runtime-service',action='store_true')
+    parser.add_argument('--inject-owner-failure',action='store_true')
+    parser.add_argument('--acknowledge-recovered-stop',action='store_true')
+    parser.add_argument('--camera-policy',type=Path)
     parser.add_argument('--child', action='store_true')
     parser.add_argument('--recover', action='store_true')
     parser.add_argument('--intent', type=Path)
@@ -285,6 +325,9 @@ def main():
     args = parser.parse_args()
     if args.import_check:
         import reachy_companion.autonomous.native_motion as module
+        if args.runtime_service:
+            from reachy_companion.autonomous import motion_runtime,camera_relay
+            import native_runtime_service
         expected = Path(__file__).resolve().parent/'src/reachy_companion/autonomous/native_motion.py'
         if Path(module.__file__).resolve() != expected: raise RuntimeError('Unit imported a different actor')
         print(json.dumps({'unit_import_verified': True, 'hardware_initializations': 0}))

@@ -74,15 +74,15 @@ class ExpressionTests(unittest.TestCase):
             hub.move.assert_not_called()
             self.assertFalse(hub.lock.locked())
 
-    def test_agent_exposes_unaccepted_motor_gate_without_audio_or_network(self):
+    def test_agent_exposes_unavailable_runtime_without_audio_or_http_fallback(self):
+        self.config.data['guarded_motion']['enabled'] = True
         agent = self.agent()
         agent.request = Mock(side_effect=AssertionError('unexpected transport'))
-        self.config.data['guarded_motion']['enabled'] = True
         before = (agent.microphone.enabled, agent.microphone_epoch, agent.capture_active)
         with patch('reachy_companion.agent.subprocess.run', side_effect=AssertionError('unexpected hardware')):
             self.assertEqual(agent.status()['motion_actor'], {
                 'ready': False, 'enabled': True,
-                'reason': 'native_writer_fence_and_verified_stop_unaccepted'})
+                'reason': 'native_runtime_unavailable'})
         self.assertEqual(before, (agent.microphone.enabled, agent.microphone_epoch, agent.capture_active))
         agent.request.assert_not_called()
 

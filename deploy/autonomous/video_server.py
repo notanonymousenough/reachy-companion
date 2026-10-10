@@ -71,7 +71,7 @@ class Producer:
         import numpy as np
         from reachy_mini.media.camera_gstreamer import GStreamerCamera, Gst
         from reachy_mini.media.camera_constants import get_camera_specs_by_name
-        camera=None
+        camera=None;misses=0
         try:
             while not self.done.is_set():
                 with self.lock:allowed=self.allowed();scope=dict(self.scope) if self.scope else None
@@ -86,7 +86,15 @@ class Producer:
                     if camera is None:
                         camera=GStreamerCamera(camera_specs=get_camera_specs_by_name('wireless'));camera.open()
                     sample=camera._appsink_video.emit('try-pull-sample',100_000_000)
-                    if sample is None:self.gaps+=1;self.done.wait(.1);continue
+                    if sample is None:
+                        self.gaps+=1;misses+=1
+                        with self.lock:self.latest=None
+                        # Factory -> camera-only relay -> factory replaces the
+                        # unixfd sender. Reopen after bounded misses; preserve
+                        # the producer's existing capture lineage and policy.
+                        if misses>=3:camera.close();camera=None;misses=0
+                        self.done.wait(.1);continue
+                    misses=0
                     buffer=sample.get_buffer();data=buffer.extract_dup(0,buffer.get_size())
                     if len(data)!=720*1280*3:raise ValueError('Native BGR frame size')
                     frame=np.frombuffer(data,dtype=np.uint8).reshape((720,1280,3))

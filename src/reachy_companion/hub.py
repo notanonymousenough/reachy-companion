@@ -39,6 +39,17 @@ class Hub:
         with self.http.open(request, timeout=self.config['timeouts']['robot']) as response:
             return json.load(response)
 
+    def native_motion(self, payload, *, command_id=None):
+        """Explicit typed motor API; caller retains the acquired boot/epoch binding."""
+        if not self.config['guarded_motion']['enabled']: raise RuntimeError('Guarded motion disabled')
+        command_id=command_id or str(uuid.uuid4())
+        envelope=dict(command_id=command_id,hub_boot_id=self.boot_id,path='/native/antenna',payload=payload)
+        value=self.agent('/actors/motion/native',envelope)
+        if (value.get('accepted') is not True or value.get('command_id')!=command_id
+                or value.get('hub_boot_id')!=self.boot_id or not isinstance(value.get('result'),dict)):
+            raise RuntimeError('Native motion receipt unknown or rejected')
+        return value['result']
+
     def status(self):
         return {'daemon': self.robot('/api/daemon/status'),
                 'ownership': self.robot('/api/daemon/robot-app-lock-status'),
