@@ -22,6 +22,7 @@ class GuardRejected(RuntimeError):
 class Lease:
     lease_id: str
     authority: Authority
+    channel: str = 'speech'
 
 
 class OutputGate:
@@ -140,13 +141,15 @@ class ActuatorGuard:
         finally:
             self.max_durable_transaction_s = max(self.max_durable_transaction_s, time.monotonic()-started)
 
-    def arm(self, authority, *, microphone_enabled, quiet, privacy_all, fence_attested):
+    def arm(self, authority, *, microphone_enabled, quiet, privacy_all, fence_attested,
+            channel='speech',motor_enabled=False):
         with self.mutex:
+            permitted=(channel=='speech' and microphone_enabled is True) or (channel=='motion' and motor_enabled is True)
             if (self.closed or self.quarantined or self.lease or fence_attested is not True
-                    or microphone_enabled is not True or quiet is not False or privacy_all is not False
+                    or not permitted or type(microphone_enabled) is not bool or quiet is not False or privacy_all is not False
                     or authority.robot_boot_id != self.robot_boot_id):
                 raise GuardRejected('Owner/operator/boot gate not satisfied')
-            self.lease = Lease(uid(), authority)
+            self.lease = Lease(uid(), authority,channel)
             self.deadline = self.clock()+self.ttl
             self.sequence = -1
             # Tombstones survive lease/boot changes. Re-arming cannot replay an
@@ -195,12 +198,14 @@ class ActuatorGuard:
             self.check(lease)
             return True
 
-    def dispatch(self,lease,command_id,enqueue):
+    def dispatch(self,lease,command_id,enqueue,*,channel=None):
         """Persist intent, then atomically fence bounded enqueue with output lease.
 
         No SQLite lock is held during enqueue; the independent output watchdog
         can stop while admission is blocked on fsync. No direct SDK I/O here.
         """
+        if (lease.channel=='motion' and channel is None) or (channel is not None and channel!=lease.channel):
+            raise GuardRejected('Command channel differs from lease')
         if not self.admit(lease,command_id):return False
         try:self.output.enqueue(lease,enqueue)
         except BaseException:
@@ -250,6 +255,7 @@ class ActuatorGuard:
         with self.mutex:
             if self.lease and not self.output.live(self.lease):self.revoke_locked()
             return dict(robot_boot_id=self.robot_boot_id, quarantined=self.quarantined,
+                        lease_channel=self.lease.channel if self.lease else None,
                         leased=self.lease is not None, closed=self.closed,
                         max_durable_transaction_s=self.max_durable_transaction_s,
                         max_stop_call_s=self.max_stop_call_s,max_enqueue_s=self.output.max_enqueue_s)

@@ -1,5 +1,61 @@
 # Local lease guard: подготовка этапа3
 
+## Separate motor permission and hub routing (2026-10-10)
+
+Motion leases now require the trusted owner's explicit `motor_enabled=True`,
+`channel='motion'`, quiet=false and privacy_all=false. Microphone may remain
+false. A microphone grant does not grant motion, and motion dispatch must name
+its channel explicitly; a speech or untyped dispatch under a motion lease is
+rejected before durable admission. This separates the permissions without
+inventing a physical operator motor grant. The native all-writer fence and
+verified stop remain prerequisites.
+
+The actual `Hub.robot` mutation boundary now has an opt-in
+`guarded_motion.enabled` flag, default false even with an old private config.
+When true, **every request with a payload** goes through the authenticated robot
+Agent route `/actors/motion/native`. This includes legacy expressions,
+wake/sleep, motor mode changes, timeout stop and future native mutation paths.
+Each call carries a fresh command ID and process-local hub boot ID. Only an
+explicit matching receipt is accepted; missing actor, timeout, stale receipt or
+negative response never falls back to native REST. Read-only status requests
+remain available. Config rejects nonboolean flags and unknown options.
+
+This is a staged routing boundary, not a working hardware adapter: the Agent
+explicitly returns503 for this authenticated route and reports
+`native_writer_fence_and_verified_stop_unaccepted` in status, so enabling the
+flag currently withdraws motion. Hub control status also preserves the real
+Agent boot and microphone epoch. It is **not** a fence of external SDK/REST writers. Production flag and
+services have not been changed. Activation needs the robot-local adapter and
+all-writer/stop acceptance; rollback must first withdraw canonical output and
+verify physical stop, rather than reopen native writes during a live lease.
+
+Installed SDK1.11.0 source inspection found both command transports and direct
+REST calls to backend mutators, plus builtin tracking and the Rust control
+loop. `RobotBackend.get_motor_control_mode` reports cached intent. The public
+[motor-controller implementation](https://github.com/pollen-robotics/reachy-mini-motor-controller/blob/main/src/controller.rs)
+reduces per-motor torque state with `all`: false means that at least one motor
+is off, **not** that every motor is off. The
+[control loop](https://github.com/pollen-robotics/reachy-mini-motor-controller/blob/main/src/control_loop.rs)
+queues enable/disable commands and exposes cached aggregate state. Its public
+source is not proof of the installed binary's exact behavior. Consequently a
+cached disabled mode, aggregate false, app lock free or enqueue acknowledgement
+cannot satisfy verified stop. Still required: pinned installed native behavior,
+fresh per-motor off receipts, bounded stop completion and exclusion of queued
+stale commands. No motor command or factory restart was performed in this audit.
+
+The read-only PC capability probe also confirmed `vision=true` on the existing
+9B instance `Jx9ljvLW0zZPdWOHh/BygM9q`, unchanged before/after, with zero image
+requests and zero model load calls. [LM Studio image input](https://lmstudio.ai/docs/python/llm-prediction/image-input)
+supports images on vision models, but this capability receipt does not prove
+visual token budget, cache retention, semantic quality or fresh capture time.
+Semantic inference remains unadmitted until those separate checks pass.
+
+Verification:145 regression tests passed. Channel tests include motor-only
+admission with microphone false and rejection of speech/untyped dispatch;
+hub tests cover mutation routing, boot/command correlation, absent actor,
+timeouts, malformed/stale receipts and old/invalid configurations. These are
+protocol tests, with zero physical output.
+
 `autonomous/actuator_guard.py` — отдельный opt-in компонент, не подключённый к production speech/motion. Он не содержит robot SDK, motor enable, TTS, capture или LLM вызовов. `arm` доступен только trusted owner; переданные operator flags/fence attestation пока являются входом этого владельца, а не самостоятельно доказанным hardware state. Поэтому наличие класса не снимает physical activation gates.
 
 Реализованы process-lifetime `flock` для cooperating writers, новый robot-local boot ID, неизменяемая lease с полным Authority, monotonic deadline≤500ms, fresh heartbeat sequence и независимый watchdog с poll≤100ms. Старую lease нельзя продлить после expiry, смены boot или revoke. Watchdog вызывает adapter stop без обращения к hub/PC/model; stop обязан подтвердить фактическое прекращение output. False/exception означает unknown и запрещает новую lease. Operator invalidation будущего adapter обязана немедленно вызвать revoke, до очередного model tick.

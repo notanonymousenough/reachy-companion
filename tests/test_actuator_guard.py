@@ -16,6 +16,18 @@ def arm(guard, **override):
 
 
 class GuardTests(unittest.TestCase):
+    def test_motor_permission_is_separate_from_microphone_and_speech_lease(self):
+        with tempfile.TemporaryDirectory() as directory:
+            guard=ActuatorGuard(directory,lambda:True);outputs=[]
+            try:
+                for options in (dict(channel='motion',motor_enabled=False),dict(channel='motion',motor_enabled='yes'),dict(channel='camera',motor_enabled=True)):
+                    with self.assertRaises(GuardRejected):arm(guard,microphone_enabled=False,**options)
+                lease=arm(guard,microphone_enabled=False,channel='motion',motor_enabled=True)
+                with self.assertRaises(GuardRejected):guard.dispatch(lease,'untyped',lambda:outputs.append('untyped') or True)
+                with self.assertRaises(GuardRejected):guard.dispatch(lease,'speech',lambda:outputs.append('speech') or True,channel='speech')
+                self.assertTrue(guard.dispatch(lease,'motion',lambda:outputs.append('motion') or True,channel='motion'))
+                self.assertEqual(outputs,['motion']);self.assertEqual(guard.status()['lease_channel'],'motion')
+            finally:guard.close()
     def test_output_watchdog_stops_while_durable_admission_is_blocked(self):
         with tempfile.TemporaryDirectory() as directory:
             stopped=threading.Event();entered=threading.Event();enqueued=[];errors=[]

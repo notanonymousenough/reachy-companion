@@ -120,6 +120,7 @@ class Agent:
                              'interruptions': self.interruptions, 'resumable_reply': self.resume_audio is not None, 'barge_in_error': self.barge_in_error,
                              'resume_blocked_reason': self.resume_blocked_reason,
                              'playback_cursor_provenance': 'wall_time_estimate',
+                             'motion_actor': self.motion_actor_status(),
                              'volume_percent': self.volume.percent,
                              'volume_control_enabled': self.audio.get('playback_mixer', {}).get('enabled', False),
                              'capture_active': self.capture_active,
@@ -127,6 +128,12 @@ class Agent:
                              'microphone_state_error': self.microphone.error,
                              'expression': self.expressions.last_expression,
                              'expression_error': self.expressions.last_error}
+
+    def motion_actor_status(self):
+        # Registration must follow native all-writer + physical stop acceptance.
+        # A microphone switch is not a motor permission or this gate's blocker.
+        return {'ready': False, 'enabled': self.config['guarded_motion']['enabled'],
+                'reason': 'native_writer_fence_and_verified_stop_unaccepted'}
 
     def set_volume(self, percent):
         from .volume import validate_percent
@@ -653,6 +660,10 @@ def main(config, test_speaker=False):
 
         def do_POST(self):
             if not self.auth():
+                return
+            if self.path == '/actors/motion/native':
+                self.close_connection = True
+                self.reply(503, {'accepted': False, 'error': agent.motion_actor_status()['reason']})
                 return
             try:
                 if self.path == '/pause':

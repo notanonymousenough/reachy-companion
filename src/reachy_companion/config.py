@@ -30,6 +30,8 @@ class Config:
         for section in ('container',):
             if section in defaults:
                 fill(self.data, {section: defaults[section]})
+        # Safe even when a deployed checkout has no example configuration.
+        fill(self.data, {'guarded_motion': {'enabled': False}})
         profile = self.data.get('runtime', {}).get('profile', '')
         if profile:
             profile_path = (self.root / profile).resolve()
@@ -70,6 +72,9 @@ class Config:
         return value
 
     def validate(self):
+        guarded = self.data['guarded_motion']
+        if not isinstance(guarded, dict) or set(guarded) != {'enabled'} or type(guarded['enabled']) is not bool:
+            raise ValueError('Invalid guarded motion settings')
         if self.data['version'] != 1:
             raise ValueError('Unsupported configuration version')
         for key in ('hub_url', 'voice_url', 'agent_url', 'robot_url', 'llm_base_url', 'compute_url'):

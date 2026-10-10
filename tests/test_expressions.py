@@ -74,6 +74,18 @@ class ExpressionTests(unittest.TestCase):
             hub.move.assert_not_called()
             self.assertFalse(hub.lock.locked())
 
+    def test_agent_exposes_unaccepted_motor_gate_without_audio_or_network(self):
+        agent = self.agent()
+        agent.request = Mock(side_effect=AssertionError('unexpected transport'))
+        self.config.data['guarded_motion']['enabled'] = True
+        before = (agent.microphone.enabled, agent.microphone_epoch, agent.capture_active)
+        with patch('reachy_companion.agent.subprocess.run', side_effect=AssertionError('unexpected hardware')):
+            self.assertEqual(agent.status()['motion_actor'], {
+                'ready': False, 'enabled': True,
+                'reason': 'native_writer_fence_and_verified_stop_unaccepted'})
+        self.assertEqual(before, (agent.microphone.enabled, agent.microphone_epoch, agent.capture_active))
+        agent.request.assert_not_called()
+
     def test_emotion_tag_is_not_spoken_or_stored_in_history(self):
         piper = types.SimpleNamespace(PiperVoice=object, SynthesisConfig=object)
         vosk = types.SimpleNamespace(Model=object, KaldiRecognizer=object, SetLogLevel=object)

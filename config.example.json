@@ -1,5 +1,8 @@
 {
   "version": 1,
+  "guarded_motion": {
+    "enabled": false
+  },
   "network": {
     "hub_url": "http://reachy-hub.lan:8080",
     "voice_url": "http://reachy-hub.lan:8081",

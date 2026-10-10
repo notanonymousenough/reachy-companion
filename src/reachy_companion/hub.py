@@ -6,6 +6,7 @@ import logging
 import math
 import threading
 import time
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.request import Request, build_opener, ProxyHandler
 
@@ -17,8 +18,21 @@ class Hub:
         self.config = config
         self.http = build_opener(ProxyHandler({}))
         self.lock = threading.Lock()
+        self.boot_id = str(uuid.uuid4())
 
     def robot(self, path, payload=None):
+        if payload is not None and self.config['guarded_motion']['enabled']:
+            # Includes legacy expressions, wake/sleep and timeout stop calls.
+            # No REST fallback: an absent/unready robot-local actor withdraws.
+            command_id = str(uuid.uuid4())
+            envelope = {'command_id': command_id, 'hub_boot_id': self.boot_id,
+                        'path': path, 'payload': payload}
+            result = self.agent('/actors/motion/native', envelope)
+            if (not isinstance(result, dict) or result.get('command_id') != command_id
+                    or result.get('hub_boot_id') != self.boot_id or result.get('accepted') is not True
+                    or not isinstance(result.get('result'), dict)):
+                raise RuntimeError('Guarded motion actor did not acknowledge this command')
+            return result['result']
         data = None if payload is None else json.dumps(payload).encode()
         request = Request(self.config['network']['robot_url'] + path, data=data,
                           headers={'Content-Type': 'application/json'})
@@ -188,7 +202,7 @@ def serve(hub):
                     return
                 try:
                     value = hub.agent('/status')
-                    self.reply(200, {key: value.get(key) for key in ('microphone_enabled', 'capture_active', 'phase', 'expression', 'expression_error', 'volume_percent', 'volume_control_enabled', 'resumable_reply')})
+                    self.reply(200, {key: value.get(key) for key in ('microphone_enabled', 'capture_active', 'phase', 'expression', 'expression_error', 'volume_percent', 'volume_control_enabled', 'resumable_reply', 'motion_actor', 'agent_boot_id', 'microphone_epoch')})
                 except Exception:
                     self.reply(503, {'error': 'Robot agent unavailable'})
                 return
