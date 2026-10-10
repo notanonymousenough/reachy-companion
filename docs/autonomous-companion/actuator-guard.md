@@ -14,6 +14,14 @@ Stop вызывается перед дополнительной SQLite зап�
 
 `deploy/autonomous/guard_probe.py` запускает3heartbeat с100ms spacing, затем прекращает heartbeats и ждёт simulated sink. На реальном Linux hub последний heartbeat→simulated stop0.501303s приlease500ms/poll20ms; lease отозвана, quarantinefalse, physical commands0. Один sample не доказывает P95, stop completion реального привода или robot timing.
 
-Robot SSH доступен через hub, но pollen authentication отклонён. Проверка Python/robot-local timing не выполнена; запрос на существующий user/identity отправлен пользователю. Production services не менялись, robot mic не включался. Isolated host-key file использован только для test route, существующие trust files не заменены.
+Первый BatchMode SSH test проверял только keys и не прошёл. Документированный в README factory login с интерактивным password auth успешно проверен через hub; password не печатался и не сохранялся. Robot Python3.13.5. Создан отдельный `/home/pollen/reachy-shadow`, без изменения production services/factory daemon/SSH policy. Isolated host-key file использован только для test route, существующие trust files не заменены.
 
 Native daemon `robot-app-lock-status=free` недостаточен: OpenAPI явно говорит, что прямые SDK clients обходят этот lock. Перед физическим adapter нужны реальный sole-owner deployment fence, verified stop, current operator epochs и consumed PCM cursor. `/move/stop` принимает конкретный UUID и не является глобальным stop неизвестных writers. Следующий шаг: robot-local simulated-sink probe после восстановления SSH, затем adapter под отключёнными motors с проверкой revoke/unknown/restart; только после этого отдельная physical acceptance.
+
+## Robot-local timing и отрицательная проба
+
+Simulated sink на самом robot:500ms lease/20ms poll, last heartbeat→stop started0.505820s, →stop verified0.505856s. Максимальная измеренная durable transaction0.000491s, callback0.000073s. Это один sample, не fsync/stop upper bound и не hardware SLA. Probe теперь различает invocation и verified completion, записывает actual transaction/callback maxima.
+
+Synthetic slow-stop injection700ms на robot: invocation0.504315s, verified completion1.204426s, callback0.700198s, transaction maximum0.000678s. Timing acceptancefalse/exit2 — ожидаемый отрицательный результат. Watchdog invocation вовремя не выдаётся за своевременно завершённый stop. Physical commands0 в обеих пробах; невыполненный physical adapter gate сохранён.
+
+Read-only inventory подтвердил operator microphone=false/capture=false/phasepaused, motorsdisabled, managed lockfree, no running moves; Python process hints включают два unknown entrypoints. Inventory не доказывает отсутствие native SDK writer, поэтому exclusive_writer_verifiedfalse. Camera metadata:wireless, default1280×720@30fps; media available/releasedfalse. Это specs/status, не actual frame или perception. SDK version из system Python metadata отсутствует; installed daemon venv изучается отдельно без client construction. Operator inventory сохраняет только allowlisted status/epochs, не transcripts/replies.

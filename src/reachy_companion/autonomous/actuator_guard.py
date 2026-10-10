@@ -4,6 +4,7 @@ The file lock fences cooperating writers only. Native daemon SDK writers need a
 separate verified deployment fence before a physical adapter may be attached.
 """
 from dataclasses import asdict, dataclass
+from contextlib import contextmanager
 import fcntl
 import json
 from pathlib import Path
@@ -56,6 +57,8 @@ class ActuatorGuard:
         self.deadline = 0
         self.sequence = -1
         self.closed = False
+        self.max_durable_transaction_s = 0
+        self.max_stop_call_s = 0
         self.write('quarantined' if self.quarantined else 'idle')
         self.done = threading.Event()
         self.thread = threading.Thread(target=self.watchdog, name='actor-watchdog', daemon=True)
@@ -64,8 +67,17 @@ class ActuatorGuard:
     def write(self, status):
         value = json.dumps(dict(status=status, robot_boot_id=self.robot_boot_id,
                                lease=asdict(self.lease) if self.lease else None))
-        with self.db:
+        with self.transaction():
             self.db.execute('INSERT OR REPLACE INTO state VALUES (1, ?)', (value,))
+
+    @contextmanager
+    def transaction(self):
+        started = time.monotonic()
+        try:
+            with self.db:
+                yield
+        finally:
+            self.max_durable_transaction_s = max(self.max_durable_transaction_s, time.monotonic()-started)
 
     def arm(self, authority, *, microphone_enabled, quiet, privacy_all, fence_attested):
         with self.mutex:
@@ -112,7 +124,7 @@ class ActuatorGuard:
             if self.db.execute('SELECT count(*) FROM commands').fetchone()[0] >= 256:
                 self.revoke_locked()
                 raise GuardRejected('Dedupe capacity exhausted; no eviction/replay')
-            with self.db:
+            with self.transaction():
                 self.db.execute('INSERT INTO commands VALUES (?, ?)', (command_id, lease.lease_id))
             return True
 
@@ -123,10 +135,13 @@ class ActuatorGuard:
         # Stop before additional fsync so storage failure cannot skip stopping.
         self.lease = None
         self.quarantined = True
+        started = time.monotonic()
         try:
             known = self.stop() is True
         except Exception:
             known = False
+        finally:
+            self.max_stop_call_s = max(self.max_stop_call_s, time.monotonic()-started)
         self.quarantined = not known
         try:
             self.write('quarantined' if self.quarantined else 'idle')
@@ -155,7 +170,9 @@ class ActuatorGuard:
     def status(self):
         with self.mutex:
             return dict(robot_boot_id=self.robot_boot_id, quarantined=self.quarantined,
-                        leased=self.lease is not None, closed=self.closed)
+                        leased=self.lease is not None, closed=self.closed,
+                        max_durable_transaction_s=self.max_durable_transaction_s,
+                        max_stop_call_s=self.max_stop_call_s)
 
     def close(self):
         self.done.set()
