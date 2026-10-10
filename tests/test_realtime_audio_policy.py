@@ -1,6 +1,7 @@
 import importlib.util
 from pathlib import Path
 import threading
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 from reachy_companion.autonomous.config import load
@@ -13,6 +14,35 @@ module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
 
 
 class PolicyTests(unittest.TestCase):
+    def test_slow_reducer_cannot_hide_cancel_deadline_crossing_before_ack_and_stop(self):
+        for began,work,expected in ((.483,.042,False),(.440,.042,True)):
+            with self.subTest(began=began):
+                now=[began];order=[]
+                reducer=SimpleNamespace(advance=lambda:(order.append('reducer_work'),now.__setitem__(0,now[0]+work)))
+                stale_iteration_time=now[0];reducer.advance()
+                def result():
+                    order.append('actual_ack')
+                    return dict(source_boot='source',agent_mute_verified=True)
+                def status():
+                    order.append('fresh_stop');return dict(stop_known=True,execution_busy=False)
+                job=SimpleNamespace(future=SimpleNamespace(done=lambda:True,result=result))
+                completion=module.cancel_completion(SimpleNamespace(status=status),job,'source',0,
+                    actual_agent=True,clock=lambda:(order.append('completion_clock') or now[0]))
+                self.assertEqual(completion[0]<=.5,expected)
+                self.assertTrue(stale_iteration_time<=.5) # old harness falsely passed both
+                self.assertEqual(order,['reducer_work','actual_ack','fresh_stop','completion_clock'])
+                self.assertLess(work,.1) # reducer budget passing cannot replace cancel deadline
+
+    def test_cancel_completion_rechecks_stop_after_ack_and_keeps_unknown_pending(self):
+        speech=SimpleNamespace(status=lambda:dict(stop_known=True,execution_busy=True))
+        job=SimpleNamespace(future=SimpleNamespace(done=lambda:True,
+            result=lambda:dict(source_boot='source',agent_mute_verified=True)))
+        self.assertIsNone(module.cancel_completion(speech,job,'source',0,actual_agent=True))
+        job.future.done=lambda:False
+        self.assertIsNone(module.cancel_completion(speech,job,'source',0,actual_agent=True))
+        job.future.done=lambda:True;job.future.result=lambda:dict(source_boot='retired',agent_mute_verified=True)
+        with self.assertRaises(RuntimeError):module.cancel_completion(speech,job,'source',0,actual_agent=True)
+
     def test_wake_question_is_owner_whitelisted_and_unknown_reply_cannot_wake(self):
         calls=[]
         class TTS:

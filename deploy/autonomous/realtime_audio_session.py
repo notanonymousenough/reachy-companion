@@ -62,6 +62,19 @@ def create_lease(client,source,port=None):
     return PeerLease(client,datagram=datagram)
 
 
+def cancel_completion(speech,job,source,cancel_at,*,actual_agent,clock=time.monotonic):
+    """Sample completion only after actual ACK and a fresh drained stop receipt."""
+    acknowledgement=None
+    if actual_agent:
+        if not job.future.done():return None
+        acknowledgement=job.future.result()
+        if (not isinstance(acknowledgement,dict) or acknowledgement.get('source_boot')!=source
+                or acknowledgement.get('agent_mute_verified') is not True):raise RuntimeError('Actual Agent cancel unknown')
+    status=speech.status()
+    if status['stop_known'] is not True or status['execution_busy'] is not False:return None
+    return clock()-cancel_at,acknowledgement
+
+
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     for name in ('config','companion-config','token-file','output'):p.add_argument('--'+name,type=Path,required=True)
@@ -179,14 +192,12 @@ def main():
                     if a.actual_agent_cancel:cancel_job=Job(lambda:client.call('/operator-mute',source_boot=source))
                     else:scheduler.ingest(dict(type='operator',muted=True))
                     stage='cancel_pending'
-            if (stage=='cancel_pending' and status['stop_known'] and not status['execution_busy']
-                    and (not a.actual_agent_cancel or cancel_job.future.done())):
-                if a.actual_agent_cancel:
-                    acknowledgement=cancel_job.future.result()
-                    if acknowledgement.get('source_boot')!=source or acknowledgement.get('agent_mute_verified') is not True:
-                        raise RuntimeError('Actual Agent cancel unknown')
-                    report['agent_cancel']=acknowledgement
-                cancel_stop_s=now-cancel_at;stage='complete';break
+            if stage=='cancel_pending':
+                completion=cancel_completion(speech,cancel_job,source,cancel_at,actual_agent=a.actual_agent_cancel)
+                if completion is not None:
+                    cancel_stop_s,acknowledgement=completion
+                    if a.actual_agent_cancel:report['agent_cancel']=acknowledgement
+                    stage='complete';break
             with status_lock:latest=dict(stage=stage,elapsed_s=now-started,source_boot=source,
                 audio=audio.status(),peer_poll=poller.status(),lease=lease.status(),
                 speech_busy=status['execution_busy'],speech_stop_known=status['stop_known'],turns=len(turns),
