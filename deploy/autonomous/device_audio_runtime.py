@@ -11,7 +11,7 @@ from urllib.request import Request,build_opener,ProxyHandler
 from reachy_companion.config import Config
 from reachy_companion.autonomous.alsa_capture import AlsaCapture
 from reachy_companion.autonomous.alsa_pcm import AlsaPCM
-from reachy_companion.autonomous.audio_peer import AudioPeer,create_server
+from reachy_companion.autonomous.audio_peer import diagnostic_operator,AudioPeer,create_server
 from reachy_companion.autonomous.playback import Playback
 from reachy_companion.autonomous.response_endpoint import ResponseEndpoint
 from reachy_companion.autonomous.contracts import uid
@@ -68,8 +68,8 @@ def main():
     owner=dict(agent_boot_id=before['agent_boot_id'],initial_microphone_epoch=before['microphone_epoch'],
         owned_microphone_epoch=before['microphone_epoch']+1,owner_id=uid(),policy_epoch=policy['epoch'])
     with a.owner_file.open('x') as f:json.dump(owner,f);f.flush();__import__('os').fsync(f.fileno())
-    report=dict(mode='finite_realtime_device_audio_owner',accepted=False,inference_on_robot=False,
-        raw_audio_retained=False,physical_motor_commands=0,operator_before=before,capture_frames=0,
+    report=dict(mode='finite_realtime_device_audio_owner',accepted=False,controller=a.controller,inference_on_robot=False,
+        raw_audio_retained=False,physical_motor_commands=0,operator_before=diagnostic_operator(before),capture_frames=0,
         capture_timestamp_samples=0,utterances=0,no_response_windows=0,owned_output_frames_excluded=0)
     peer=capture=server=endpoint=datagram=None;stop=threading.Event()
     for signum in (signal.SIGTERM,signal.SIGINT):signal.signal(signum,lambda *_:stop.set())
@@ -143,8 +143,9 @@ def main():
             datagram.close();report['lease_datagram']=datagram.status()
             report['lease_datagram_execution_busy']=datagram.worker.is_alive()
         try:
-            cleanup(cfg,a.owner_file);report['operator_after']=agent(cfg,'/operator')
-            report['microphone_restored']=report['operator_after']['microphone_enabled'] is False
+            cleanup(cfg,a.owner_file);after=agent(cfg,'/operator')
+            report['operator_after']=diagnostic_operator(after)
+            report['microphone_restored']=after['microphone_enabled'] is False
         except Exception as exc:report['cleanup_error']=type(exc).__name__
         report['accepted']=(report['accepted'] and report.get('capture_closed') is True
             and report.get('microphone_restored') is True and report.get('playback',{}).get('stop_known') is True

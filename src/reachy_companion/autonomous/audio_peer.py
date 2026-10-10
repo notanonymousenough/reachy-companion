@@ -123,12 +123,16 @@ class AudioPeer:
                 source_boot=self.boot_id, sequence=self.sequence, echo_reference=echo_reference)
             return True
 
+    def operator_status(self):
+        with self.lock:
+            return diagnostic_operator(self.cached_operator)
+
     def dispatch(self, path, body):
         if body.pop('controller', None) != self.controller:
             raise ValueError('Controller owner mismatch')
         if path == '/status':
             return dict(source_boot=self.boot_id, closed=self.closed, permitted=self.permitted(), operator_ready=self.operator_ready(),
-                operator=self.cached_operator, playback=self.playback.status(), observation_sequence=self.sequence,
+                operator=self.operator_status(), playback=self.playback.status(), observation_sequence=self.sequence,
                 close_reason=self.close_reason,first_close=self.first_close,watch_error=self.watch_error,
                 watch_execution_busy=self.watch.is_alive(),operator_execution_busy=bool(self.operator_job and self.operator_job.is_alive()),max_operator_ms=self.max_operator_ms,operator_requests=self.operator_requests)
         if path == '/stop':
@@ -457,3 +461,46 @@ class PeerLease:
             max_worker_scheduling_gap_ms=self.max_worker_gap_ms,worker_exit=self.worker_exit,worker_exception=self.worker_exception,
             first_close=self.first_close,timing=self._timing(time.monotonic()),
             datagram=self.datagram.status() if self.datagram else None)
+
+
+class PeerStartup:
+    """Hub-side first-lease admission, independent of physical device permissions."""
+    def __init__(self,source_boot,*,timeout=2,clock=time.monotonic):
+        if not isinstance(source_boot,str) or not 1<=len(source_boot)<=128 or not .1<=timeout<=5:
+            raise ValueError('Finite peer startup scope')
+        self.source=source_boot;self.clock=clock;self.deadline=clock()+timeout
+        self.phase='STARTING';self.reason=None;self.lock=threading.Lock()
+    def observe(self,receipt,acknowledged):
+        with self.lock:
+            if self.phase=='WITHDRAWN':return False
+            if (not isinstance(receipt,dict) or receipt.get('source_boot')!=self.source
+                    or any(type(receipt.get(name)) is not bool for name in ('closed','permitted','operator_ready'))):
+                return self._withdraw('invalid_status')
+            if receipt['closed']:return self._withdraw('device_closed')
+            if self.phase=='STARTING':
+                if self.clock()>=self.deadline:return self._withdraw('first_lease_timeout')
+                if acknowledged is True and receipt['operator_ready'] and receipt['permitted']:self.phase='ACTIVE'
+            elif not receipt['operator_ready'] or not receipt['permitted']:return self._withdraw('device_withdrawn')
+            return self.phase=='ACTIVE'
+    def _withdraw(self,reason):
+        self.phase='WITHDRAWN';self.reason=reason;return False
+    def advance(self):
+        with self.lock:
+            if self.phase=='STARTING' and self.clock()>=self.deadline:self._withdraw('first_lease_timeout')
+            return self.phase
+    def close(self):
+        with self.lock:
+            if self.phase!='WITHDRAWN':self._withdraw('controller_stop')
+    def status(self):
+        with self.lock:return dict(phase=self.phase,reason=self.reason,source_boot=self.source)
+
+
+def diagnostic_operator(actual):
+    """Bounded public metadata; ownership nonce stays in the private owner file."""
+    if not isinstance(actual,dict):return None
+    view={name:actual[name] for name in ('agent_boot_id','microphone_epoch','microphone_enabled','capture_active','phase','listening') if name in actual}
+    view['microphone_owner_present']=actual.get('microphone_owner_id') is not None if 'microphone_owner_id' in actual else None
+    view['microphone_state_error']=None if not actual.get('microphone_state_error') else 'operator_error'
+    policy=actual.get('motion_policy')
+    if isinstance(policy,dict):view['motion_policy']={name:policy[name] for name in ('epoch','quiet','privacy_all','motor_enabled') if name in policy}
+    return view

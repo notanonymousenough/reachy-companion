@@ -1,7 +1,7 @@
 import threading
 import time
 import unittest
-from reachy_companion.autonomous.audio_peer import AudioPeer, PeerClient, PeerLease, RemotePCM, create_server
+from reachy_companion.autonomous.audio_peer import AudioPeer, PeerClient, PeerLease, RemotePCM, create_server,PeerStartup
 from reachy_companion.autonomous.playback import Playback, ReplayPCM
 
 
@@ -124,6 +124,27 @@ class PeerTests(unittest.TestCase):
         def failed():raise OSError('fixture')
         peer.operator=failed;wait(lambda:peer.closed)
         self.assertEqual(peer.close_reason,'operator_unknown')
+
+    def test_startup_waits_for_ack_and_cannot_revive_after_withdrawal(self):
+        now=[0.];gate=PeerStartup('source',clock=lambda:now[0])
+        ready=dict(source_boot='source',closed=False,operator_ready=True,permitted=False)
+        self.assertFalse(gate.observe(ready,False));self.assertEqual(gate.status()['phase'],'STARTING')
+        self.assertFalse(gate.observe(ready,True));self.assertEqual(gate.status()['phase'],'STARTING')
+        self.assertTrue(gate.observe(dict(ready,permitted=True),True))
+        self.assertFalse(gate.observe(ready,True));self.assertEqual(gate.status()['phase'],'WITHDRAWN')
+        self.assertFalse(gate.observe(dict(ready,permitted=True),True))
+        gate=PeerStartup('source',clock=lambda:now[0]);gate.close()
+        self.assertFalse(gate.observe(dict(ready,permitted=True),True))
+        gate=PeerStartup('source',clock=lambda:now[0]);now[0]=2
+        self.assertEqual(gate.advance(),'WITHDRAWN')
+        self.assertFalse(gate.observe(dict(ready,permitted=True),True))
+        self.assertEqual(gate.status()['reason'],'first_lease_timeout')
+
+    def test_diagnostic_operator_projection_never_contains_owner_nonce_or_extra_fields(self):
+        peer,_=self.setup_peer();self.actual['extra_secret']='sentinel'
+        view=self.call(peer,'/status')['operator']
+        self.assertNotIn('microphone_owner_id',view);self.assertNotIn('extra_secret',view)
+        self.assertNotIn('sentinel',str(view));self.assertTrue(view['microphone_owner_present']);self.assertEqual(view['microphone_epoch'],2)
 
     def test_private_lan_requires_explicit_owner_opt_in(self):
         with self.assertRaises(ValueError):PeerClient('http://192.168.2.158:8780','t'*32,'owner')
