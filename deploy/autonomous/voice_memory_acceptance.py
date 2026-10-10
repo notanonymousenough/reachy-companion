@@ -12,6 +12,7 @@ def main():
     parser.add_argument('--directory',type=Path,required=True);parser.add_argument('--output',type=Path,required=True)
     parser.add_argument('--allow-disposable-voice-fixture',action='store_true')
     parser.add_argument('--operator-confirmation',action='store_true')
+    parser.add_argument('--exclusive-filesystem-cleanup',action='store_true')
     parser.add_argument('--expected-store-id');parser.add_argument('--expected-version',type=int)
     for name in ('hub-receipt','device-receipt'):parser.add_argument('--'+name,type=Path)
     for name in ('controller','session-boot','source-boot'):parser.add_argument('--'+name)
@@ -37,9 +38,12 @@ def main():
                 result=prepare(args.directory,args.hub_receipt,args.device_receipt,
                     dict(controller=args.controller,session_boot=args.session_boot,source_boot=args.source_boot))
             else:
-                result=operate(args.action,args.directory,args.expected_store_id,args.expected_version,args.operator_confirmation)
+                result=operate(args.action,args.directory,args.expected_store_id,args.expected_version,args.operator_confirmation,
+                    exclusive_filesystem_cleanup=args.exclusive_filesystem_cleanup)
             report.update(result,accepted=True)
-        except Exception as exc:report['error_kind']=type(exc).__name__
+        except Exception as exc:
+            report['error_kind']=type(exc).__name__
+            if getattr(exc,'preserved_path',None):report['preserved_cleanup_directory']=exc.preserved_path
         finally:
             json.dump(report,output,ensure_ascii=False,allow_nan=False,indent=2);output.flush();os.fsync(output.fileno())
     print(json.dumps(report,ensure_ascii=False),flush=True)

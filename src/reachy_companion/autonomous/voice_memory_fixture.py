@@ -10,6 +10,7 @@ import math
 import os
 from pathlib import Path
 import re
+import stat
 from .audio_session_control import cleanup_receipts
 from .contracts import Authority,decode,uid
 from .memory import MemoryStore,MemoryConflict
@@ -17,6 +18,98 @@ from .state import State
 
 CONTENTS=('Disposable arithmetic fixture marker: four.','Disposable arithmetic fixture marker: six.')
 FILES={'memory.sqlite','memory.sqlite-wal','memory.sqlite-shm','binding.json','operator.lock'}
+
+
+class CleanupOwnershipConflict(MemoryConflict):
+    def __init__(self,message,preserved_path=None):
+        super().__init__(message);self.preserved_path=preserved_path
+
+
+class OwnedCleanup:
+    """Pin identities, detach names, verify moved objects before any deletion.
+
+    Requires exclusive filesystem authority over the source during SQLite use
+    and close, and over a fresh private quarantine. SQLite journal cleanup and
+    privileged/same-UID access to the quarantine are outside the race guarantee.
+    Unsupported anchored-directory operations fail closed (including Windows).
+    """
+    @staticmethod
+    def platform_check():
+        required=(os.open,os.stat,os.rename,os.unlink,os.mkdir,os.rmdir)
+        if (os.name!='posix' or any(fn not in os.supports_dir_fd for fn in required)
+                or not hasattr(os,'O_NOFOLLOW')):raise ValueError('Anchored cleanup unavailable on this platform')
+    def __init__(self,directory):
+        self.platform_check()
+        self.path=Path(directory).absolute();self.parent=self.directory=None;self.files={};self.detached=False;self.quarantine=None
+        try:
+            flags=os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW
+            self.parent=os.open(self.path.parent,flags)
+            self.directory=os.open(self.path.name,flags,dir_fd=self.parent)
+            self.directory_id=self.identity(os.fstat(self.directory))
+            for name in os.listdir(self.directory):
+                if name not in FILES:raise CleanupOwnershipConflict('Unexpected cleanup entry')
+                fd=os.open(name,os.O_RDONLY|os.O_NOFOLLOW,dir_fd=self.directory)
+                self.files[name]=fd
+                if not stat.S_ISREG(os.fstat(fd).st_mode):raise CleanupOwnershipConflict('Regular owned file required')
+        except BaseException:self.close();raise
+    @staticmethod
+    def identity(value):return value.st_dev,value.st_ino
+    def verify(self,source_name=False,allow_journals=False):
+        if source_name and self.identity(os.stat(self.path.name,dir_fd=self.parent,follow_symlinks=False))!=self.directory_id:
+            raise CleanupOwnershipConflict('Fixture directory replaced')
+        names=set(os.listdir(self.directory))
+        required=set(self.files)-{'memory.sqlite-wal','memory.sqlite-shm'}
+        allowed=set(self.files)|({'memory.sqlite-wal','memory.sqlite-shm'} if allow_journals else set())
+        if not required<=names or not names<=allowed:raise CleanupOwnershipConflict('Fixture entries changed')
+        for name in names:
+            if name not in self.files:continue
+            current=os.stat(name,dir_fd=self.directory,follow_symlinks=False)
+            if self.identity(current)!=self.identity(os.fstat(self.files[name])):
+                raise CleanupOwnershipConflict('Fixture file replaced')
+        return names
+    def pin_journals(self):
+        names=self.verify(source_name=True,allow_journals=True)
+        for name in names-set(self.files):
+            self.files[name]=os.open(name,os.O_RDONLY|os.O_NOFOLLOW,dir_fd=self.directory)
+        self.verify(source_name=True)
+    def remove(self):
+        self.verify(source_name=True)
+        scratch='.voice-cleanup-'+uid();os.mkdir(scratch,0o700,dir_fd=self.parent)
+        self.quarantine=self.path.parent/scratch
+        qfd=os.open(scratch,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=self.parent)
+        try:
+            os.rename(self.path.name,'fixture',src_dir_fd=self.parent,dst_dir_fd=qfd);self.detached=True
+            moved=os.stat('fixture',dir_fd=qfd,follow_symlinks=False)
+            if self.identity(moved)!=self.directory_id:raise CleanupOwnershipConflict('Moved directory is foreign')
+            names=self.verify();tokens=[]
+            for name in sorted(names):
+                token='owned-'+uid()
+                os.rename(name,token,src_dir_fd=self.directory,dst_dir_fd=qfd)
+                current=os.stat(token,dir_fd=qfd,follow_symlinks=False)
+                if self.identity(current)!=self.identity(os.fstat(self.files[name])):
+                    raise CleanupOwnershipConflict('Moved file is foreign')
+                tokens.append(token)
+            if os.listdir(self.directory):raise CleanupOwnershipConflict('New entries after detachment')
+            # All moved objects are verified. Only the exclusive private
+            # quarantine is now unlinked; original path racers cannot name them.
+            for token in tokens:os.unlink(token,dir_fd=qfd)
+            os.rmdir('fixture',dir_fd=qfd)
+        except BaseException as exc:
+            raise CleanupOwnershipConflict('Cleanup preserved quarantine',str(self.quarantine)) from exc
+        finally:os.close(qfd)
+        os.rmdir(scratch,dir_fd=self.parent)
+        return dict(owned_files_removed=True,cleanup_contract='exclusive_private_quarantine',
+            adversarial_same_uid_race_safe=False,original_path_reused=self.path.exists())
+    def release_lock(self,lock_fd):
+        # Successful cleanup already removed the pinned lock. On failure retain
+        # it with the source/quarantine; never unlink a source name after a check.
+        return
+    def close(self):
+        for fd in self.files.values():os.close(fd)
+        self.files.clear()
+        for name in ('directory','parent'):
+            fd=getattr(self,name,None)
+            if fd is not None:os.close(fd);setattr(self,name,None)
 
 
 def read_json(path,cap):
@@ -88,7 +181,7 @@ def item(meta,version):
         lineage_ids=[meta['voice']['lineage_id']]+([meta['operator_root']] if confirmed else []),claim=None)
 
 
-def open_fixture(directory,expected_store_id):
+def open_fixture(directory,expected_store_id,*,anchor_cleanup=False):
     directory=Path(directory)
     if directory.is_symlink() or not directory.is_dir():raise ValueError('Owned fixture directory required')
     if any(path.name not in FILES or path.is_symlink() or not path.is_file() for path in directory.iterdir()):
@@ -98,16 +191,26 @@ def open_fixture(directory,expected_store_id):
             or meta.get('store_id')!=expected_store_id or not isinstance(meta.get('namespace'),str)
             or not re.fullmatch('fixture-voice-[0-9a-f-]{36}',meta['namespace'])
             or not (directory/'memory.sqlite').is_file()):raise ValueError('Exact fixture store binding required')
-    lock=directory/'operator.lock';fd=os.open(lock,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600);store=None
+    cleanup=OwnedCleanup(directory) if anchor_cleanup else None
+    lock=directory/'operator.lock';store=None;fd=None
     try:
+        fd=os.open('operator.lock' if cleanup else lock,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600,
+            **({'dir_fd':cleanup.directory} if cleanup else {}))
+        if cleanup:cleanup.files['operator.lock']=os.dup(fd);cleanup.verify(source_name=True)
         current,_=read_json(directory/'binding.json',8192)
         if current!=meta or not (directory/'memory.sqlite').is_file():raise MemoryConflict('Fixture changed during admission')
         store=MemoryStore(directory/'memory.sqlite',[meta['namespace']])
         if store.meta('store_id')!=expected_store_id:raise MemoryConflict('Fixture store replaced')
-        return meta,store,fd
+        if cleanup:cleanup.pin_journals()
+        return meta,store,fd,cleanup
     except BaseException:
         if store:store.close()
-        os.close(fd);lock.unlink();raise
+        if fd is not None:
+            if cleanup:cleanup.release_lock(fd)
+            else:lock.unlink()
+            os.close(fd)
+        if cleanup:cleanup.close()
+        raise
 
 
 def projection(store,meta,expected_version):
@@ -140,9 +243,11 @@ def prepare(directory,hub_path,device_path,binding):
         if store:store.close()
 
 
-def operate(action,directory,expected_store_id,expected_version,operator_confirmation=False):
+def operate(action,directory,expected_store_id,expected_version,operator_confirmation=False,*,exclusive_filesystem_cleanup=False):
     if type(expected_version) is not int or expected_version not in (-1,0,1,2):raise ValueError('Explicit fixture CAS version required')
-    meta,store,lock_fd=open_fixture(directory,expected_store_id)
+    if action=='cleanup' and exclusive_filesystem_cleanup is not True:raise ValueError('Exclusive private cleanup authority required')
+    if action=='cleanup':OwnedCleanup.platform_check()
+    meta,store,lock_fd,cleanup=open_fixture(directory,expected_store_id,anchor_cleanup=action=='cleanup')
     try:
         row=store.db.execute('SELECT version FROM active WHERE id=?',(meta['item_id'],)).fetchone()
         if (row[0] if row else -1)!=expected_version:raise MemoryConflict('Fixture CAS changed')
@@ -171,16 +276,13 @@ def operate(action,directory,expected_store_id,expected_version,operator_confirm
             result=projection(store,meta,-1);result['forgotten_replay_rejected']=True
             if action=='cleanup':
                 store.close();store=None
-                directory=Path(directory)
-                for path in directory.iterdir():
-                    if path.name not in FILES or path.is_symlink() or not path.is_file():raise ValueError('Unexpected fixture cleanup entry')
-                for path in directory.iterdir():
-                    if path.name!='operator.lock':path.unlink()
-                os.close(lock_fd);lock_fd=None;(directory/'operator.lock').unlink()
-                directory.rmdir();result['owned_files_removed']=not directory.exists()
+                result.update(cleanup.remove())
             return result
         raise ValueError('Unknown fixture action')
     finally:
         if store:store.close()
         if lock_fd is not None:
-            os.close(lock_fd);(Path(directory)/'operator.lock').unlink()
+            if cleanup:cleanup.release_lock(lock_fd)
+            else:(Path(directory)/'operator.lock').unlink()
+            os.close(lock_fd)
+        if cleanup:cleanup.close()

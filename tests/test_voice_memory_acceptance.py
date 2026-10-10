@@ -6,6 +6,8 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
+from reachy_companion.autonomous import voice_memory_fixture as fixture
 from reachy_companion.autonomous.state import State
 from reachy_companion.autonomous.voice_memory_fixture import prepare,operate
 from reachy_companion.autonomous.memory import MemoryStore,MemoryConflict
@@ -58,6 +60,7 @@ class VoiceMemoryTests(unittest.TestCase):
                 '--controller','controller','--session-boot','session','--source-boot','source']
         else:command+=['--expected-store-id',store,'--expected-version',str(version)]
         if confirm:command+=['--operator-confirmation']
+        if action=='cleanup':command+=['--exclusive-filesystem-cleanup']
         process=subprocess.run(command,cwd=ROOT,text=True,capture_output=True,timeout=8)
         self.assertEqual(process.returncode,0 if accepted else 2,process.stderr+process.stdout)
         result=json.loads(output.read_text());self.assertEqual(result['accepted'],accepted)
@@ -109,13 +112,13 @@ class VoiceMemoryTests(unittest.TestCase):
         self.assertEqual(lock.read_text(),'occupied');lock.unlink()
         operate('forget',self.directory,store,0)
         foreign=self.directory/'foreign.txt';foreign.write_text('preserve')
-        with self.assertRaises(ValueError):operate('cleanup',self.directory,store,-1)
+        with self.assertRaises(ValueError):operate('cleanup',self.directory,store,-1,exclusive_filesystem_cleanup=True)
         self.assertEqual(foreign.read_text(),'preserve');foreign.unlink()
         target=self.root/'private.txt';target.write_text('preserve')
         link=self.directory/'memory.sqlite-wal';link.symlink_to(target)
-        with self.assertRaises(ValueError):operate('cleanup',self.directory,store,-1)
+        with self.assertRaises(ValueError):operate('cleanup',self.directory,store,-1,exclusive_filesystem_cleanup=True)
         self.assertEqual(target.read_text(),'preserve');link.unlink()
-        self.assertTrue(operate('cleanup',self.directory,store,-1)['owned_files_removed'])
+        self.assertTrue(operate('cleanup',self.directory,store,-1,exclusive_filesystem_cleanup=True)['owned_files_removed'])
 
     def test_owner_correction_fences_ready_speech_and_new_store_rejects_old_uuid(self):
         store_id=self.prepared()['store_id'];operate('confirm',self.directory,store_id,0,True)
@@ -135,11 +138,64 @@ class VoiceMemoryTests(unittest.TestCase):
             self.assertEqual(task.status,'discarded');self.assertFalse(state.speech_proposals)
             self.assertEqual(reader.recall()['items'][0]['version'],2)
         finally:reader.close()
-        operate('forget',self.directory,store_id,2);operate('cleanup',self.directory,store_id,-1)
+        operate('forget',self.directory,store_id,2);operate('cleanup',self.directory,store_id,-1,exclusive_filesystem_cleanup=True)
         replacement=self.prepared();self.assertNotEqual(replacement['store_id'],store_id)
         with self.assertRaises(ValueError):operate('confirm',self.directory,store_id,0,True)
         operate('forget',self.directory,replacement['store_id'],0)
-        operate('cleanup',self.directory,replacement['store_id'],-1)
+        operate('cleanup',self.directory,replacement['store_id'],-1,exclusive_filesystem_cleanup=True)
+
+    def test_cleanup_requires_exclusive_authority_and_supported_anchored_operations(self):
+        store=self.prepared()['store_id'];operate('forget',self.directory,store,0)
+        with self.assertRaises(ValueError):operate('cleanup',self.directory,store,-1)
+        with patch.object(fixture.OwnedCleanup,'platform_check',side_effect=ValueError('Unsupported anchored operations')):
+            with self.assertRaises(ValueError):operate('cleanup',self.directory,store,-1,exclusive_filesystem_cleanup=True)
+        self.assertTrue((self.directory/'memory.sqlite').exists());self.assertFalse((self.directory/'operator.lock').exists())
+        operate('cleanup',self.directory,store,-1,exclusive_filesystem_cleanup=True)
+
+    def test_mid_cleanup_file_and_directory_replacements_are_preserved(self):
+        for replacement in ('file','directory'):
+            with self.subTest(replacement=replacement):
+                self.directory=self.root/('replace-'+replacement)
+                store=self.prepared()['store_id'];operate('forget',self.directory,store,0)
+                saved=self.root/('saved-'+replacement);original=fixture.projection
+                def replace(*args):
+                    result=original(*args)
+                    if replacement=='file':(self.directory/'memory.sqlite').rename(saved)
+                    else:
+                        self.directory.rename(saved);self.directory.mkdir();(self.directory/'operator.lock').write_bytes(b'foreign lock')
+                    (self.directory/'memory.sqlite').write_bytes(b'foreign sentinel')
+                    return result
+                with patch.object(fixture,'projection',side_effect=replace):
+                    with self.assertRaises(fixture.CleanupOwnershipConflict):
+                        operate('cleanup',self.directory,store,-1,exclusive_filesystem_cleanup=True)
+                self.assertEqual((self.directory/'memory.sqlite').read_bytes(),b'foreign sentinel')
+                self.assertTrue(saved.exists())
+                if replacement=='directory':self.assertEqual((self.directory/'operator.lock').read_bytes(),b'foreign lock')
+
+    def test_replacement_after_last_check_is_atomically_moved_and_preserved_not_unlinked(self):
+        for after_detach in (False,True):
+            with self.subTest(after_detach=after_detach):
+                self.directory=self.root/('race-'+str(after_detach));store=self.prepared()['store_id']
+                operate('forget',self.directory,store,0);armed=[False]
+                projection=fixture.projection;verify=fixture.OwnedCleanup.verify
+                def arm(*args):result=projection(*args);armed[0]=True;return result
+                def race(owner,source_name=False,allow_journals=False):
+                    names=verify(owner,source_name,allow_journals)
+                    if armed[0] and source_name is not after_detach:
+                        armed[0]=False
+                        saved=self.root/('race-saved-'+str(after_detach))
+                        fixture.os.rename('memory.sqlite',saved,src_dir_fd=owner.directory)
+                        fd=fixture.os.open('memory.sqlite',fixture.os.O_WRONLY|fixture.os.O_CREAT|fixture.os.O_EXCL,
+                            0o600,dir_fd=owner.directory)
+                        fixture.os.write(fd,b'foreign after check');fixture.os.close(fd)
+                    return names
+                with patch.object(fixture,'projection',side_effect=arm),patch.object(fixture.OwnedCleanup,'verify',race):
+                    with self.assertRaises(fixture.CleanupOwnershipConflict) as error:
+                        operate('cleanup',self.directory,store,-1,exclusive_filesystem_cleanup=True)
+                self.assertIsNotNone(error.exception.preserved_path)
+                preserved=Path(error.exception.preserved_path)
+                self.assertTrue(any(path.is_file() and path.read_bytes()==b'foreign after check' for path in preserved.rglob('*')))
+                self.assertTrue((self.root/('race-saved-'+str(after_detach))).exists())
 
 
 if __name__=='__main__':unittest.main()
