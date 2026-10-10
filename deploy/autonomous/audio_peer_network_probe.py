@@ -26,7 +26,7 @@ def main():
     config=Config(args.config)
     client=PeerClient(args.peer_url,config.token,args.controller,trusted_private_lan=args.trusted_private_lan)
     initial=client.call('/status')
-    if not initial['permitted']:raise RuntimeError('Actual device owner not ready')
+    if not initial['operator_ready']:raise RuntimeError('Actual device owner not ready')
     source=initial['source_boot']
     datagram=DatagramRenewal(client,source,args.lease_datagram_port) if args.lease_datagram_port is not None else None
     lease=PeerLease(client,datagram=datagram)

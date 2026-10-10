@@ -44,7 +44,7 @@ class LeaseDatagramServer:
         now=self.peer.clock()
         if body.get('source_boot')!=self.peer.boot_id or body.get('controller')!=self.peer.controller:
             raise ValueError('Datagram source/controller')
-        if not self.peer.permitted():raise RuntimeError('Device permission withdrawn')
+        if not self.peer.operator_ready():raise RuntimeError('Device permission withdrawn')
         self.nonces={nonce:deadline for nonce,deadline in self.nonces.items() if now<deadline}
         if body.get('kind')=='hello':
             if set(body)!={'kind','source_boot','controller','echo'} or not isinstance(body['echo'],str) or len(body['echo'])!=32:

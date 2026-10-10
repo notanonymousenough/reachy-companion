@@ -87,9 +87,12 @@ def main():
         import webrtcvad
         capture_device=a.capture_device or cfg['audio']['capture_device']
         report['capture_device']=capture_device
-        capture=AlsaCapture(capture_device);endpoint=ResponseEndpoint(webrtcvad.Vad(2))
+        endpoint=ResponseEndpoint(webrtcvad.Vad(2))
         start=time.monotonic();last_output=None;tail_until=0
         while not stop.is_set() and not peer.closed and time.monotonic()-start<a.duration:
+            if not peer.permitted():
+                endpoint.clear();time.sleep(.003);continue
+            if capture is None:capture=AlsaCapture(capture_device)
             value=capture.read()
             if not value:time.sleep(.003);continue
             report['capture_frames']+=value['frames'];report['capture_timestamp_samples']+=1
@@ -127,7 +130,9 @@ def main():
             report['lease_requests']=peer.lease_requests;report['max_lease_gap_ms']=peer.max_lease_gap_ms
             peer.close();deadline=time.monotonic()+.5
             while peer.playback.status()['execution_busy'] and time.monotonic()<deadline:time.sleep(.005)
+            peer.watch.join(timeout=.1)
             report['playback']=peer.playback.status()
+            report['peer_status']=peer.dispatch('/status',dict(controller=a.controller))
         if capture:
             report['capture_read_calls']=capture.calls
             report['capture_call_seconds']=capture.call_seconds
@@ -143,7 +148,9 @@ def main():
         except Exception as exc:report['cleanup_error']=type(exc).__name__
         report['accepted']=(report['accepted'] and report.get('capture_closed') is True
             and report.get('microphone_restored') is True and report.get('playback',{}).get('stop_known') is True
-            and report.get('playback',{}).get('execution_busy') is False)
+            and report.get('playback',{}).get('execution_busy') is False
+            and report.get('peer_status',{}).get('watch_execution_busy') is False
+            and report.get('peer_status',{}).get('operator_execution_busy') is False)
         with a.output.open('x') as f:json.dump(report,f,ensure_ascii=False,indent=2)
     print(json.dumps(report,ensure_ascii=False),flush=True)
     if not report['accepted']:raise SystemExit(2)

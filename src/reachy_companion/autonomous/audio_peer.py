@@ -27,6 +27,7 @@ class AudioPeer:
         self.started_lease = False
         self.closed = False
         self.close_reason = None
+        self.watch_error=None;self.watch_exited=False;self.operator_job=None;self.first_close=None
         self.operator_requests = 0
         self.max_operator_ms = 0
         self.lease_requests=0;self.max_lease_gap_ms=0;self.last_lease=None
@@ -40,6 +41,12 @@ class AudioPeer:
         self.watch.start()
 
     def _watch(self):
+        try:self._watch_loop()
+        except BaseException as exc:
+            self.watch_error=type(exc).__name__;self.close('watch_failed')
+        finally:self.watch_exited=True
+
+    def _watch_loop(self):
         job = result = None
         next_poll = 0
         while not self.closed:
@@ -50,22 +57,28 @@ class AudioPeer:
                 job = None
                 with self.lock:
                     self.max_operator_ms=max(self.max_operator_ms,(now-began)*1000)
-                    if receipt and now < began+.3 and self._owned(receipt):
-                        self.cached_operator = receipt
-                        self.operator_deadline = began+.3
-                    elif receipt and not self._owned(receipt):self.close('owner_changed')
+                    if result.get('error') or receipt is None:
+                        self.watch_error=result.get('error','MissingReceipt');self.close('operator_unknown')
+                    else:
+                        try:owned=self._owned(receipt)
+                        except (ValueError,TypeError,KeyError):
+                            self.watch_error='InvalidReceipt';self.close('operator_invalid');return
+                        if not owned:self.close('owner_changed')
+                        elif now>=began+.3:self.close('operator_expired')
+                        else:self.cached_operator=receipt;self.operator_deadline=began+.3
             if not job and now >= next_poll:
                 if self.closed:return
                 result = dict(began=now)
                 def refresh(mailbox=result):
                     try:mailbox['value'] = self.operator()
-                    except Exception:pass
+                    except Exception as exc:mailbox['error']=type(exc).__name__
                 job = threading.Thread(target=refresh, daemon=True)
                 self.operator_requests+=1
+                self.operator_job=job
                 job.start();next_poll = now+.1
             with self.lock:
-                valid = self.cached_operator is not None and now < self.operator_deadline and now < self.lease_deadline
-                initial = self.cached_operator is None and now < self.lease_deadline and not self.started_lease
+                valid = self.started_lease and self.operator_ready()
+                initial = not self.started_lease and now < self.lease_deadline and (self.cached_operator is None or now < self.operator_deadline)
                 if valid:
                     self.playback.operator(self.controller, microphone_enabled=True,
                         valid_until=min(self.operator_deadline, self.lease_deadline), wait=False)
@@ -74,7 +87,16 @@ class AudioPeer:
             time.sleep(.005)
 
     def _owned(self, actual):
+        if not isinstance(actual,dict) or not isinstance(actual.get('motion_policy'),dict):raise ValueError('Operator receipt')
         policy = actual['motion_policy']
+        if (not isinstance(actual.get('agent_boot_id'),str) or not 1<=len(actual['agent_boot_id'])<=256
+                or type(actual.get('microphone_epoch')) is not int or actual['microphone_epoch']<0
+                or type(actual.get('microphone_enabled')) is not bool or type(actual.get('listening')) is not bool
+                or not isinstance(actual.get('microphone_owner_id'),str)
+                or actual.get('phase') not in ('paused','listening','thinking','speaking','error')
+                or type(policy.get('epoch')) is not int or policy['epoch']<0
+                or type(policy.get('quiet')) is not bool or type(policy.get('privacy_all')) is not bool):
+            raise ValueError('Operator receipt schema')
         return (actual['agent_boot_id'] == self.expected_owner['agent_boot_id']
                 and actual['microphone_epoch'] == self.expected_owner['owned_microphone_epoch']
                 and actual.get('microphone_owner_id') == self.expected_owner['owner_id']
@@ -83,10 +105,13 @@ class AudioPeer:
                 and policy['epoch'] == self.expected_owner['policy_epoch']
                 and policy['quiet'] is False and policy['privacy_all'] is False)
 
-    def permitted(self):
+    def operator_ready(self):
         with self.lock:
             return (not self.closed and self.cached_operator is not None
                     and self.clock() < min(self.operator_deadline, self.lease_deadline))
+
+    def permitted(self):
+        with self.lock:return self.started_lease and self.operator_ready()
 
     def publish(self, pcm, captured_end, echo_reference):
         if not isinstance(pcm, bytes) or not pcm or len(pcm)%2 or len(pcm)>256000:
@@ -102,9 +127,10 @@ class AudioPeer:
         if body.pop('controller', None) != self.controller:
             raise ValueError('Controller owner mismatch')
         if path == '/status':
-            return dict(source_boot=self.boot_id, closed=self.closed, permitted=self.permitted(),
+            return dict(source_boot=self.boot_id, closed=self.closed, permitted=self.permitted(), operator_ready=self.operator_ready(),
                 operator=self.cached_operator, playback=self.playback.status(), observation_sequence=self.sequence,
-                close_reason=self.close_reason,max_operator_ms=self.max_operator_ms,operator_requests=self.operator_requests)
+                close_reason=self.close_reason,first_close=self.first_close,watch_error=self.watch_error,
+                watch_execution_busy=self.watch.is_alive(),operator_execution_busy=bool(self.operator_job and self.operator_job.is_alive()),max_operator_ms=self.max_operator_ms,operator_requests=self.operator_requests)
         if path == '/stop':
             self.close('controller_stop');deadline=self.clock()+.3
             while self.clock()<deadline:
@@ -115,12 +141,13 @@ class AudioPeer:
         if path == '/lease':
             with self.lock:
                 if (self.closed or self.cached_operator is None or self.clock() >= self.operator_deadline
-                        or self.started_lease and self.clock() >= self.lease_deadline):
+                        or self.clock() >= self.lease_deadline):
                     raise RuntimeError('Controller lease withdrawn')
                 self.started_lease=True;self.lease_deadline=self.clock()+.3
                 now=self.clock()
                 if self.last_lease is not None:self.max_lease_gap_ms=max(self.max_lease_gap_ms,(now-self.last_lease)*1000)
                 self.last_lease=now;self.lease_requests+=1
+                self.playback.operator(self.controller,microphone_enabled=True,valid_until=min(self.operator_deadline,self.lease_deadline),wait=False)
             return dict(source_boot=self.boot_id)
         if path not in ('/stream-stop','/progress') and not self.permitted():raise RuntimeError('Actual owner/operator unavailable')
         if path == '/observation':
@@ -176,7 +203,12 @@ class AudioPeer:
 
     def close(self,reason='shutdown'):
         with self.lock:
-            if self.close_reason is None:self.close_reason=reason
+            if self.close_reason is None:
+                self.close_reason=reason
+                now=self.clock()
+                self.first_close=dict(reason=reason,source_boot=self.boot_id,
+                    last_accepted_age_ms=None if self.last_lease is None else max(0,(now-self.last_lease)*1000),
+                    operator_age_remaining_ms=max(0,(self.operator_deadline-now)*1000),lease_requests=self.lease_requests)
             self.closed=True;self.observation=None
         with self.playback.lock:self.playback.closed=True
         return self.playback.interrupt('peer_withdrawal',preserve=False,wait=False)

@@ -25,17 +25,20 @@ class PeerTests(unittest.TestCase):
         backend=Backend();playback=Playback(backend,allow_simulated=True)
         peer=AudioPeer(playback,lambda:self.actual,
             dict(agent_boot_id='agent',owned_microphone_epoch=2,owner_id='owner',policy_epoch=1),controller='controller')
-        self.addCleanup(peer.close);wait(peer.permitted)
+        self.addCleanup(peer.close);wait(peer.operator_ready)
         return peer,backend
 
-    def call(self,peer,path,**body):return peer.dispatch(path,dict(controller='controller',**body))
+    def call(self,peer,path,**body):
+        result=peer.dispatch(path,dict(controller='controller',**body))
+        if path=='/lease':wait(lambda:not peer.playback.status()['execution_busy'])
+        return result
 
     def test_rpc_queues_but_cursor_is_only_measured_backend_consumption(self):
         peer,backend=self.setup_peer();server=create_server(peer,'t'*32,port=0)
         threading.Thread(target=server.serve_forever,daemon=True).start()
         self.addCleanup(server.server_close);self.addCleanup(server.shutdown)
         client=PeerClient('http://127.0.0.1:'+str(server.server_address[1]),'t'*32,'controller')
-        client.call('/lease');remote=RemotePCM(client);remote.reserve('stream');remote.start('stream',16000)
+        client.call('/lease');wait(lambda:not peer.playback.status()['execution_busy']);remote=RemotePCM(client);remote.reserve('stream');remote.start('stream',16000)
         self.assertEqual(remote.write('stream',b'\0\0'*100),100)
         wait(lambda:backend.streams[backend.current]['written']==100)
         self.assertEqual(remote.progress('stream')['consumed_frames'],0)
@@ -61,7 +64,7 @@ class PeerTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):self.call(peer,'/lease')
 
     def test_latest_only_observation_and_fixed_controller(self):
-        peer,backend=self.setup_peer()
+        peer,backend=self.setup_peer();self.call(peer,'/lease')
         peer.publish(b'\1\0',time.monotonic(),None);peer.publish(b'\2\0',time.monotonic(),'playback')
         packet=self.call(peer,'/observation')['observation']
         self.assertEqual(packet['sequence'],2);self.assertEqual(packet['echo_reference'],'playback')
@@ -88,6 +91,33 @@ class PeerTests(unittest.TestCase):
         lease.tick();time.sleep(.05)
         self.assertEqual(peer.lease_requests,requests)
         lease.close();wait(lambda:not lease.status()['execution_busy'])
+
+    def test_startup_only_allows_control_until_first_controller_lease(self):
+        peer,backend=self.setup_peer()
+        self.assertFalse(peer.permitted())
+        self.assertFalse(peer.publish(b'\0\0',time.monotonic(),None))
+        with self.assertRaises(RuntimeError):self.call(peer,'/reserve',stream_id='early')
+        time.sleep(.35)
+        self.assertTrue(peer.operator_ready());self.assertFalse(peer.closed)
+        self.assertFalse(backend.streams);self.assertEqual(peer.lease_requests,0)
+        self.call(peer,'/lease');wait(peer.permitted)
+        self.call(peer,'/reserve',stream_id='fresh')
+        self.assertTrue(backend.streams)
+
+    def test_malformed_or_failed_operator_closes_watch_and_output(self):
+        for invalid in ({'motion_policy':{}},None,{'microphone_enabled':1},'unknown'):
+            with self.subTest(invalid=invalid):
+                peer,backend=self.setup_peer();self.call(peer,'/lease')
+                self.actual=invalid;wait(lambda:peer.closed)
+                wait(lambda:peer.watch_exited)
+                wait(lambda:peer.playback.status()['stop_known'])
+                self.assertFalse(peer.permitted());self.assertFalse(peer.publish(b'\0\0',time.monotonic(),None))
+                self.assertIn(peer.close_reason,('operator_invalid','operator_unknown'))
+                self.assertIsNotNone(peer.watch_error)
+        peer,_=self.setup_peer();self.call(peer,'/lease')
+        def failed():raise OSError('fixture')
+        peer.operator=failed;wait(lambda:peer.closed)
+        self.assertEqual(peer.close_reason,'operator_unknown')
 
     def test_private_lan_requires_explicit_owner_opt_in(self):
         with self.assertRaises(ValueError):PeerClient('http://192.168.2.158:8780','t'*32,'owner')

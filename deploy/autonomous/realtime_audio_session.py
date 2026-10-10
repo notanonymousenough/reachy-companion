@@ -227,8 +227,14 @@ def main():
         report['execution_busy']=dict(fast=bool(scheduler.fast_job and not scheduler.fast_job.future.done()),
             main=bool(scheduler.main_job and not scheduler.main_job.future.done()),
             audio=audio.status()['execution_busy'],speech=speech.status()['execution_busy'],
-            peer_poll=poller.status()['execution_busy'],lease=lease.status()['execution_busy'])
-        report['accepted']=report['accepted'] and not any(report['execution_busy'].values()) and report.get('peer_stop',{}).get('stop_known') is True
+            peer_poll=poller.status()['execution_busy'],lease=lease.status()['execution_busy'],
+            context=bool(scheduler.context_job and not scheduler.context_job.future.done()),
+            context_revoke=bool(scheduler.context_revoke_job and not scheduler.context_revoke_job.future.done()),
+            context_terminal_revoke=bool(scheduler.context_terminal_job and not scheduler.context_terminal_job.future.done()))
+        if scheduler.context_terminal_job and scheduler.context_terminal_job.future.done():
+            try:report['context_terminal_revoke']=scheduler.context_terminal_job.future.result()
+            except Exception:report['context_terminal_revoke_unknown']=True
+        report['accepted']=report['accepted'] and not report.get('context_terminal_revoke_unknown',False) and not any(report['execution_busy'].values()) and report.get('peer_stop',{}).get('stop_known') is True
         server.shutdown();server.server_close()
         with a.output.open('x') as f:json.dump(report,f,ensure_ascii=False,indent=2)
     print(json.dumps(report,ensure_ascii=False),flush=True)

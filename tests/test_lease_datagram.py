@@ -11,6 +11,7 @@ class Peer:
     def __init__(self):self.now=0;self.lock=threading.RLock();self.active=True;self.calls=0
     def clock(self):return self.now
     def permitted(self):return self.active
+    def operator_ready(self):return self.active
     def dispatch(self,path,body):
         if not self.active:raise RuntimeError('Withdrawn')
         self.calls+=1
@@ -51,7 +52,7 @@ class DatagramTests(unittest.TestCase):
             dict(agent_boot_id='agent',owned_microphone_epoch=2,owner_id='owner',policy_epoch=1),controller='controller')
         self.addCleanup(peer.close)
         end=time.monotonic()+1
-        while not peer.permitted() and time.monotonic()<end:time.sleep(.002)
+        while not peer.operator_ready() and time.monotonic()<end:time.sleep(.002)
         server=LeaseDatagramServer(peer,'t'*32,'127.0.0.1',0);self.addCleanup(server.close)
         client=PeerClient('http://127.0.0.1:1','t'*32,'controller')
         transport=DatagramRenewal(client,peer.boot_id,server.socket.getsockname()[1])
