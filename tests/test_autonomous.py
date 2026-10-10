@@ -66,6 +66,21 @@ class StateTests(unittest.TestCase):
         self.state.apply(dict(a='think', why='stale', start=dict(type='main', input_ref=ref)), binding, .3)
         self.assertFalse(self.state.tasks)
         self.assertEqual(self.state.counts['decision_stale'], 1)
+        self.assertFalse(self.state.candidates)
+        self.assertEqual(self.state.snapshot(.4)['dialogue'], '')
+        self.state.apply(dict(a='think', why='old candidate', start=dict(type='main', input_ref=ref)), self.state.bind(.4, 1), .4)
+        self.assertFalse(self.state.tasks)
+    def test_current_turn_remains_after_start_ready_and_commit(self):
+        text = 'current turn ' * 50
+        ref = self.turn(text)
+        task = self.state.apply(dict(a='think',why='new',start=dict(type='main',input_ref=ref)),self.state.bind(0,1),0)
+        self.assertEqual(self.state.snapshot(.01)['dialogue'], text)
+        self.state.complete(task.task_id,task.attempt_id,task.authority,'reply',.02)
+        self.assertEqual(self.state.snapshot(.03)['dialogue'], text)
+        self.state.apply(dict(a='converse',why='ready',commit=task.task_id),self.state.bind(.04,1),.04)
+        self.assertEqual(self.state.snapshot(.05)['dialogue'], text)
+        self.turn('newer turn')
+        self.assertEqual(self.state.snapshot(.06)['dialogue'], 'newer turn')
     def test_new_turn_old_attempt_and_compute_restart_reject_results(self):
         for race in ('turn', 'attempt', 'compute'):
             with self.subTest(race=race):
@@ -222,6 +237,14 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual(aliases['c0'], ref)
         self.assertEqual(projected['candidates'][0]['alias'], 'c0')
         self.assertEqual(view['candidates'][0]['alias'], ref)
+        for key in ('op','sim','scene','sensors','prev','dialogue','memory','personality','principles','goal','at'):
+            self.assertEqual(projected[key], view[key])
+        private = copy.deepcopy(view); private['op']['privacy_all'] = True
+        self.assertTrue(fast_projection(private)[0]['muted'])
+        quiet = copy.deepcopy(view); quiet['op']['quiet'] = True
+        self.assertTrue(fast_projection(quiet)[0]['muted'])
+        state.ingest({'type':'utterance','text':'z'*700}, .1)
+        self.assertEqual(fast_projection(state.snapshot(.1))[0]['dialogue'], 'z'*700)
         projected['muted'] = True
         with self.assertRaises(Exception):
             validate_schema({'a':'think','why':'muted','start':{'type':'main','input_ref':'c0'}}, fast_schema(projected))

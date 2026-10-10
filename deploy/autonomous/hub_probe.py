@@ -14,6 +14,8 @@ def main():
         parser.add_argument('--'+key,type=Path,required=True)
     args = parser.parse_args()
     cfg = load(args.config)
+    if not .5 <= cfg['period_s'] <= 3:
+        raise ValueError('Finite hub probe requires period between0.5 and3 seconds')
     os.environ[cfg['gateway']['token_env']] = args.token_file.read_text().strip()
     production = json.loads((args.production_root/'config.local.json').read_text())
     token = (args.production_root/'secrets/token').read_text().strip()
@@ -27,12 +29,13 @@ def main():
         raise RuntimeError('This test requires existing physical operator mute; never changes it')
     gateway = RemoteGateway(cfg)
     scheduler = Scheduler(cfg,gateway)
+    period = cfg['period_s']
     events = [{'at_s':0,'type':'utterance','text':'Одним предложением: почему небо голубое?'},
               {'at_s':.5,'type':'sensor','id':'fixture.light','summary':'synthetic update','ttl_ms':1000},
               {'at_s':.6,'type':'sensor','id':'fixture.light','summary':'unrelated synthetic update','ttl_ms':1000},
-              {'at_s':8,'type':'operator','muted':True},
-              {'at_s':10,'type':'utterance','text':'Synthetic request while shadow muted.'}]
-    report = scheduler.run(20,events)
+              {'at_s':4*period,'type':'operator','muted':True},
+              {'at_s':5*period,'type':'utterance','text':'Synthetic request while shadow muted.'}]
+    report = scheduler.run(10*period,events)
     for job in (scheduler.fast_job,scheduler.main_job):
         if job: job.future.result(timeout=cfg['http_timeout_s']+2)
     report.update(physical_operator_before=before,physical_operator_after=operator(),

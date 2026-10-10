@@ -55,6 +55,12 @@ def load(path):
                 raise ValueError('SDK main requires paired loaded-handle completion on loopback')
         if role == 'fast' and model['output_tokens'] > 192:
             raise ValueError('Fast output exceeds design cap')
+        if model.get('projection', 'full') not in ('full', 'task_only'):
+            raise ValueError('Invalid fast projection')
+        if type(model.get('cache_ram_mb', 0)) is not int or not 0 <= model.get('cache_ram_mb', 0) <= 128:
+            raise ValueError('Runtime prompt cache exceeds prototype cap')
+        if model.get('projection') == 'task_only' and (role != 'fast' or config['actuators'] != 'simulated'):
+            raise ValueError('Task-only projection is limited to simulated fast probes')
         if model.get('base_url'):
             url = urlsplit(model['base_url'])
             if url.scheme not in ('http', 'https') or not url.hostname or url.username or url.password:

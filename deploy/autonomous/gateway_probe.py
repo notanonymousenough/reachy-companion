@@ -18,7 +18,7 @@ def main():
     for key in ('server', 'weights', 'config', 'token-file', 'output'):
         parser.add_argument('--' + key, type=Path, required=True)
     parser.add_argument('--duration', type=int, choices=range(20, 121), default=60)
-    parser.add_argument('--threads', type=int, choices=(2, 4), default=4)
+    parser.add_argument('--threads', type=int, choices=(2, 4, 8), default=4)
     args = parser.parse_args()
     cfg = load(args.config)
     fast_url = urlsplit(cfg['models']['fast']['base_url'])
@@ -38,7 +38,7 @@ def main():
             check.bind(('127.0.0.1', port))
     command = [str(args.server), '-m', str(args.weights), '--host', '127.0.0.1', '--port', str(fast_url.port),
                '--threads', str(args.threads), '--threads-batch', str(args.threads), '--ctx-size', '4096', '--parallel', '1',
-               '--n-gpu-layers', '0', '--no-op-offload', '--cache-ram', '0', '--threads-http', '2',
+               '--n-gpu-layers', '0', '--no-op-offload', '--cache-ram', str(cfg['models']['fast'].get('cache_ram_mb', 0)), '--threads-http', '2',
                '--alias', cfg['models']['fast']['id']]
     report = {'actuators':'none', 'models':'real', 'duration_s':args.duration}
     with args.output.with_suffix('.log').open('w', encoding='utf-8') as log:

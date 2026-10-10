@@ -8,7 +8,7 @@ Exact tokenizer admission для LM Studio теперь использует SDK
 
 Fast запускается отдельным установленным CPU-only llama-server: build94a220c, binary SHA256 `0bbac3a55d4a005772ce8a16c4c222163f683119bbbca13b42f6af788faaa4e6`; threads2/threads-batch2/HTTP threads2, context4096, parallel1, GPU layers0, no-op-offload, cache-ram0, bind localhost. Лог подтверждает отсутствие GPU support и4096 context. Отключён default8192MiB prompt RAM cache; один KV slot сохраняется. Native `/tokenize` и `/completion` проверены реальными запросами. Native completion limit отвергается, EOS/stop-word принимаются. JSON grammar ограничивает доступные actions/kinds/aliases, start/commit требуют actual reference; reducer остаётся владельцем authority checks.
 
-PC валидирует входной полный FastView, затем для этого task-only slice проецирует только muted/candidates/ready/pending. Неиспользуемые scene/personality/sensors/epochs не подаются в модель; физические sensor-dependent capabilities пока запрещены. Aliases c0/r0/p0 существуют только в одном request и перед возвратом восстанавливаются в original opaque IDs. Это уменьшает actual input; не заменяет модель deterministic choice.
+PC валидирует входной полный FastView. По умолчанию модель получает все поля, включая обязательные context groups, текущую реплику, sensors, operator policy и epochs. `projection=task_only` — явный профиль только для simulated fast probes; исторические измерения ниже с компактным input относятся именно к нему. Физические sensor-dependent capabilities пока запрещены. Aliases c0/r0/p0 существуют только в одном request и перед возвратом восстанавливаются в original opaque IDs. Это уменьшает actual input; не заменяет модель deterministic choice.
 
 ## Измерения
 
@@ -18,7 +18,7 @@ Qwen3-0.6B Q8 (существующий GGUF639446688bytes, SHA256 `9465e63a22ad
 
 Main9B: actual prompt68tokens (text51/template17), output reserve512. Четыре последовательные короткие ответы получены за1.969/1.657/1.735/1.765s end-to-end. Это отдельные completions плюс SDK count, не first-audio latency и не mixed-load P95. Loaded context остался32768.
 
-Следующий небольшой кандидат: [ggml-org Qwen3.5-0.8B Q8](https://huggingface.co/ggml-org/Qwen3.5-0.8B-GGUF/blob/main/Qwen3.5-0.8B-Q8_0.gguf), published SHA256 `37ae482d336108d23516fa35e8e0c4126688d81018b87178a18d752a1357814f`. Download не означает acceptance; результаты должны быть записаны отдельно после actual run.
+Проверенный ниже небольшой кандидат: [ggml-org Qwen3.5-0.8B Q8](https://huggingface.co/ggml-org/Qwen3.5-0.8B-GGUF/blob/main/Qwen3.5-0.8B-Q8_0.gguf), published SHA256 `37ae482d336108d23516fa35e8e0c4126688d81018b87178a18d752a1357814f`. Download сам по себе не означает acceptance; actual результаты приведены ниже.
 
 ## Воспроизводимость
 
@@ -45,3 +45,20 @@ CPU-only installed runtime поддерживает qwen35. Лог: projected897
 `gateway_probe.py`: конечный loopback CPU runtime+authenticated gateway, проверка weight/binary manifest, configurable runtime port/model alias/gateway config и2/4threads; shutdown/drain/reap. Если остаётся busy/quarantine, сохраняет локальный marker и отказывается от нового запуска до operator audit. `hub_probe.py`:20s real transport/model run с synthetic events, actual mute before/after, one task/one fresh commit, no busy gap и drain. Owner аппаратных приводов не назначается, production services не переключаются.
 
 Pinned SDK adapter повторно прошёл **hub→PC20s**:10fresh/10accepted,1task/1ready/1commit,0gap/failure/deadline. Main request→ready1.167s; turn→start1.218s, turn→simulated commit5.414s. Mute preserved, PC gateway idle/quarantine[], CPU/SSH reaped. Всё это shadow task acceptance на двух устройствах, а не готовность servo/audio, durable memory или production1Hz. Полный unittest suite78/78 и design checker:2schemas/22fixtures/11negative/12authority/22interruption/18budgets/24links.
+
+
+## Полный FastView и текущая реплика
+
+После task-only baseline включён full по умолчанию: никакая обязательная группа не исчезает ради скорости. Только opaque aliases заменяются на request-local короткие имена; timestamp расположен после стабильных полей для возможности runtime prefix reuse. Никакие решения модели не кешируются. Retained dialogue остаётся после start, в pending и ready, затем заменяется новой репликой. Operator transition очищает current dialogue и неисполненные candidates: новая binding после unmute не может заново запустить pre-mute input. Authority epochs и неизвестные execution permits сохранены.
+
+Первый full PC run (4threads):5/5,338–391actual input tokens,1.359/1.797/1.391/1.797/1.312s. Mixed12s:6requests/6accepted,one start/commit,0gaps. Первый full hub run **не прошёл**:9requests/8accepted,one start/ready,zero commit,one busy gap и one late stale decision, отозванная mute. После retained-dialogue correction:one commit появился, но один busy gap остался; cadence2s поэтому не принят для4threads.
+
+Bounded cache comparison:128MiB вместо default8192MiB,4threads/full;5/5,1.265/1.813/1.406/1.844/1.312s. Mixed fast1.813/1.453/2.031/1.391/1.406s, main1.328s,one gap. Улучшения не установлено; cache0 остаётся выбранным. `cache_ram_mb` ограничен0..128; это runtime memory, не cache ответов.
+
+8threads/full/cache0:5/5,1.078/1.640/1.219/1.578/1.110s;338–403tokens. Mixed12s при2s:6fresh/6accepted,one start/ready/commit,0gaps/failures/deadlines. Fast1.625/1.296/1.703/1.125/1.171/1.093s, main1.125s; CPU reaped. Это8model threads, не CPU affinity. Отдельный `cadence_passed` теперь обязателен для successful live_smoke exit: функциональный commit при пропущенном tick не выдаётся за cadence acceptance.
+
+`hub_probe.py` запускает ровно10периодов (period0.5..3s), shadow mute на4periods, blocked input на5periods. Требования no busy gap/one task/one commit не ослаблены. Регрессии79/79; design checker2schemas/22fixtures/11negative/12authority/22interruption/18budgets/24links. Mock service tests в unittest output не означают deployment production services.
+
+Read-only native robot OpenAPI выявил дополнительный ownership gate: `/daemon/robot-app-lock-status` учитывает только managed apps; прямые SDK clients обходят lock. `free` поэтому не доказывает exclusive writer. `/move/stop` требует конкретный move UUID, это не глобальное emergency-stop всех clients. До реального sole-owner/fencing и local watchdog физические motion/audio остаются непринятыми.
+
+Full-input8threads/cache0 прошёл реальный hub→PC20s/period2s:10fresh/10accepted,one start/ready/commit,0busy gaps/failures/deadlines. Turn→start1.591s, main→ready1.260s, turn→simulated commit5.834s. Shadow mute+blocked input проверены; physical microphone=false/capture=false сохранены. Gateway idle/quarantine[], finite supervisor exit0, CPU и local SSH reaped. Это принятый ограниченный full shadow slice при2s;1Hz/P95≤700ms, first physical audio, camera и servo/audio gates ещё не приняты.

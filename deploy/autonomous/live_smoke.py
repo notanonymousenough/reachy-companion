@@ -19,8 +19,10 @@ def main():
     for key in ('server', 'weights', 'main-weights', 'config', 'output'):
         parser.add_argument('--' + key, type=Path, required=True)
     parser.add_argument('--skip-main', action='store_true')
-    parser.add_argument('--threads', type=int, choices=(2, 4), default=2)
+    parser.add_argument('--threads', type=int, choices=(2, 4, 8), default=2)
+    parser.add_argument('--cache-ram-mb', type=int, choices=(0, 128), default=0)
     parser.add_argument('--period', type=float, default=1)
+    parser.add_argument('--projection', choices=('full', 'task_only'), default='full')
     args = parser.parse_args()
     import socket
     with socket.socket() as check:
@@ -39,7 +41,8 @@ def main():
             weight_sha256=weight_hash, tokenizer_sha256=weight_hash, template_sha256=template_hash,
             runtime_context_tokens=4096 if role=='fast' else 32768)
     cfg['models']['fast'].update(id='reachy-shadow-fast-cpu', base_url='http://127.0.0.1:18097',
-         completion_backend='llama_native', completion_path='/completion', tokenize_path='/tokenize', temperature=0)
+         completion_backend='llama_native', completion_path='/completion', tokenize_path='/tokenize', temperature=0,
+         projection=args.projection, cache_ram_mb=args.cache_ram_mb)
     cfg['models']['main'].update(base_url='http://127.0.0.1:1234/v1', context_tokens=32768,
          admission_context_tokens=4096, tokenizer_backend='lmstudio_sdk', completion_backend='lmstudio_sdk')
     log_path = args.output.with_suffix('.log')
@@ -47,7 +50,7 @@ def main():
               'models': cfg['models'], 'threads': args.threads, 'period_s':args.period, 'samples': []}
     command = [str(args.server), '-m', str(args.weights), '--host', '127.0.0.1', '--port', '18097',
                '--threads', str(args.threads), '--threads-batch', str(args.threads), '--ctx-size', '4096', '--parallel', '1',
-               '--n-gpu-layers', '0', '--no-op-offload', '--cache-ram', '0', '--threads-http', '2',
+               '--n-gpu-layers', '0', '--no-op-offload', '--cache-ram', str(args.cache_ram_mb), '--threads-http', '2',
                '--alias', 'reachy-shadow-fast-cpu']
     with log_path.open('w', encoding='utf-8') as log:
         process = subprocess.Popen(command, stdout=log, stderr=log)
@@ -118,6 +121,8 @@ def main():
                         except Exception as exc: report.setdefault('drain_errors', []).append(repr(exc))
                 report['mixed_passed'] = (scheduler.state.counts['task_started']==1 and
                     scheduler.state.counts['simulated_speech']==1 and not gateway.health()['quarantined'])
+                report['cadence_passed'] = (not scheduler.state.counts['tick_busy_gap'] and
+                    not scheduler.state.counts['fast_failed'] and not scheduler.state.counts['fast_deadline_expired'])
         finally:
             process.terminate()
             try: process.wait(timeout=5)
@@ -128,7 +133,7 @@ def main():
     print(json.dumps({'output':str(args.output),'acceptance_passed':report['acceptance_passed'],
                       'mixed_passed':report.get('mixed_passed'), 'samples':report['samples'],'main':report.get('main'),
                       'process_reaped':report['process_reaped']},ensure_ascii=False))
-    if not report['acceptance_passed'] or not report.get('mixed_passed', False):
+    if not report['acceptance_passed'] or not report.get('mixed_passed', False) or not report.get('cadence_passed', False):
         raise SystemExit(2)
 
 

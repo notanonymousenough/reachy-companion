@@ -25,6 +25,7 @@ class State:
         self.sensors = {}
         self.candidates = {}
         self.candidate_kinds = {}
+        self.current_utterance = ''
         self.tasks = {}
         self.previous = deque(maxlen=3)
         self.ledger = deque(maxlen=self.config['ledger_cap'])
@@ -57,6 +58,9 @@ class State:
             if not isinstance(event.get('muted'), bool):
                 raise ValueError('operator muted must be boolean')
             self.muted = event['muted']
+            self.current_utterance = ''
+            self.candidates.clear()
+            self.candidate_kinds.clear()
             self.authority = replace(self.authority,
                 operator_epoch=self.authority.operator_epoch + 1,
                 microphone_epoch=self.authority.microphone_epoch + 1,
@@ -77,6 +81,7 @@ class State:
             ref = uid()
             self.candidates[ref] = text
             self.candidate_kinds[ref] = "main"
+            self.current_utterance = text
             self.record('new_turn')
         elif kind == 'workflow':
             value = event.get('value')
@@ -141,7 +146,7 @@ class State:
                      confidence=None, social_need=0, transition_reasons=[]),
             scene='Shadow/replay. No physical sensor or actuator connected.',
             sensors=[s.view(now, self.muted) for s in self.sensors.values()],
-            prev=list(self.previous), dialogue=next((v for k,v in self.candidates.items() if self.candidate_kinds[k]=='main'), ''),
+            prev=list(self.previous), dialogue='' if self.muted or self.privacy else self.current_utterance,
             memory=[], personality='Ричи: краткий, прямой, любопытный.',
             principles='No invented perception. Muted blocks speech. Simulated actions only.', goal=None,
             pending=pending[:8], ready=ready[:4],

@@ -106,7 +106,7 @@ class ModelBackend:
         model = self.config['models'][role]
         if role == 'fast':
             validate('FastView', data)
-            projected, aliases = fast_projection(data)
+            projected, aliases = fast_projection(data, model.get('projection', 'full'))
             system, content = FAST_SYSTEM, json.dumps(projected, ensure_ascii=False, separators=(',', ':'))
         else:
             if not isinstance(data, str) or not 1 <= len(data) <= 1024:
@@ -197,16 +197,31 @@ def fast_schema(view):
     return {'oneOf': branches}
 
 
-def fast_projection(view):
+def fast_projection(view, profile='full'):
     """Request-local compact aliases; host authority never depends on these names."""
+    if profile not in ('full', 'task_only'):
+        raise ValueError('Unknown fast projection')
     aliases = {}
-    projected = {'muted': not view['op']['microphone_enabled'],
-                 'candidates': [], 'ready': [], 'pending': []}
+    # The general profile retains all mandatory context groups and the full turn.
+    # Narrow task-only measurements are explicit, simulated opt-ins.
+    projected = ({key: value for key, value in view.items()
+                  if key not in ('at', 'op', 'pending', 'candidates', 'ready')}
+                 if profile == 'full' else {})
+    if profile == 'full':
+        stable = ('schema_version', 'mode', 'personality', 'principles', 'sim', 'goal', 'memory', 'scene')
+        projected = {**{key: projected[key] for key in stable},
+                     **{key: value for key, value in projected.items() if key not in stable}}
+    if profile == 'full':
+        projected['op'] = view['op']
+    projected.update(muted=(not view['op']['microphone_enabled'] or view['op']['quiet'] or view['op']['privacy_all']),
+                     candidates=[], ready=[], pending=[])
     for field, prefix in [('candidates', 'c'), ('ready', 'r'), ('pending', 'p')]:
         for index, item in enumerate(view[field]):
             short = prefix + str(index)
             aliases[short] = item['alias']
             projected[field].append({**item, 'alias': short})
+    if profile == 'full':
+        projected['at'] = view['at']
     return projected, aliases
 
 
