@@ -89,3 +89,42 @@ Finite `claim_probe.py` на actual Windows PC/Python3.12.9:7/7checks — duplic
 ```text
 PYTHONPATH=src <validation-python> -m unittest discover -s tests -p test_audio_memory_integration.py
 ```
+
+## Prepared finite voice-to-memory owner acceptance
+
+`deploy/autonomous/voice_memory_acceptance.py` reuses the existing PC `MemoryStore` and canonical `State`; it adds no service, model tool or HTTP write endpoint. The input is a **finished owned voice session**, not an STT string or a speaker's request to remember. Run the reviewed [finite voice profile](realtime-audio.md) first at the same pin, with actual Agent cancellation, accepted network gate and complete device/Hub cleanup. Existing receipts without `working_memory_receipt_schema=voice-working-1` are insufficient: do not add missing fields by hand or reuse readiness from an older run.
+
+The actual audio admission exports only source/sequence, PCM SHA256, lineage, the canonical candidate ID/authority and the validated public Agent boot/microphone/policy binding. The runtime records a practice turn only after its canonical `State` accepts the utterance; muted/blocked input cannot become a working-memory receipt. It exports no transcript or microphone owner nonce. The PC acceptance checks exactly two matched unknown turns, increasing sequence/interaction epochs, capture admission age under2s, the final microphone epoch and policy binding, actual-Agent cancellation within500ms, matching session owners, both accepted receipts and drained cleanup. Hashes identify the runner's immutable input files; they are not cryptographic hardware attestations. A forged JSON file cannot independently prove real voice. Runner verification of the pinned processes and authentic finished files remains required.
+
+Copy only the two finished private metadata receipts to a private PC directory through the existing runner transport. Use the existing PC Python/environment and staged source; no production memory database, config, gateway or model changes are required by this CLI. Heavy inference has already occurred on PC during the voice stage; the owner-memory stage performs no inference and makes no physical commands. Each command is a separate finite process (runner limit10s). POSIX artifacts are0600 and the fresh disposable directory0700; on Windows the runner must use its existing operator-only directory ACL. Keep reports **outside** the disposable directory so they survive cleanup.
+
+First prepare one fresh directory and a unique `fixture-voice-*` namespace. The proposed fixed neutral marker “four” is supported by the first admitted unknown turn's digest/lineage. It remains hidden from recall. This is a disposable arithmetic test marker, not a fact about Alice, a human, an identity or a preference:
+
+```text
+PYTHONPATH=<stage>/src <existing-PC-python> <stage>/deploy/autonomous/voice_memory_acceptance.py prepare --allow-disposable-voice-fixture --directory <fresh-PC-fixture-dir> --output <fresh-prepare.json> --hub-receipt <finished-hub.json> --device-receipt <finished-device.json> --controller <voice-controller> --session-boot <voice-session-boot> --source-boot <voice-source-boot>
+```
+
+Require `accepted=true`, `proposal_version=0`, empty `versions`, `confirmed=false` and unknown speaker. Record the returned **store UUID**, not just version0. An existing directory/store, mismatched owner, malformed/old provenance, busy worker or failed voice receipt is rejected before creating a store. Output reservation occurs before memory writes. Failed preparation can retain partial owned artifacts; treat that directory as failed and inspect it through the runner, rather than adopting it as a successful fixture.
+
+Confirmation and correction are separate trusted local operator actions with explicit `--operator-confirmation`. The audio/STT/model cannot supply that authority. The fixed neutral marker is the only writable content; no free-form content argument exists. Confirmv0→v1, then correctv1→v2 to neutral marker “six”; the correction adds its own operator evidence and counterevidence for the earlier fixture. All sensor evidence remains attributed to an unknown, unconfirmed speaker. No confirmed human fact or private memory is spoken.
+
+```text
+voice_memory_acceptance.py confirm --allow-disposable-voice-fixture --directory <fixture-dir> --output <fresh-confirm.json> --expected-store-id <prepared-store-UUID> --expected-version 0 --operator-confirmation
+voice_memory_acceptance.py readback --allow-disposable-voice-fixture --directory <fixture-dir> --output <fresh-reopen-v1.json> --expected-store-id <same-UUID> --expected-version 1
+voice_memory_acceptance.py correct --allow-disposable-voice-fixture --directory <fixture-dir> --output <fresh-correct.json> --expected-store-id <same-UUID> --expected-version 1 --operator-confirmation
+voice_memory_acceptance.py readback --allow-disposable-voice-fixture --directory <fixture-dir> --output <fresh-reopen-v2.json> --expected-store-id <same-UUID> --expected-version 2
+```
+
+Use the same staged interpreter/PYTHONPATH prefix for each command. Missing operator confirmation or stale version must fail without promoting the item. Each readback reopens SQLite in a **new process**, checks the unchanged store UUID/revision/version/content whitelist, and admits the recall through canonical `State` to verify the exact versioned alias/type/summary projection. It prints metadata only. This is real PC SQLite restart/readback and State projection when run on PC, not a restart of the robot/model/service, spoken readback or a new LLM answer. Local tests separately hold a synthetic ready task over an actual owner correction and verify its late speech commit is discarded by the existing dependency fence.
+
+Finally revoke both the sensor root and explicit operator root, then reopen empty recall before removing the owned disposable files:
+
+```text
+voice_memory_acceptance.py forget --allow-disposable-voice-fixture --directory <fixture-dir> --output <fresh-forget.json> --expected-store-id <same-UUID> --expected-version 2
+voice_memory_acceptance.py readback --allow-disposable-voice-fixture --directory <fixture-dir> --output <fresh-empty-reopen.json> --expected-store-id <same-UUID> --expected-version -1
+voice_memory_acceptance.py cleanup --allow-disposable-voice-fixture --directory <fixture-dir> --output <fresh-cleanup.json> --expected-store-id <same-UUID> --expected-version -1
+```
+
+Require empty active/versions/evidence, `forgotten_replay_rejected=true` for both roots and finally `owned_files_removed=true`. Tombstones protect reimport inside that store until its explicitly requested file removal; this is not deletion of production stores, copies/backups or a global revoked-root service. Recreated directories get a new UUID/namespace and reject old UUID commands. Cleanup never removes input receipts/reports or adopts an existing directory. Unknown files, symlinks or a live `operator.lock` reject admission; each owner command holds an exclusive actual process slot. A killed command can leave a stale lock: no automatic unlocking or cleanup while another owner may still run; the runner must verify the original process exited before recovery.
+
+CLI `accepted` means this bounded owner-memory action passed. `live_voice_verified=false`, `speaker_identity_confirmed=false` and `input_assurance=trusted_runner_files_not_signed_hardware_attestation` are deliberately retained in all reports. Actual combined acceptance requires the runner's genuine finished voice receipts plus successful separate PC steps and owned cleanup. Local tests use explicitly synthetic voice receipts with real subprocess SQLite persistence and cannot establish that actual acceptance. Automatic memory consolidation, identity inference, traits/policy writes, spoken private recall and export remain outside this stage.

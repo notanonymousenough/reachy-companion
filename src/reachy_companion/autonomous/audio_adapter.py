@@ -93,6 +93,7 @@ class AudioAdapter:
                             self.counts['completed'] += 1
                             event = dict(type='utterance', text=text, audio=dict(
                                 source_boot=observation['source_boot'], sequence=observation['sequence'],
+                                operator_binding=list(observation['operator_signature'][0]),
                                 lineage_id=observation['lineage_id'], pcm_sha256=observation['pcm_sha256'],
                                 origin='unknown', speaker_identity='unknown', speaker_confidence=0,
                                 echo_reference=observation['echo_reference'],

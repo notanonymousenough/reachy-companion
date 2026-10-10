@@ -75,6 +75,19 @@ def cancel_completion(speech,job,source,cancel_at,*,actual_agent,clock=time.mono
     return clock()-cancel_at,acknowledgement
 
 
+def admit_working_audio(ingest,state,event,now=None):
+    """Project only a new canonical admission, without retaining its transcript."""
+    before=state.authority.interaction_epoch
+    ingest(event,now)
+    if state.authority.interaction_epoch!=before+1 or state.current_utterance!=event['text']:return None
+    refs=[ref for ref,text in state.candidates.items() if text==event['text']]
+    if len(refs)!=1:return None
+    audio=event['audio']
+    return dict(source_boot=audio['source_boot'],sequence=audio['sequence'],pcm_sha256=audio['pcm_sha256'],
+        working_operator_binding=list(audio['operator_binding']),
+        working_memory_admitted=True,working_input_ref=refs[0],working_authority=state.authority.wire())
+
+
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     for name in ('config','companion-config','token-file','output'):p.add_argument('--'+name,type=Path,required=True)
@@ -126,11 +139,16 @@ def main():
                 # background sound captured while the main task is pending.
                 if reference is None or event['audio']['echo_reference']!=reference:
                     self.state.record('practice_unreferenced_audio');return
-                turns.append(dict(received_at=time.monotonic(),capture_age_ms=event['audio']['capture_age_ms'],
+                received_at=time.monotonic()
+                working=admit_working_audio(super().ingest,self.state,event,now)
+                if working is None:return
+                turns.append(dict(received_at=received_at,capture_age_ms=event['audio']['capture_age_ms'],
+                    **working,
                     lineage_id=event['audio']['lineage_id'],speaker_identity='unknown',confirmed=False,
                     expected_answer=expected,expected_answer_matched=expected is not None
                         and bool(words & {expected,expected_word}) and not words & {'не','нет'},
                     echo_reference_matched=reference is not None and reference==event['audio']['echo_reference']))
+                return
             return super().ingest(event,now)
     scheduler=AudioScheduler(config,AuditedGateway(config),speech_adapter=speech,audio_adapter=audio)
     lease=create_lease(client,source,a.lease_datagram_port)
@@ -141,6 +159,7 @@ def main():
     server=create_control_server(companion.token,a.controller,source,stop,control_status,port=a.status_port)
     threading.Thread(target=server.serve_forever,daemon=True).start()
     report=dict(mode='actual_distributed_realtime_audio_session',accepted=False,**server.session_binding,
+        working_memory_receipt_schema='voice-working-1',
         private_cloud_inputs=0,raw_audio_retained=False,resume_attempts=0,motor_commands=0,
         hub_inference=False,questions_limit=2,hub_boot_id=scheduler.state.authority.hub_boot_id,
         context_enabled=config.get('context',{}).get('enabled',False),cancel_kind='actual_agent' if a.actual_agent_cancel else 'local_harness',lease_transport='udp' if a.lease_datagram_port is not None else 'tcp')

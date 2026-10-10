@@ -14,6 +14,20 @@ module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
 
 
 class PolicyTests(unittest.TestCase):
+    def test_working_audio_receipt_requires_actual_canonical_admission_and_exports_no_transcript(self):
+        state=State();event=dict(type='utterance',text='Neutral fixture utterance',audio=dict(
+            source_boot='capture',sequence=1,pcm_sha256='a'*64,lineage_id='capture:1',origin='unknown',
+            capture_age_ms=10,operator_binding=['agent',1,0]))
+        ingest=lambda event,now:state.ingest(event,0 if now is None else now)
+        state.ingest(dict(type='operator',muted=True),0)
+        self.assertIsNone(module.admit_working_audio(ingest,state,event))
+        state.ingest(dict(type='operator',muted=False),0)
+        result=module.admit_working_audio(ingest,state,event)
+        self.assertEqual(result['working_input_ref'],next(iter(state.candidates)))
+        self.assertEqual(result['working_authority'],state.authority.wire())
+        self.assertNotIn('Neutral fixture utterance',str(result))
+        self.assertIsNone(module.admit_working_audio(lambda *args:None,state,event))
+
     def test_slow_reducer_cannot_hide_cancel_deadline_crossing_before_ack_and_stop(self):
         for began,work,expected in ((.483,.042,False),(.440,.042,True)):
             with self.subTest(began=began):
