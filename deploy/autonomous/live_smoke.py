@@ -23,6 +23,7 @@ def main():
     parser.add_argument('--cache-ram-mb', type=int, choices=(0, 128), default=0)
     parser.add_argument('--period', type=float, default=1)
     parser.add_argument('--projection', choices=('full', 'task_only'), default='full')
+    parser.add_argument('--decision-format', choices=('object','tuple'), default='object')
     args = parser.parse_args()
     import socket
     with socket.socket() as check:
@@ -42,7 +43,7 @@ def main():
             runtime_context_tokens=4096 if role=='fast' else 32768)
     cfg['models']['fast'].update(id='reachy-shadow-fast-cpu', base_url='http://127.0.0.1:18097',
          completion_backend='llama_native', completion_path='/completion', tokenize_path='/tokenize', temperature=0,
-         projection=args.projection, cache_ram_mb=args.cache_ram_mb)
+         projection=args.projection, cache_ram_mb=args.cache_ram_mb,decision_format=args.decision_format)
     cfg['models']['main'].update(base_url='http://127.0.0.1:1234/v1', context_tokens=32768,
          admission_context_tokens=4096, tokenizer_backend='lmstudio_sdk', completion_backend='lmstudio_sdk')
     log_path = args.output.with_suffix('.log')
@@ -82,7 +83,8 @@ def main():
                     result=gateway.generate('fast', view)
                     report['samples'].append({'case':name,'elapsed_s':time.monotonic()-started,**result})
                 except Exception as exc:
-                    report['samples'].append({'case':name,'elapsed_s':time.monotonic()-started,'error':repr(exc)})
+                    report['samples'].append({'case':name,'elapsed_s':time.monotonic()-started,'error':repr(exc),
+                                             'transport_status':getattr(exc.__cause__,'code',None)})
             expected = {'idle': lambda x: x.get('a')=='wait',
                         'new_turn': lambda x: x.get('start')=={'type':'main','input_ref':ref},
                         'pending': lambda x: not x.get('start') and not x.get('commit'),

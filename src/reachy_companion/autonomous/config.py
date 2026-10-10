@@ -71,6 +71,10 @@ def load(path):
             raise ValueError('Fast output exceeds design cap')
         if model.get('projection', 'full') not in ('full', 'task_only'):
             raise ValueError('Invalid fast projection')
+        if model.get('decision_format','object') not in ('object','tuple'):
+            raise ValueError('Invalid fast decision format')
+        if model.get('decision_format')=='tuple' and (role!='fast' or model.get('completion_backend')!='llama_native'):
+            raise ValueError('Tuple decisions require constrained native fast lane')
         if type(model.get('cache_ram_mb', 0)) is not int or not 0 <= model.get('cache_ram_mb', 0) <= 128:
             raise ValueError('Runtime prompt cache exceeds prototype cap')
         if model.get('projection') == 'task_only' and (role != 'fast' or config['actuators'] != 'simulated'):

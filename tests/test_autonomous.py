@@ -14,7 +14,7 @@ from urllib.request import Request, urlopen
 
 from reachy_companion.autonomous.config import load
 from reachy_companion.autonomous.contracts import decode, validate
-from reachy_companion.autonomous.gateway import BudgetRejected, ExecutionUnknown, Gateway, ModelBackend, create_server, fast_schema, fast_projection
+from reachy_companion.autonomous.gateway import BudgetRejected, ExecutionUnknown, Gateway, ModelBackend, create_server, fast_schema, fast_projection,fast_tuple_schema,tuple_choice
 from reachy_companion.autonomous.runtime import ReplayGateway, Scheduler
 from reachy_companion.autonomous.state import State
 
@@ -268,6 +268,36 @@ class GatewayTests(unittest.TestCase):
         del backend.payload
         with self.assertRaises(BudgetRejected): backend.generate('fast', State().snapshot(0))
         self.assertFalse(hasattr(backend, 'payload'))
+
+    def test_compact_tuple_preserves_capabilities_and_rejects_missing_or_muted_refs(self):
+        from jsonschema import validate as validate_schema
+        state=State();state.ingest(dict(type='utterance',text='mandatory full turn'),0)
+        view,aliases=fast_projection(state.snapshot(0))
+        value=['think','c0','request']
+        validate_schema(value,fast_tuple_schema(view))
+        self.assertEqual(tuple_choice(value,view)['start'],dict(type='main',input_ref='c0'))
+        self.assertEqual(view['dialogue'],'mandatory full turn')
+        for invalid in (['think','invented','request'],['converse','c0','wrong group'],['wait','c0','passive ref'],['e','-','unknown action'],['wait','-',''],['wait','-','ok','extra']):
+            with self.assertRaises(ValueError):tuple_choice(invalid,view)
+        view['muted']=True
+        with self.assertRaises(Exception):validate_schema(value,fast_tuple_schema(view))
+        with self.assertRaises(ValueError):tuple_choice(value,view)
+        self.assertEqual(tuple_choice(['wait','-','muted'],view),dict(a='wait',why='muted'))
+
+    def test_compact_tuple_maps_model_reference_and_preserves_native_finish_gate(self):
+        class Backend(ModelBackend):
+            reason='eos'
+            def count(self,model,content):return 200
+            def post(self,url,payload,*args):return dict(content='["think","c0","request"]',stop_type=self.reason,tokens_predicted=12)
+        cfg=config();model=cfg['models']['fast']
+        model.update(id='fixture',base_url='http://127.0.0.1',completion_backend='llama_native',decision_format='tuple')
+        model['audit'].update(verified=True,device='cpu_pc',runtime_build='fixture',weight_sha256='x',template_sha256='x',tokenizer_sha256='x',runtime_context_tokens=4096)
+        state=State();state.ingest(dict(type='utterance',text='turn'),0);backend=Backend(cfg)
+        result=backend.generate('fast',state.snapshot(0))
+        self.assertEqual(result['output']['start']['input_ref'],next(iter(state.candidates)))
+        self.assertEqual(result['usage']['output_tokens'],12)
+        backend.reason='limit'
+        with self.assertRaises(ValueError):backend.generate('fast',state.snapshot(0))
 
     def test_unknown_completion_quarantines_without_freeing_slot(self):
         class Failed:
