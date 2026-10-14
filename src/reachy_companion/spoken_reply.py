@@ -30,6 +30,8 @@ def response_format(value):
 
 def endpoint(config):
     settings=config['llm'];audit=settings.get('reply_schema',{})
+    if isinstance(audit,dict) and audit.get('mode','http_chat')!='http_chat':
+        raise ValueError('HTTP chat proof cannot enable another route')
     if (config['brains']['provider']!='lm_studio' or not isinstance(audit,dict) or audit.get('enabled') is not True
             or audit.get('verified') is not True or audit.get('model')!=settings['model'] or audit.get('base_url')!=config['network']['llm_base_url']
             or audit.get('max_length_verified') is not True or audit.get('pattern_verified') is not True):
@@ -58,3 +60,11 @@ def decode_reply(content,value):
     result=decode(content)
     if not isinstance(result,dict) or set(result)!={'reply'}:raise RuntimeError('Exact spoken reply object required')
     return validate_text(result['reply'],value)
+
+
+def check_profile(config,value):
+    audit=config['llm'].get('reply_schema',{})
+    if isinstance(audit,dict) and audit.get('mode')=='sdk_raw_instance_v1':
+        from .spoken_reply_sdk import profile
+        profile(config,value)
+    else:endpoint(config)

@@ -37,21 +37,24 @@ def overlay_voice():
     return legacy.encode()
 
 
-def build(destination,include_decoder=False):
+def build(destination,include_decoder=False,include_sdk=False):
     # No existing directory overwritten. Private ownership/deploy/rollback is runner responsibility.
     files={'voice.py':overlay_voice(),'brains.py':(ROOT/PREFIX/'brains.py').read_bytes(),
            'spoken_reply.py':(ROOT/PREFIX/'spoken_reply.py').read_bytes()}
     if sha(git_file(BASE,'brains.py'))!=PREIMAGES['brains.py']:raise ValueError('Brains preimage mismatch')
+    if include_sdk:files['spoken_reply_sdk.py']=(ROOT/PREFIX/'spoken_reply_sdk.py').read_bytes()
     dependencies=('autonomous/__init__.py','autonomous/contracts.py')
     if include_decoder:
         for name in dependencies:files[name]=(ROOT/PREFIX/name).read_bytes()
     for name,data in files.items():compile(data,name,'exec')
-    manifest={'kind':'spoken-reply-overlay-1','preimages':{**PREIMAGES,'spoken_reply.py':None,**({name:None for name in dependencies} if include_decoder else {})},
+    manifest={'kind':'spoken-reply-overlay-1','preimages':{**PREIMAGES,'spoken_reply.py':None,**({'spoken_reply_sdk.py':None} if include_sdk else {}),**({name:None for name in dependencies} if include_decoder else {})},
         'required_absent_directory':'autonomous' if include_decoder else None,
         'outputs':{name:sha(data) for name,data in files.items()},
         'required_existing_dependencies':{name:sha((ROOT/PREFIX/name).read_bytes()) for name in dependencies if not include_decoder},
         'default_config_changed':False,'actual_model_capability_verified':False,
-        'hardware_acceptance':False}
+        'hardware_acceptance':False,
+        'sdk_route':{'mode':'sdk_raw_instance_v1','sdk_version':'1.5.0','dependency_installation_performed':False,
+                     'fixed_reference_capability_verified':False} if include_sdk else None}
     destination.mkdir(mode=0o700)
     for name,data in files.items():
         output=destination/name;output.parent.mkdir(parents=True,exist_ok=True)
@@ -63,5 +66,6 @@ def build(destination,include_decoder=False):
 if __name__=='__main__':
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('destination',type=Path)
     parser.add_argument('--include-decoder',action='store_true',help='Only for a proven absent autonomous package; include its audited minimal decoder closure')
+    parser.add_argument('--include-sdk',action='store_true',help='Include the optional source-pinned SDK adapter; installs no SDK or dependencies')
     args=parser.parse_args()
-    print(json.dumps(build(args.destination,args.include_decoder),indent=2))
+    print(json.dumps(build(args.destination,args.include_decoder,args.include_sdk),indent=2))

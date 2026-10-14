@@ -2,24 +2,36 @@
 import json
 import os
 import re
+import sys
 from urllib.request import Request, build_opener, ProxyHandler
+
+
+def raw_prompt(config,messages):
+    settings=config['llm']
+    def clean(content):return re.sub(r'<\|[^\n]*?\|>', '', content)
+    return ''.join(settings['message_template'].format(role=m['role'],content=clean(m['content']))
+                   for m in messages)+settings['assistant_prefix']
 
 
 def answer(config, messages, session, *, reply_constraints=None):
     brains = config['brains']
     selected = brains['provider']
+    sdk_boundary=sys.modules.get(__package__+'.spoken_reply_sdk')
+    if selected=='lm_studio' and sdk_boundary is not None:
+        sdk_boundary.SLOT.available((config['network']['llm_base_url'].rstrip('/'),config['llm']['model']))
     if reply_constraints is not None:
         from .spoken_reply import constraints,response_format,endpoint
-        reply_constraints=constraints(reply_constraints);url=endpoint(config);settings=config['llm']
+        reply_constraints=constraints(reply_constraints)
+        if config['llm'].get('reply_schema',{}).get('mode')=='sdk_raw_instance_v1':
+            from .spoken_reply_sdk import predict
+            return predict(config,messages,reply_constraints)
+        url=endpoint(config);settings=config['llm']
         payload=dict(model=settings['model'],messages=messages,temperature=settings['temperature'],
             max_tokens=settings['max_tokens'],stream=False,response_format=response_format(reply_constraints))
         headers={}
     elif selected == 'lm_studio':
         settings = config['llm']
-        def clean(content):
-            return re.sub(r'<\|[^\n]*?\|>', '', content)
-        prompt = ''.join(settings['message_template'].format(role=m['role'], content=clean(m['content']))
-                         for m in messages) + settings['assistant_prefix']
+        prompt = raw_prompt(config,messages)
         payload = {'model': settings['model'], 'prompt': prompt,
                    'temperature': settings['temperature'], 'max_tokens': settings['max_tokens'],
                    'stream': False, 'stop': settings['stop']}

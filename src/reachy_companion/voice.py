@@ -169,11 +169,11 @@ class Pipeline:
     def prepare(self, payload, path, recognized_text=None, answer_result=None):
         reply_constraints=None
         if 'reply_constraints' in payload:
-            from .spoken_reply import constraints,endpoint
+            from .spoken_reply import constraints,check_profile
             reply_constraints=constraints(payload['reply_constraints'])
             if path not in ('/turn','/text') or answer_result is not None:
                 raise ValueError('Constrained reply requires an actual LLM turn')
-            endpoint(self.config)
+            check_profile(self.config,reply_constraints)
         session = payload.get('session', self.config['conversation']['session'])
         if not isinstance(session, str) or not 1 <= len(session) <= self.config['limits']['max_session_chars']:
             raise ValueError('Invalid session')

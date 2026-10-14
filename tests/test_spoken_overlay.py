@@ -47,5 +47,13 @@ assert not {'jsonschema','torch','piper','vosk','reachy_mini'} & set(sys.modules
 """
             subprocess.run([sys.executable,'-c',code],cwd=td,check=True,capture_output=True)
 
+    def test_sdk_bundle_adds_only_adapter_and_never_claims_runtime_capability(self):
+        with tempfile.TemporaryDirectory() as td:
+            manifest=prepare.build(Path(td)/'candidate',include_decoder=True,include_sdk=True)
+            self.assertEqual(len(manifest['outputs']),6)
+            self.assertIsNone(manifest['preimages']['spoken_reply_sdk.py'])
+            self.assertFalse(manifest['sdk_route']['fixed_reference_capability_verified'])
+            self.assertFalse(manifest['sdk_route']['dependency_installation_performed'])
+
 
 if __name__=='__main__':unittest.main()
