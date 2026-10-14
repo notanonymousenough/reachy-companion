@@ -33,6 +33,7 @@ class OwnedCleanup:
     privileged/same-UID access to the quarantine are outside the race guarantee.
     Unsupported anchored-directory operations fail closed (including Windows).
     """
+    requires_closed_lock=False
     @staticmethod
     def platform_check():
         required=(os.open,os.stat,os.rename,os.unlink,os.mkdir,os.rmdir)
@@ -67,6 +68,12 @@ class OwnedCleanup:
             if self.identity(current)!=self.identity(os.fstat(self.files[name])):
                 raise CleanupOwnershipConflict('Fixture file replaced')
         return names
+    def create_lock(self):
+        fd=os.open('operator.lock',os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600,dir_fd=self.directory)
+        try:
+            self.files['operator.lock']=os.dup(fd);self.verify(source_name=True)
+            return fd
+        except BaseException:os.close(fd);raise
     def pin_journals(self):
         names=self.verify(source_name=True,allow_journals=True)
         for name in names-set(self.files):
@@ -110,6 +117,13 @@ class OwnedCleanup:
         for name in ('directory','parent'):
             fd=getattr(self,name,None)
             if fd is not None:os.close(fd);setattr(self,name,None)
+
+
+def cleanup_class():
+    if os.name=='nt':
+        from .windows_fixture_cleanup import WindowsOwnedCleanup
+        return WindowsOwnedCleanup
+    return OwnedCleanup
 
 
 def read_json(path,cap):
@@ -191,12 +205,10 @@ def open_fixture(directory,expected_store_id,*,anchor_cleanup=False):
             or meta.get('store_id')!=expected_store_id or not isinstance(meta.get('namespace'),str)
             or not re.fullmatch('fixture-voice-[0-9a-f-]{36}',meta['namespace'])
             or not (directory/'memory.sqlite').is_file()):raise ValueError('Exact fixture store binding required')
-    cleanup=OwnedCleanup(directory) if anchor_cleanup else None
+    cleanup=cleanup_class()(directory) if anchor_cleanup else None
     lock=directory/'operator.lock';store=None;fd=None
     try:
-        fd=os.open('operator.lock' if cleanup else lock,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600,
-            **({'dir_fd':cleanup.directory} if cleanup else {}))
-        if cleanup:cleanup.files['operator.lock']=os.dup(fd);cleanup.verify(source_name=True)
+        fd=cleanup.create_lock() if cleanup else os.open(lock,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
         current,_=read_json(directory/'binding.json',8192)
         if current!=meta or not (directory/'memory.sqlite').is_file():raise MemoryConflict('Fixture changed during admission')
         store=MemoryStore(directory/'memory.sqlite',[meta['namespace']])
@@ -246,7 +258,7 @@ def prepare(directory,hub_path,device_path,binding):
 def operate(action,directory,expected_store_id,expected_version,operator_confirmation=False,*,exclusive_filesystem_cleanup=False):
     if type(expected_version) is not int or expected_version not in (-1,0,1,2):raise ValueError('Explicit fixture CAS version required')
     if action=='cleanup' and exclusive_filesystem_cleanup is not True:raise ValueError('Exclusive private cleanup authority required')
-    if action=='cleanup':OwnedCleanup.platform_check()
+    if action=='cleanup':cleanup_class().platform_check()
     meta,store,lock_fd,cleanup=open_fixture(directory,expected_store_id,anchor_cleanup=action=='cleanup')
     try:
         row=store.db.execute('SELECT version FROM active WHERE id=?',(meta['item_id'],)).fetchone()
@@ -276,6 +288,9 @@ def operate(action,directory,expected_store_id,expected_version,operator_confirm
             result=projection(store,meta,-1);result['forgotten_replay_rejected']=True
             if action=='cleanup':
                 store.close();store=None
+                if cleanup.requires_closed_lock:
+                    os.close(lock_fd);lock_fd=None
+                    cleanup.after_sqlite_close()
                 result.update(cleanup.remove())
             return result
         raise ValueError('Unknown fixture action')
