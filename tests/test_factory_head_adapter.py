@@ -87,5 +87,11 @@ class BridgeTests(unittest.TestCase):
             self.assertLessEqual(Fraction(converted,1_000_000_000),Fraction.from_float(value))
         for value in (True,float('nan'),float('inf'),-1,10**1000,2**64):
             with self.assertRaises(ValueError):self.bridge.deadline_ns(value)
+    def test_closed_operator_during_clock_probe_never_arms_native(self):
+        self.bridge.arm_done=False;before=len(self.c.calls)
+        def cancelled():self.g.withdraw('operator_stop');return int(self.trace.now*1e9)
+        self.c.finite_clock_ns=cancelled
+        with self.assertRaises(RuntimeError):self.bridge.arm()
+        self.assertEqual(len(self.c.calls),before)
 
 if __name__=='__main__':unittest.main()

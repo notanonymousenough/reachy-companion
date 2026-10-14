@@ -39,7 +39,11 @@ class NativeHeadBridge:
         self.c=controller;self.guard=guard;self.fk=fk;self.ik=ik;self.kinematics_lock=kinematics_lock;self.clock=clock
         self.owner=guard.boot;self.pending={};self.arm_done=False;self.last_native_sequence=0;self.lock=threading.RLock()
     def arm(self):
+        self.guard.expire()
+        if self.guard.closed:raise RuntimeError('Closed operator authority cannot arm')
         self.check_clock()
+        self.guard.expire()
+        if self.guard.closed:raise RuntimeError('Operator withdrew during clock verification')
         if self.arm_done:raise RuntimeError('Native owner already armed')
         self.c.finite_arm_at(self.owner,self.deadline_ns(self.guard.deadline),self.deadline_ns(self.guard.policy_until));self.arm_done=True
     @staticmethod
