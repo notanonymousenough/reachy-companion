@@ -5,10 +5,16 @@ import re
 from urllib.request import Request, build_opener, ProxyHandler
 
 
-def answer(config, messages, session):
+def answer(config, messages, session, *, reply_constraints=None):
     brains = config['brains']
     selected = brains['provider']
-    if selected == 'lm_studio':
+    if reply_constraints is not None:
+        from .spoken_reply import constraints,response_format,endpoint
+        reply_constraints=constraints(reply_constraints);url=endpoint(config);settings=config['llm']
+        payload=dict(model=settings['model'],messages=messages,temperature=settings['temperature'],
+            max_tokens=settings['max_tokens'],stream=False,response_format=response_format(reply_constraints))
+        headers={}
+    elif selected == 'lm_studio':
         settings = config['llm']
         def clean(content):
             return re.sub(r'<\|[^\n]*?\|>', '', content)
@@ -37,6 +43,12 @@ def answer(config, messages, session):
     request = Request(url, data=json.dumps(payload).encode(), headers=headers)
     with build_opener(ProxyHandler({})).open(request, timeout=config['timeouts']['llm']) as response:
         choice = json.load(response)['choices'][0]
+    if reply_constraints is not None:
+        from .spoken_reply import decode_reply
+        if choice.get('finish_reason')!='stop':raise RuntimeError('Incomplete structured spoken reply')
+        text=decode_reply(choice.get('message',{}).get('content'),reply_constraints)
+        if len(text)>config['limits']['max_speech_chars']:raise RuntimeError('Backend answer exceeds the speech limit')
+        return text
     text = choice.get('text', '') if selected == 'lm_studio' else choice.get('message', {}).get('content', '')
     if not isinstance(text, str):
         raise RuntimeError('Backend did not return spoken text')

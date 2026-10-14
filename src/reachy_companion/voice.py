@@ -142,7 +142,7 @@ class Pipeline:
             audio = fixed.getvalue()
         return base64.b64encode(audio).decode()
 
-    def answer(self, text, session, interrupted=False):
+    def answer(self, text, session, interrupted=False, *, reply_constraints=None):
         now = time.monotonic()
         self.sessions = {k: v for k, v in self.sessions.items() if now - v['used'] < self.config['llm']['history_ttl_seconds']}
         if session not in self.sessions and len(self.sessions) >= self.config['llm']['max_sessions']:
@@ -156,7 +156,8 @@ class Pipeline:
         messages.append({'role': 'user', 'content': text})
         from .brains import answer
         agent_session = self.agent_sessions.setdefault(session, uuid.uuid4().hex)
-        reply = answer(self.config, messages, agent_session)
+        reply = (answer(self.config,messages,agent_session,reply_constraints=reply_constraints)
+                 if reply_constraints is not None else answer(self.config,messages,agent_session))
         pending = entry['messages'] + [{'role': 'user', 'content': text},
                                        {'role': 'assistant', 'content': reply}]
         return reply, {'used': now, 'messages': pending[-self.config['llm']['history_messages']:]}
@@ -166,6 +167,13 @@ class Pipeline:
         self.agent_sessions.pop(session, None)
 
     def prepare(self, payload, path, recognized_text=None, answer_result=None):
+        reply_constraints=None
+        if 'reply_constraints' in payload:
+            from .spoken_reply import constraints,endpoint
+            reply_constraints=constraints(payload['reply_constraints'])
+            if path not in ('/turn','/text') or answer_result is not None:
+                raise ValueError('Constrained reply requires an actual LLM turn')
+            endpoint(self.config)
         session = payload.get('session', self.config['conversation']['session'])
         if not isinstance(session, str) or not 1 <= len(session) <= self.config['limits']['max_session_chars']:
             raise ValueError('Invalid session')
@@ -181,6 +189,8 @@ class Pipeline:
         pending = None
         command = None
         decision = self.classify(text)
+        if reply_constraints is not None and (not text or decision['action']!='answer'):
+            raise ValueError('Constrained reply cannot use a preset/control path')
         if not text:
             reply = ''
         elif path != '/say' and decision['action'] == 'stop':
@@ -197,10 +207,19 @@ class Pipeline:
         else:
             self.phase = 'thinking'
             reply, pending = (answer_result if answer_result is not None else
-                              self.answer(text, session, payload.get('previous_reply_interrupted', False)))
+                              (self.answer(text,session,payload.get('previous_reply_interrupted',False),reply_constraints=reply_constraints)
+                               if reply_constraints is not None else self.answer(text,session,payload.get('previous_reply_interrupted',False))))
+        if reply_constraints is not None:
+            from .spoken_reply import validate_text
+            validate_text(reply,reply_constraints)
         from .expressions import spoken_expression, spoken_segments
+        original_reply=reply
         segments = spoken_segments(reply)
         reply, emotion = spoken_expression(reply)
+        if reply_constraints is not None:
+            validate_text(reply,reply_constraints)
+            if reply!=original_reply or [s['text'] for s in segments]!=[original_reply]:
+                raise RuntimeError('Constrained spoken reply must remain unchanged')
         if pending is not None and not reply:
             raise RuntimeError('Backend returned an expression without spoken text')
         if pending is not None:
@@ -273,7 +292,7 @@ class Pipeline:
             recognized = answer_result = None
             intro_bytes = 0
             acknowledgements = self.config['conversation'].get('interaction', {}).get('acknowledgements', {})
-            if path != '/say' and acknowledgements.get('enabled', False):
+            if path != '/say' and acknowledgements.get('enabled', False) and 'reply_constraints' not in payload:
                 self.check_robot()
                 recognized = (self.transcribe(base64.b64decode(payload['pcm_base64'], validate=True))
                               if path == '/turn' else payload['text'].strip())
