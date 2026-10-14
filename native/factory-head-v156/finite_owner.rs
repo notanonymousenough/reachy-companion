@@ -1,5 +1,6 @@
 //! Single-use ownership with ORIGINAL absolute same-host monotonic deadlines.
 use std::sync::{Arc,Mutex};
+use std::sync::atomic::{AtomicBool,Ordering};
 use std::time::{Duration,Instant};
 
 pub fn monotonic_ns()->Result<u64,&'static str> {
@@ -16,35 +17,43 @@ pub fn monotonic_ns()->Result<u64,&'static str> {
 }
 
 type Clock=Arc<dyn Fn()->Result<u64,&'static str>+Send+Sync>;
-pub struct FiniteOwner { state:Mutex<Option<State>>,clock:Clock }
+pub struct FiniteOwner { state:Mutex<Option<State>>,clock:Clock,clock_failed:AtomicBool }
 struct State { owner:String,deadline:u64,policy_until:u64,revoked:bool,withdrawn_at:Option<u64>,clock_failed:bool }
 impl FiniteOwner {
-    pub fn new()->Self {Self {state:Mutex::new(None),clock:Arc::new(monotonic_ns)}}
+    pub fn new()->Self {Self {state:Mutex::new(None),clock:Arc::new(monotonic_ns),clock_failed:AtomicBool::new(false)}}
+    fn read_clock(&self)->Result<u64,&'static str> {
+        if self.clock_failed.load(Ordering::SeqCst) {return Err("authority clock permanently quarantined")}
+        match (self.clock)() {
+            Ok(value)=>Ok(value),
+            Err(error)=>{self.clock_failed.store(true,Ordering::SeqCst);Err(error)}
+        }
+    }
     #[cfg(test)] pub fn arm(&self,owner:&str,duration_ms:u64,policy_ms:u64)->Result<(),&'static str> {
-        let now=(self.clock)()?;
+        let now=self.read_clock()?;
         self.arm_at(owner,now.checked_add(duration_ms*1_000_000).ok_or("overflow")?,now.checked_add(policy_ms*1_000_000).ok_or("overflow")?)
     }
     #[cfg(test)] pub fn refresh(&self,owner:&str,remaining_ms:u64)->Result<(),&'static str> {
-        self.refresh_at(owner,(self.clock)()?.checked_add(remaining_ms*1_000_000).ok_or("overflow")?)
+        self.refresh_at(owner,self.read_clock()?.checked_add(remaining_ms*1_000_000).ok_or("overflow")?)
     }
     pub fn arm_at(&self,owner:&str,deadline:u64,policy_until:u64)->Result<(),&'static str> {
         let mut state=self.state.lock().map_err(|_| "owner poisoned")?;
-        let now=(self.clock)()?; // AFTER any native entry and mutex delay
+        let now=self.read_clock()?; // AFTER any native entry and mutex delay
         let absolute=deadline.checked_sub(now).ok_or("expired absolute authority")?;
         let policy=policy_until.checked_sub(now).ok_or("expired policy authority")?;
         if owner.is_empty() || owner.len()>256 || !(1..=12_000_000_000).contains(&absolute) || !(1..=300_000_000).contains(&policy) {return Err("invalid absolute finite binding")}
         if state.is_some() {return Err("finite owner cannot rearm")}
         *state=Some(State {owner:owner.into(),deadline,policy_until,revoked:false,withdrawn_at:None,clock_failed:false});Ok(())
     }
-    pub fn sealed(&self)->bool {self.state.lock().map(|s| s.is_some()).unwrap_or(true)}
+    pub fn sealed(&self)->bool {self.clock_failed.load(Ordering::SeqCst) || self.state.lock().map(|s| s.is_some()).unwrap_or(true)}
     fn expire(state:&mut State,now:u64) {
         let expiry=state.deadline.min(state.policy_until);
         if now>=expiry {state.revoked=true;state.withdrawn_at.get_or_insert(expiry);}
     }
     pub fn withdrawn(&self)->bool {
+        if self.clock_failed.load(Ordering::SeqCst) {return true}
         let Ok(mut state)=self.state.lock() else {return true};
         let Some(state)=state.as_mut() else {return false};
-        match (self.clock)() {Ok(now)=>Self::expire(state,now),Err(_)=>{state.revoked=true;state.clock_failed=true}}
+        match self.read_clock() {Ok(now)=>Self::expire(state,now),Err(_)=>{state.revoked=true;state.clock_failed=true}}
         state.revoked
     }
     pub fn withdrawn_at(&self)->Option<Instant> {
@@ -52,24 +61,24 @@ impl FiniteOwner {
         // Capture it BEFORE any mutex/clock delay; subtraction cannot extend SLA.
         let before=Instant::now();self.withdrawn();
         let original={let state=self.state.lock().ok()?;let state=state.as_ref()?;if state.clock_failed {return None} state.withdrawn_at?};
-        let elapsed=(self.clock)().ok()?.checked_sub(original)?;
+        let elapsed=self.read_clock().ok()?.checked_sub(original)?;
         before.checked_sub(Duration::from_nanos(elapsed))
     }
     pub fn authority_age_ns(&self)->Option<u64> {
         self.withdrawn();let original={let state=self.state.lock().ok()?;let state=state.as_ref()?;if state.clock_failed {return None} state.withdrawn_at?};
-        (self.clock)().ok()?.checked_sub(original)
+        self.read_clock().ok()?.checked_sub(original)
     }
     pub fn admit(&self,owner:&str)->bool {
         let Ok(mut state)=self.state.lock() else {return false};
         let Some(state)=state.as_mut() else {return false};
-        let Ok(now)=(self.clock)() else {state.revoked=true;state.clock_failed=true;return false};
+        let Ok(now)=self.read_clock() else {state.revoked=true;state.clock_failed=true;return false};
         Self::expire(state,now);state.owner==owner && !state.revoked
     }
     pub fn refresh_at(&self,owner:&str,policy_until:u64)->Result<(),&'static str> {
         let mut state=self.state.lock().map_err(|_| "owner poisoned")?;
         let state=state.as_mut().ok_or("unarmed")?;
         if state.owner!=owner {return Err("foreign owner")}
-        let now=match (self.clock)() {Ok(now)=>now,Err(error)=>{state.revoked=true;state.clock_failed=true;return Err(error)}};
+        let now=match self.read_clock() {Ok(now)=>now,Err(error)=>{state.revoked=true;state.clock_failed=true;return Err(error)}};
         Self::expire(state,now);
         if state.revoked {return Err("withdrawn policy")}
         let remaining=policy_until.checked_sub(now).ok_or("expired policy request")?;
@@ -81,7 +90,7 @@ impl FiniteOwner {
         let state=state.as_mut().ok_or("unarmed")?;
         if state.owner!=owner {return Err("foreign owner")}
         state.revoked=true;
-        let now=match (self.clock)() {Ok(now)=>now,Err(error)=>{state.clock_failed=true;return Err(error)}};
+        let now=match self.read_clock() {Ok(now)=>now,Err(error)=>{state.clock_failed=true;return Err(error)}};
         state.withdrawn_at.get_or_insert(now.min(state.deadline.min(state.policy_until)));Ok(())
     }
 }
@@ -92,7 +101,7 @@ mod tests {
     use std::sync::atomic::{AtomicU64,Ordering};
     fn synthetic()->(Arc<FiniteOwner>,Arc<AtomicU64>) {
         let now=Arc::new(AtomicU64::new(10_000_000_000));let clock=now.clone();
-        (Arc::new(FiniteOwner {state:Mutex::new(None),clock:Arc::new(move ||Ok(clock.load(Ordering::SeqCst)))}),now)
+        (Arc::new(FiniteOwner {clock_failed:AtomicBool::new(false),state:Mutex::new(None),clock:Arc::new(move ||Ok(clock.load(Ordering::SeqCst)))}),now)
     }
     #[test] fn foreign_owner_and_rearm_are_denied() {
         let gate=FiniteOwner::new();gate.arm("owned",4001,300).unwrap();
@@ -131,18 +140,33 @@ mod tests {
     }
     #[test] fn bad_u64_bounds_and_clock_fault_fail_closed() {
         let (gate,_)=synthetic();assert!(gate.arm_at("owned",u64::MAX,u64::MAX).is_err());assert!(gate.arm_at("owned",0,0).is_err());
-        let gate=FiniteOwner {state:Mutex::new(None),clock:Arc::new(||Err("clock failed"))};assert!(gate.arm_at("owned",1,1).is_err());
+        let gate=FiniteOwner {clock_failed:AtomicBool::new(false),state:Mutex::new(None),clock:Arc::new(||Err("clock failed"))};assert!(gate.arm_at("owned",1,1).is_err());
     }
     #[test] fn clock_fault_after_arm_never_relabels_unknown_withdrawal_as_later_expiry() {
         let failed=Arc::new(std::sync::atomic::AtomicBool::new(false));let fault=failed.clone();
         let now=Arc::new(AtomicU64::new(10_000_000_000));let clock=now.clone();
-        let gate=FiniteOwner {state:Mutex::new(None),clock:Arc::new(move || {
+        let gate=FiniteOwner {clock_failed:AtomicBool::new(false),state:Mutex::new(None),clock:Arc::new(move || {
             if fault.load(Ordering::SeqCst) {Err("clock failed")} else {Ok(clock.load(Ordering::SeqCst))}
         })};
         gate.arm_at("owned",22_000_000_000,10_300_000_000).unwrap();failed.store(true,Ordering::SeqCst);
         assert!(!gate.admit("owned"));failed.store(false,Ordering::SeqCst);now.store(10_301_000_000,Ordering::SeqCst);
         assert!(gate.withdrawn());assert!(gate.authority_age_ns().is_none());assert!(gate.withdrawn_at().is_none());
     }
+    fn secondary_read_fault(in_instant_getter:bool) {
+        let calls=Arc::new(AtomicU64::new(0));let counter=calls.clone();
+        let gate=FiniteOwner {clock_failed:AtomicBool::new(false),state:Mutex::new(None),clock:Arc::new(move || {
+            let call=counter.fetch_add(1,Ordering::SeqCst)+1;
+            if call==4 {Err("second proof clock read failed")} else {Ok(10_000_000_000)}
+        })};
+        gate.arm_at("owned",22_000_000_000,10_300_000_000).unwrap();gate.revoke("owned").unwrap();
+        if in_instant_getter {assert!(gate.withdrawn_at().is_none())} else {assert!(gate.authority_age_ns().is_none())}
+        assert_eq!(calls.load(Ordering::SeqCst),4);
+        // The raw clock would succeed now. No subsequent getter can regain proof.
+        assert!(gate.withdrawn_at().is_none());assert!(gate.authority_age_ns().is_none());assert!(!gate.admit("owned"));
+        assert_eq!(calls.load(Ordering::SeqCst),4);
+    }
+    #[test] fn withdrawn_at_secondary_read_failure_is_permanent() {secondary_read_fault(true)}
+    #[test] fn authority_age_secondary_read_failure_is_permanent() {secondary_read_fault(false)}
     #[test] fn poisoned_state_fails_closed() {
         let gate=Arc::new(FiniteOwner::new());let other=gate.clone();let _=std::thread::spawn(move ||{let _held=other.state.lock().unwrap();panic!("fault")}).join();
         assert!(gate.sealed());assert!(gate.withdrawn());assert!(!gate.admit("owned"));

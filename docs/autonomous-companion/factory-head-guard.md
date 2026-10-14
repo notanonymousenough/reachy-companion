@@ -340,3 +340,24 @@ These are local ABI check artifacts, never a Linux ARM deployment/physical proof
 
 Clock API references: [Python time clock information and nanoseconds](https://docs.python.org/3.12/library/time.html),
 [Linux clock_gettime/CLOCK_MONOTONIC](https://man7.org/linux/man-pages/man2/clock_gettime.2.html).
+
+### Permanent quarantine for every clock-read failure
+
+Independent review found a second-read error path in `withdrawn_at` and
+`authority_age_ns` which returned unknown once but allowed a later timing proof.
+All instance clock reads now go through one helper with a persistent atomic
+quarantine flag, including the secondary reads. A raw clock which later recovers
+cannot restore admission or timing proof. This also seals an unarmed instance
+if its clock fails. Original expiry anchors are preserved.
+
+The two exact secondary-read regressions pass in the full generated crate:
+`withdrawn_at_secondary_read_failure_is_permanent` and
+`authority_age_secondary_read_failure_is_permanent`. Total native tests: 17.
+No Python/native protocol or I/O integration changed in this repair. ABI remains
+`1.5.6+finite.head.3`, but the BINARY MUST BE REBUILT and pinned by its new hash;
+package version alone is not artifact identity. Do not reuse a cached installed
+wheel merely because its version matches. The new local Mac check wheel SHA256
+is `5c3b64dfe7865ade2b43f726209b75995deed16d5756b3ffc3332d467dfd75a1`,
+extension SHA256
+`c03965ac2d456a72889bcbb06dcd5663211c693d818120f96455a1496fedc856`.
+These supersede the earlier local `.3` check hashes above, not a target build.
