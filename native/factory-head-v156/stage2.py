@@ -54,7 +54,7 @@ def extend(text,binding):
             || self.finite_actions.try_lock().map(|m| m.values().any(|r| r.is_none())).unwrap_or(true);
         let Ok(engine)=self.finite_engine.try_lock() else {return (withdrawn,true,false,f64::INFINITY,vec![],vec![],0)};
         match &engine.latest {
-            Some(sample)=>(withdrawn,busy,!busy && withdrawn && engine.stop_known(),sample.started.elapsed().as_secs_f64(),sample.positions.to_vec(),sample.torque.to_vec(),sample.sequence),
+            Some(sample)=>(withdrawn,busy,!busy && withdrawn && self.finite_owner.authority_age_ns().is_some_and(|n| n<=500_000_000) && engine.stop_known(),sample.started.elapsed().as_secs_f64(),sample.positions.to_vec(),sample.torque.to_vec(),sample.sequence),
             None=>(withdrawn,busy,false,f64::INFINITY,vec![],vec![],0)
         }
     }

@@ -1,4 +1,4 @@
-"""Finite native .2 bridge for an already-open, fenced factory process.
+"""Finite native .3 bridge for an already-open, fenced factory process.
 
 No constructor, deployment, endpoint, listener or hardware acceptance is implied.
 The runtime must install all producer fences and exact source/build proofs before
@@ -10,26 +10,47 @@ import threading
 import time
 from .factory_head_guard import AXES,number,pose
 
-NATIVE_METHODS=('finite_arm','finite_refresh','finite_revoke','finite_enable','finite_goals',
+NATIVE_METHODS=('finite_arm_at','finite_refresh_at','finite_clock_ns','finite_revoke','finite_enable','finite_goals',
                 'finite_receipt','finite_status')
+
+
+def absolute_ns(value):
+    if type(value) not in (int,float) or not 0<=value<2**64/1e9:raise ValueError('Absolute monotonic u64 bound')
+    numerator,denominator=value.as_integer_ratio()
+    ns=numerator*1_000_000_000//denominator # never round an original deadline upward
+    if not 0<=ns<2**64:raise ValueError('Absolute monotonic u64 bound')
+    return ns
+
+
+def verify_native_clock(controller,clock=time.monotonic):
+    if clock is time.monotonic and time.get_clock_info('monotonic').implementation!='clock_gettime(CLOCK_MONOTONIC)':
+        raise ValueError('Python CLOCK_MONOTONIC implementation required')
+    started=clock();native=controller.finite_clock_ns();ended=clock()
+    numerator,denominator=number(ended).as_integer_ratio();upper=(numerator*1_000_000_000+denominator-1)//denominator
+    if (type(native) is not int or not 0<=native<2**64 or not 0<=ended-started<=.1
+            or not absolute_ns(started)<=native<=upper):
+        raise ValueError('Bounded same-host CLOCK_MONOTONIC handshake required')
 
 
 class NativeHeadBridge:
     def __init__(self,controller,guard,fk,ik,kinematics_lock,*,clock=time.monotonic):
-        if any(not callable(getattr(controller,n,None)) for n in NATIVE_METHODS):raise ValueError('Native finite-head.2 ABI required')
+        if any(not callable(getattr(controller,n,None)) for n in NATIVE_METHODS):raise ValueError('Native finite-head.3 ABI required')
         if not callable(fk) or not callable(ik):raise ValueError('Reviewed measured FK/bounded IK required')
         self.c=controller;self.guard=guard;self.fk=fk;self.ik=ik;self.kinematics_lock=kinematics_lock;self.clock=clock
         self.owner=guard.boot;self.pending={};self.arm_done=False;self.last_native_sequence=0;self.lock=threading.RLock()
     def arm(self):
-        now=self.clock();remaining=int((self.guard.deadline-now)*1000);policy=int((self.guard.policy_until-now)*1000)
-        if not 4000<=remaining<=12000 or not 1<=policy<=300:raise ValueError('Fresh finite owner budgets required')
+        self.check_clock()
         if self.arm_done:raise RuntimeError('Native owner already armed')
-        self.c.finite_arm(self.owner,remaining,policy);self.arm_done=True
+        self.c.finite_arm_at(self.owner,self.deadline_ns(self.guard.deadline),self.deadline_ns(self.guard.policy_until));self.arm_done=True
+    @staticmethod
+    def deadline_ns(value):
+        return absolute_ns(value)
+    def check_clock(self):
+        try:verify_native_clock(self.c,self.clock)
+        except BaseException:self.guard.withdraw('native_clock_domain_unknown');raise
     def refresh(self,operator,request_started):
         if not self.guard.observe_operator(operator,request_started):self.revoke();return False
-        remaining=int((self.guard.policy_until-self.clock())*1000)
-        if not 1<=remaining<=300:self.guard.withdraw('policy_unknown');self.revoke();return False
-        try:self.c.finite_refresh(self.owner,remaining)
+        try:self.c.finite_refresh_at(self.owner,self.deadline_ns(self.guard.policy_until))
         except BaseException:
             self.guard.withdraw('native_policy_unknown');self.revoke();raise
         return True

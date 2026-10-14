@@ -13,8 +13,9 @@ class World:
     def __init__(self):
         self.now=10.;self.head=dict(fixture.ORIGIN);self.torque=False;self.seq=0;self.stop_at=None
         self.calls=[];self.receipts={};self.ready=True
-    def finite_arm(self,*args):self.calls.append(('arm',args))
-    def finite_refresh(self,*args):
+    def finite_clock_ns(self):return int(self.now*1e9)
+    def finite_arm_at(self,*args):self.calls.append(('arm',args))
+    def finite_refresh_at(self,*args):
         if self.stop_at is not None:raise RuntimeError('withdrawn')
     def finite_revoke(self,*args):
         if self.stop_at is None:self.stop_at=self.now

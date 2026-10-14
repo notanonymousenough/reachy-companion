@@ -1,4 +1,8 @@
-# Finite factory head guard: capability checkpoint
+# Finite factory head guard: source and runtime checkpoint
+
+**Current native ABI is `1.5.6+finite.head.3`. The `.2`/`fdec07a` combination has
+a confirmed original-TTL anchor blocker and is NOT motion-admissible. Rebuild and
+independently verify `.3` before any physical run.**
 
 This checkpoint **does not admit a physical head movement**. It contains a
 protocol core, temporary transport fence, read-only sampler using an already-open
@@ -266,3 +270,73 @@ preparation, microphone epoch change, actual unknown-slot retention, high-rate
 sampling/busy polling, real local Unix framing/mode/stale-path rejection, live
 producer readiness and actual NumPy rigid-pose conversions. These tests do not
 replace the target binary, source review or physical finite run.
+
+
+## Original authority anchor repair: ABI .3
+
+The old bridge computed remaining milliseconds and Rust stored `now + remaining`.
+Native-entry or mutex delay could move the ORIGINAL policy expiry forward. `.3`
+removes those relative public arm/refresh methods. The required ABI is now:
+`finite_clock_ns` (static, no UART), `finite_arm_at(owner, deadline_ns,
+policy_deadline_ns)`, `finite_refresh_at(owner, policy_deadline_ns)`,
+`finite_revoke`, `finite_enable`, `finite_goals`, `finite_receipt`, `finite_status`;
+`finite_withdrawn` remains an additional read method. All deadlines are original
+absolute unsigned 64-bit nanoseconds, not a newly computed duration at delivery.
+
+The bridge converts the ORIGINAL Python authority values by exact integer-ratio
+flooring, never upward rounding. On the production path it requires Python's
+reported `clock_gettime(CLOCK_MONOTONIC)` implementation and a measured ordered
+Python-before / native-static-clock / Python-after bracket within 100ms. Wrong
+clock domain, noninteger/overflow value or an unbounded bracket rejects before
+arm. The entry makes this static probe after source/binary hash verification and
+BEFORE factory lifespan/controller construction. Native production reads explicit
+Linux `CLOCK_MONOTONIC` via `libc::clock_gettime`; it does not use RAW, BOOTTIME,
+wall time or an unspecified Instant epoch as the authority. Non-Linux production
+is unsupported and fails closed. The Rust unit-only non-Linux clock stand-in does
+not qualify a production clock or a device capability.
+
+Native arm/refresh reads the clock AFTER acquiring the actual owner mutex and
+copies the exact supplied original deadlines. An already-expired request rejects;
+a late refresh cannot revive a revoked owner. Absolute maximum 12s and policy
+maximum 300ms remain enforced at admission (a consumed portion is never restored).
+The source Core still constrains the original requested duration to 4–12s.
+Native expiry/revoke stores the ORIGINAL nanosecond event/expiry. `stop_known`
+also requires current authority age at most 500,000,000ns. The Instant bridge used
+for existing held-proof bookkeeping is deliberately conservative: it captures
+Instant BEFORE lock/clock work and subtracts authoritative elapsed ns, never
+reanchors to a late stop operation. A clock failure latches withdrawal and cannot
+later turn an unknown start into a newly timed expiry proof.
+
+Build with the same exact upstream three source pins. The generator now emits
+`1.5.6+finite.head.3` and adds direct `libc = "=0.2.177"`. Initial Cargo processing
+updates only the lockfile's OWN package version/dependency list (adds libc);
+external locked package records were compared and remained identical. Generated
+lock SHA256 in the local check:
+`51b904e6206201a39827d0bd7670c0d2f9bc2a83b7454c44993a508f5b416068`.
+The target builder must verify/record its own generated lock and artifact hashes,
+then use the reviewed lock for its build. An old `.2` wheel is not compatible and
+must never be masked as `.3` or installed for movement.
+
+Regression coverage includes a delayed native entry copying unchanged original
+arm/refresh deadlines, delayed mutex acquisition rejecting an expired old policy,
+queue occupancy, no revival, original expiry+500 proof anchoring, unsigned bounds,
+clock fault/quarantine, domain/type mismatches, bounded call ordering and exact
+no-upward-rounding conversion. Synthetic clock/unit tests are source validation;
+the actual target needs static clock-only ABI probing, then the runner's measured
+no-output capability preflight with the new artifact. Reuse neither an old physical
+receipt nor the old Mac wheel metadata above as new target acceptance.
+
+
+Local `.3` validation: 42 focused Python head tests, 15 Rust tests in the full
+generated crate, plus a real Maturin 1.9.4/Rust 1.99/macOS ARM64/CPython 3.13
+wheel/import. All nine named read/control methods were present; old relative
+`finite_arm`/`finite_refresh` were absent. Calling the static clock method on Mac
+rejected the unsupported production domain without constructing a controller.
+Mac `.3` wheel SHA256
+`3af194149eb52b52ead94e7a1c0305d7e279705171f2da61ba2e4be32cbeb4f2`;
+extension SHA256
+`59ddf207fefbb9e276d367d8d096f3000fbb5a4a531e3739cfce73de6c985af5`.
+These are local ABI check artifacts, never a Linux ARM deployment/physical proof.
+
+Clock API references: [Python time clock information and nanoseconds](https://docs.python.org/3.12/library/time.html),
+[Linux clock_gettime/CLOCK_MONOTONIC](https://man7.org/linux/man-pages/man2/clock_gettime.2.html).

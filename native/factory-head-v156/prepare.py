@@ -19,19 +19,19 @@ def prepare(source,output):
     for name,expected in PINS.items():
         if hashlib.sha256(texts[name].encode()).hexdigest()!=expected:raise ValueError('Source hash mismatch: '+name)
     text=texts['control_loop.rs']
-    text='mod finite_owner;\nuse finite_owner::FiniteOwner;\n'+text
+    text='pub(crate) mod finite_owner;\nuse finite_owner::FiniteOwner;\n'+text
     text=once(text,'    motor_name_id: HashMap<String, u8>,\n}', '    motor_name_id: HashMap<String, u8>,\n    finite_owner: Arc<FiniteOwner>,\n    finite_execution: Arc<Mutex<()>>,\n}')
     text=once(text,'    let stop_signal = Arc::new(Mutex::new(false));','    let finite_owner = Arc::new(FiniteOwner::new());\n        let finite_owner_clone=finite_owner.clone();\n        let finite_execution=Arc::new(Mutex::new(()));\n        let finite_execution_clone=finite_execution.clone();\n        let stop_signal = Arc::new(Mutex::new(false));')
     text=once(text,'                read_allowed_retries,\n            );','                read_allowed_retries,\n                finite_owner_clone,\n                finite_execution_clone,\n            );')
     text=once(text,'            motor_name_id,\n        })','            motor_name_id,\n            finite_owner,\n            finite_execution,\n        })')
     methods='''    // Single-use latch outside the command queue. Arm rejects an actual occupied
     // native slot and serialized admission discards all pre-arm queued mutators.
-    pub fn finite_arm(&self, owner: &str, duration_ms:u64, policy_ms:u64) -> Result<(), String> {
+    pub fn finite_arm_at(&self, owner:&str,deadline_ns:u64,policy_deadline_ns:u64)->Result<(),String> {
         let _slot=self.finite_execution.try_lock().map_err(|_| "native execution busy")?;
-        self.finite_owner.arm(owner,duration_ms,policy_ms).map_err(String::from)
+        self.finite_owner.arm_at(owner,deadline_ns,policy_deadline_ns).map_err(String::from)
     }
-    pub fn finite_refresh(&self, owner:&str, remaining_ms:u64) -> Result<(), String> {
-        self.finite_owner.refresh(owner,remaining_ms).map_err(String::from)
+    pub fn finite_refresh_at(&self,owner:&str,policy_deadline_ns:u64)->Result<(),String> {
+        self.finite_owner.refresh_at(owner,policy_deadline_ns).map_err(String::from)
     }
     pub fn finite_revoke(&self, owner:&str) -> Result<(), String> {
         self.finite_owner.revoke(owner).map_err(String::from)
@@ -88,11 +88,15 @@ def prepare(source,output):
     new='''    fn async_read_raw_bytes(&self, py: Python<'_>, id: u8, addr: u8, length: u8) -> PyResult<Vec<u8>> {
         py.detach(|| self.inner.async_read_raw_bytes(id, addr, length))'''
     binding=once(binding,old,new)
-    api='''    fn finite_arm(&self, owner:String, duration_ms:u64, policy_ms:u64) -> PyResult<()> {
-        self.inner.finite_arm(&owner,duration_ms,policy_ms).map_err(pyo3::exceptions::PyRuntimeError::new_err)
+    api='''    #[staticmethod]
+    fn finite_clock_ns()->PyResult<u64> {
+        crate::control_loop::finite_owner::monotonic_ns().map_err(pyo3::exceptions::PyRuntimeError::new_err)
     }
-    fn finite_refresh(&self, owner:String, remaining_ms:u64) -> PyResult<()> {
-        self.inner.finite_refresh(&owner,remaining_ms).map_err(pyo3::exceptions::PyRuntimeError::new_err)
+    fn finite_arm_at(&self,owner:String,deadline_ns:u64,policy_deadline_ns:u64)->PyResult<()> {
+        self.inner.finite_arm_at(&owner,deadline_ns,policy_deadline_ns).map_err(pyo3::exceptions::PyRuntimeError::new_err)
+    }
+    fn finite_refresh_at(&self,owner:String,policy_deadline_ns:u64)->PyResult<()> {
+        self.inner.finite_refresh_at(&owner,policy_deadline_ns).map_err(pyo3::exceptions::PyRuntimeError::new_err)
     }
     fn finite_revoke(&self, owner:String) -> PyResult<()> {
         self.inner.finite_revoke(&owner).map_err(pyo3::exceptions::PyRuntimeError::new_err)
@@ -111,7 +115,8 @@ def prepare(source,output):
     shutil.copyfile(Path(__file__).with_name('finite_owner.rs'),output/'src'/'control_loop'/'finite_owner.rs')
     shutil.copyfile(Path(__file__).with_name('finite_engine.rs'),output/'src'/'control_loop'/'finite_engine.rs')
     cargo=(output/'Cargo.toml').read_text()
-    (output/'Cargo.toml').write_text(once(cargo,'version = "1.5.6"','version = "1.5.6+finite.head.2"'))
+    cargo=once(cargo,'[dependencies]','[dependencies]\nlibc = \"=0.2.177\"')
+    (output/'Cargo.toml').write_text(once(cargo,'version = "1.5.6"','version = "1.5.6+finite.head.3"'))
     return output
 
 if __name__=='__main__':

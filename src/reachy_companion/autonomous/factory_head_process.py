@@ -41,7 +41,7 @@ def prepare_factory_app(main_module,abstract_class,robot_class,daemon_class,comm
     if (not native_path or Path(native_path).suffix not in ('.so','.pyd','.dylib')
             or getattr(inspect.getmodule(robot_class),'ReachyMiniPyControlLoop',None) is not native_class
             or native_class is None or any(not callable(getattr(native_class,n,None)) for n in NATIVE_METHODS)):
-        raise ValueError('Actual factory native class/artifact .2 ABI binding required')
+        raise ValueError('Actual factory native class/artifact .3 ABI binding required')
     verify_source(dict(main=main_module,abstract=abstract_class,robot=robot_class,daemon=daemon_class),native_path,native_sha256)
     if getattr(robot_class,'_finite_factory_prepared',False):raise ValueError('Fresh factory process required')
     if not issubclass(robot_class,abstract_class):raise ValueError('Pinned factory class inheritance required')

@@ -17,6 +17,7 @@ from urllib.request import Request,build_opener,ProxyHandler
 from .factory_head_process import prepare_factory_app,ready_factory_backend
 from .factory_head_runtime import FactoryHeadRuntime,PrivateFactoryHeadIPC
 from .factory_head_sample import ExistingFactorySampler
+from .factory_head_adapter import verify_native_clock
 
 
 def pose_matrix(value,np):
@@ -85,6 +86,7 @@ def main():
     commands={key:getattr(abstract,key) for key in ('GetStateCmd','GetMotorModeCmd','GetVersionCmd')}
     prepared=prepare_factory_app(factory,abstract.Backend,robot.RobotBackend,daemon.Daemon,commands,
         native_module=native,native_sha256=args.native_sha256,args=factory_args,numpy=np)
+    verify_native_clock(native.ReachyMiniPyControlLoop) # after source/binary hash check, before lifespan/UART construction
     state={};stopping=threading.Event()
     def attach_ready():
         deadline=time.monotonic()+10
