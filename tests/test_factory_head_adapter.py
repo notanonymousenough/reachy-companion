@@ -45,7 +45,7 @@ class BridgeTests(unittest.TestCase):
             self.assertAlmostEqual(state['sample']['captured_at'],self.trace.now-.005)
         self.assertTrue(state['stop_known']);self.assertTrue(self.g.held());self.assertFalse(self.g.cleanup_verified())
         self.g.complete(stop,self.trace.receipt(stop,stop_known=True));self.assertTrue(self.g.cleanup_verified())
-        with self.assertRaises(ValueError):self.bridge.stop_sample() # repeated native sequence invalidates prior proof
+        self.assertFalse(self.bridge.stop_sample()['stop_known']) # repetition supplies no new measurement/proof
         self.assertFalse(self.g.cleanup_verified())
     def test_stop_fk_time_and_unknown_native_outcome_invalidate_prior_observations(self):
         self.bridge.revoke();self.trace.now+=.01

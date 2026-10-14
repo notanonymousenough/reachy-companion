@@ -3,6 +3,7 @@ import hashlib
 from pathlib import Path
 import sys
 import tempfile
+import threading
 from types import ModuleType,SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -61,5 +62,14 @@ class ProcessTests(unittest.TestCase):
         instance.ready=SimpleNamespace(set=lambda:updates.append('ready'))
         instance._update();self.assertEqual(updates[-1],'ready')
         self.assertFalse(result['all_mutation_paths_fenced']);self.assertFalse(result['head_hardware_acceptance'])
+        instance.c=Native();instance.ready=threading.Event();instance.ready.set();instance.should_stop=threading.Event()
+        instance._media_server=None;instance._tracking_aim=None;instance._tracking_weight=0.;instance._speech_offsets=(0,)*6
+        instance.gravity_compensation_mode=False
+        result['app'].state=SimpleNamespace(daemon=SimpleNamespace(backend=instance),startup_app_antenna_watcher_task=None)
+        self.assertTrue(process.ready_factory_backend(result))
+        for key,value in (('_media_server',object()),('_tracking_aim',object()),('_speech_offsets',(1,0,0,0,0,0))):
+            previous=getattr(instance,key);setattr(instance,key,value)
+            self.assertFalse(process.ready_factory_backend(result));setattr(instance,key,previous)
+        instance.should_stop.set();self.assertFalse(process.ready_factory_backend(result))
 
 if __name__=='__main__':unittest.main()

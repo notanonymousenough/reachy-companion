@@ -173,3 +173,96 @@ Local validation for `.2`: full 309 Python tests and 28 unique Python protocol/f
 traces and eleven Rust tests in the generated full crate, including a never-empty
 producer and delayed serial read. No hardware session, installation, physical
 head movement, acoustic acceptance or full factory execution is implied.
+
+## Executable finite runtime (15 October continuation)
+
+`factory_head_entry` now wires the existing factory ASGI preparation, live backend
+readiness, shared measured FK/IK, finite scheduler and private Unix IPC. It does
+not instantiate `ReachyMini` or a second native controller. The factory's own
+lifespan constructs its usual backend/UART owner. Run only through the sole
+hardware runner's verified factory replacement procedure.
+
+The entry requires a private reviewed TARGET proof containing
+`native_artifact_sha256`, `target_bounded_io_verified: true`, and all six required
+`capabilities` booleans. This is trusted runner evidence, not cryptographic
+hardware attestation. A Mac wheel, old temporary receipt, cached HTTP timestamp,
+or manually invented boolean does not qualify. Rebuild/audit after target changes.
+The exact actual imported native extension and installed factory source pins are
+checked before listeners/constructors. Source mismatch fails before startup.
+
+```sh
+python -m reachy_companion.autonomous.factory_head_entry \
+  --factory-args /absolute/private/factory-args.json \
+  --native-sha256 REVIEWED_TARGET_EXTENSION_SHA256 \
+  --capability-proof /absolute/private/target-capabilities.json \
+  --directory /absolute/private/exclusive-0700-head-directory \
+  --operator-url http://CONFIGURED_AGENT_HOST:CONFIGURED_PORT/operator \
+  --token-env REACHY_COMPANION_TOKEN
+```
+
+Use the actual configured factory argument values/serial/config paths; the entry
+forces no media/wake/sleep/preload/datasets, loopback HTTP and real backend. The
+bearer value stays in the named environment variable, not a command argument.
+The directory must already be operator-owned with mode 0700 and an absent socket.
+`factory-head.sock` is created with mode 0600. Socket/control paths require
+exclusive operator ownership for their lifetime; this is not an adversarial
+same-UID filesystem guarantee. Existing/foreign socket paths are never reclaimed
+or removed automatically. Directory rebind or IPC close latches withdrawal.
+
+Private requests use the existing four-byte network-endian length + strict JSON
+framing, a 4096-byte request bound, and per-connection timeout. Separate connection
+workers let a stop latch enter while another request/actor preparation is busy.
+No TCP control endpoint is added. Status (`{"kind":"status"}`) returns the current
+`runtime_boot`. A single run requires exactly that boot and:
+
+```json
+{"kind":"run","runtime_boot":"CURRENT_BOOT","lift_mm":5,"yaw_degrees":3,"pitch_degrees":0,"duration":1.5}
+```
+
+This queues one finite worker; it is not a movement acceptance receipt. The worker
+verifies current models, disabled native baseline, operator boot/policy owner/
+epoch/microphone epoch, and every live producer fence. It pins/enables, observes
+fresh enabled held pose, executes relative minjerk outward and return steps for
+the requested 1–2s duration, verifies returned pose, then revokes and measures stop.
+Each step samples BEFORE actual admission and rechecks freshness after IK; body
+and antennas remain preserved. Actual native subcommands remain occupied until
+their own completion/discard receipt. A client timeout cannot release them.
+
+`{"kind":"stop","runtime_boot":"CURRENT_BOOT"}` cancels preparation as well as
+active motion. Its reply is only a latch acknowledgement, always `stop_known:
+false`; actual stop proof is reported separately. No rearm/repeat after any run or
+preparation cancellation. Changed Agent policy/mic epoch, unknown mic state,
+failed readiness, stale samples, partial torque, out-of-scope pose, occupied or
+unknown native receipt fail closed. No old human policy/mute/volume is restored.
+
+Readiness is checked against the exact current backend/controller OBJECTS,
+prepared read-only update, ready/not-stopping/no-error state, absent media/startup
+watcher, zero tracking/wobbler offsets and disabled gravity producer. REST/WS/SDK/
+RTC fences remain sealed. Cached factory FK/publication still cannot supply a
+fresh guard sample. NumPy IK results are validated/converted to seven finite
+native radians; measured matrix-to-RPY uses the same XYZ/RPY convention and
+rejects invalid rotation/nonfinite/gimbal-lock poses.
+
+The scheduler's cleanup retains unresolved slots and requires all-nine fresh
+native torque-off plus Cartesian stationary observations after withdrawal within
+500ms. Busy/unchanged native status does not advance measurement time or qualify
+a proof; sensor failure/backward sequence invalidates it. A bounded 64-observation
+stationary suffix allows high-rate polling to accumulate a real 100ms hold.
+
+On success the finite factory remains sealed and the native owner stays latched;
+there is no automatic restoration. Before replacing it, the runner must correlate
+actual measured cleanup with the exact current PID/start identity, binary, private
+runtime boot, service/launch generation, config and operator ownership. Restore the
+original factory only if that exact owned trial still exists and physical cleanup
+is verified; preserve any foreign/newer process/launch/config and report unknown
+stop without force replacement. Late physical recovery stays separate from
+passing the 500ms gate. The entry is not a lifecycle supervisor or a force-kill
+recovery tool. Current `head_hardware_acceptance` fields remain false pending the
+runner's independent actual-device correlation.
+
+Local continuation tests cover a complete synthetic nonneutral lift/turn/return/
+stop, no rearm, missing capability/readiness, cancellation during blocked pre-arm
+preparation, microphone epoch change, actual unknown-slot retention, high-rate
+sampling/busy polling, real local Unix framing/mode/stale-path rejection, live
+producer readiness and actual NumPy rigid-pose conversions. These tests do not
+replace the target binary, source review or physical finite run.

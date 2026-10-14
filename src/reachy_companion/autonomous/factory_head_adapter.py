@@ -96,6 +96,11 @@ class NativeHeadBridge:
             if not isinstance(state,(list,tuple)) or len(state)!=7:raise ValueError('Exact native status ABI required')
             withdrawn,busy,known,age,positions,torque,sequence=state
             if any(type(v) is not bool for v in (withdrawn,busy,known)) or not withdrawn:raise ValueError('Native withdrawal unknown')
+            if busy or (type(sequence) is int and sequence==self.last_native_sequence and sequence>0):
+                # An in-progress read / unchanged observation cannot certify a
+                # stop or advance held time, but is not a failed sensor sample.
+                self.guard.stop_verified=False
+                return dict(execution_busy=busy or bool(self.pending),stop_known=False,sample=None)
             if (type(sequence) is not int or sequence<=self.last_native_sequence
                     or not 0<=number(age)<=.1 or len(positions)!=9 or len(torque)!=9
                     or any(type(v) is not bool for v in torque)):raise ValueError('Fresh advancing all-nine native status required')

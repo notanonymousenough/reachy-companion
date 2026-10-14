@@ -84,6 +84,15 @@ class HeadGuardTests(unittest.TestCase):
             self.assertTrue(g.closed);self.assertEqual(g.reason,'native_sample_stale_at_admission')
             self.assertTrue(g.inflight) # no fake release of the issued actual slot
             self.assertLess(captured,self.now-.1)
+    def test_partial_torque_blocks_target_and_fast_sampling_can_prove_hold(self):
+        g=self.enabled(self.guard());sample=self.sample(torque=True);sample['torque'][4]=False
+        self.now+=.001;sample['captured_at']=self.now;g.accept_sample(sample)
+        action=g.issue('outward');self.assertFalse(g.admit(action,g.factory_identity,(g.boot,g.binding)))
+        self.assertTrue(g.closed)
+        g=self.guard();g.withdraw('finite_done');stop=g.issue('stop_owned')
+        g.complete(stop,self.receipt(stop,stop_known=True))
+        for _ in range(25):self.now+=.005;g.accept_sample(self.sample())
+        self.assertTrue(g.cleanup_verified()) # 200Hz cannot fit 100ms in the old 16-element window
     def test_deadline_not_extended_by_fresh_operator_and_forged_action_rejected(self):
         g=self.guard(duration=4);action=g.issue('pin_enable')
         self.assertFalse(g.admit(replace(action),g.factory_identity,(g.boot,g.binding)))

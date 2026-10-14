@@ -65,7 +65,28 @@ def prepare_factory_app(main_module,abstract_class,robot_class,daemon_class,comm
     robot_class._update=update_read_only;robot_class._finite_factory_prepared=True
     app=main_module.create_app(args)
     return dict(app=app,sealed_app=FactoryReadOnlyASGI(app),kinematics_lock=lock,
+        read_only_update=update_read_only,native_class=native_class,
         source_pinned=True,transport_fence=fence,native_artifact_sha256=native_sha256,
         all_mutation_paths_fenced=False,head_hardware_acceptance=False,
         remaining=['verify_actual_ready_backend/no_media/no_startup_producers','verify_target_native_ABI_and_all9_disabled',
                    'native_owner_arm/private_IPC','bounded_FK_IK_and_finite_scheduler','runner_measured_stop_capability'])
+
+
+def ready_factory_backend(preparation):
+    """Actual live producer/readiness check; no cached pose/torque attestation."""
+    if preparation.get('source_pinned') is not True:return False
+    app=preparation['app'];sealed=preparation['sealed_app']
+    if not isinstance(sealed,FactoryReadOnlyASGI) or sealed.app is not app:return False
+    backend=app.state.daemon.backend
+    if backend is None or type(backend)._update is not preparation['read_only_update']:return False
+    if getattr(backend,'error',None) is not None:return False
+    if (type(getattr(backend,'c',None)) is not preparation['native_class']
+            or not backend.ready.is_set() or backend.should_stop.is_set()):return False
+    required=('_media_server','_tracking_aim','_tracking_weight','_speech_offsets','gravity_compensation_mode')
+    if any(not hasattr(backend,key) for key in required):return False
+    if (backend._media_server is not None or backend._tracking_aim is not None or backend._tracking_weight!=0
+            or backend.gravity_compensation_mode is not False):return False
+    offsets=backend._speech_offsets
+    if not isinstance(offsets,(tuple,list)) or len(offsets)!=6 or any(value!=0 for value in offsets):return False
+    if not hasattr(app.state,'startup_app_antenna_watcher_task') or app.state.startup_app_antenna_watcher_task is not None:return False
+    return True

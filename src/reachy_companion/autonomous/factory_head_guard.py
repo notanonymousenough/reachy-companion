@@ -35,8 +35,10 @@ def head_plan(origin,*,lift_mm,yaw_degrees,pitch_degrees=0,duration=1.5):
 
 
 def policy_binding(value):
+    if not isinstance(value,dict) or not isinstance(value.get('motion_policy'),dict):raise ValueError('Typed actual operator policy required')
     policy=value['motion_policy']
     if (not isinstance(value.get('agent_boot_id'),str) or not 1<=len(value['agent_boot_id'])<=128
+            or (value.get('microphone_state_error') is not None and value.get('microphone_state_error') is not False)
             or type(policy.get('epoch')) is not int or not 0<=policy['epoch']<2**63
             or not isinstance(value.get('motion_policy_owner_id'),str) or not 1<=len(value['motion_policy_owner_id'])<=128
             or any(type(policy.get(key)) is not bool for key in ('motor_enabled','quiet','privacy_all'))
@@ -136,7 +138,11 @@ class FiniteHeadGuard:
         if not self.closed and any(abs(a-b)>limit for a,b,limit in zip(head,self.plan['origin'],
                 (.001,.001,.006,math.radians(.5),math.radians(3.5),math.radians(3.5)))):
             raise ValueError('Observed head left finite scope')
-        self.last_sequence=value['sequence'];self.samples.append((captured,head,tuple(value['torque'])));del self.samples[:-16]
+        if self.samples:
+            previous=self.samples[-1];dt=captured-previous[0]
+            if any(abs(a-b)/dt>limit for a,b,limit in zip(head,previous[1],(.001,.001,.001,.05,.05,.05))):
+                self.samples.clear() # retain only the observed stationary suffix
+        self.last_sequence=value['sequence'];self.samples.append((captured,head,tuple(value['torque'])));del self.samples[:-64]
         if self.phase in ('enabled_wait_sample','outward_wait_sample','return_wait_sample'):
             target=self.plan['target'] if self.phase=='outward_wait_sample' else self.plan['origin']
             reached=all(abs(a-b)<=limit for a,b,limit in zip(head,target,(.001,.001,.001,*([math.radians(.5)]*3))))
@@ -174,6 +180,9 @@ class FiniteHeadGuard:
         if action.kind=='stop_owned':return self.closed
         if not self.samples or not 0<=self.clock()-self.samples[-1][0]<=.1:
             self.withdraw('native_sample_stale_at_admission');return False
+        expected=action.kind!='pin_enable'
+        if any(value is not expected for value in self.samples[-1][2]):
+            self.withdraw('native_torque_unknown_at_admission');return False
         return not self.closed and self.clock()<action.deadline and self.clock()<self.policy_until
     @locked
     def complete(self,action,receipt):
