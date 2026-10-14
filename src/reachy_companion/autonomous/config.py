@@ -60,6 +60,8 @@ def load(path):
                 value=context.get(key,default)
                 if type(value) not in (int,float) or not .1<=value<=10:raise ValueError('Context timing bound')
             owner_ttl=context.get('owner_ttl_s',1.5)
+            video_ttl=context.get('video_processing_ttl_s',2)
+            if type(video_ttl) not in (int,float) or not .1<=video_ttl<=2:raise ValueError('Video processing TTL bound')
             if type(owner_ttl) not in (int,float) or not 1<=owner_ttl<=2:raise ValueError('Context owner TTL bound')
             if context.get('video_url') and context.get('refresh_s',.5)>owner_ttl/2:raise ValueError('Video owner refresh must maintain lease')
             if context.get('video_url'):

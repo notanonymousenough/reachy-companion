@@ -7,6 +7,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
 import struct
+import sys
 import threading
 import time
 from urllib.parse import urlsplit
@@ -16,9 +17,10 @@ from uuid import uuid4
 
 class Producer:
     def __init__(self,args):
-        self.args=args;self.lock=threading.Lock();self.latest=None;self.scope=None
-        self.privacy_all=True;self.policy_seq=-1;self.policy_deadline=0
+        self.args=args;self.lock=threading.Lock();self.latest=None;self.latest_at=None;self.scope=None;self.generation=0
+        self.privacy_all=True;self.policy_seq=-1;self.policy_deadline=0;self.admission_id=None
         self.retired=deque(maxlen=128);self.boot_id=str(uuid4());self.seq=0;self.gaps=0;self.frames=0
+        self.retired_admissions=set()
         # Frames from one producer run are correlated evidence. Reopening the
         # reader/privacy transitions cannot manufacture independent episodes.
         self.capture_lineage_id=str(uuid4())
@@ -39,30 +41,50 @@ class Producer:
         self.last_operator={key:value.get(key) for key in ('microphone_enabled','capture_active','phase')}
         return value.get('microphone_enabled') is False and value.get('capture_active') is False
     def set_policy(self,value):
-        if set(value)!= {'scope','privacy_all','seq'} or type(value['privacy_all']) is not bool or type(value['seq']) is not int or not 0<=value['seq']<=2**63-1:raise ValueError('Policy envelope')
+        if set(value) not in ({'scope','privacy_all','seq'},{'scope','privacy_all','seq','admission_id'}) or type(value['privacy_all']) is not bool or type(value['seq']) is not int or not 0<=value['seq']<=2**63-1:raise ValueError('Policy envelope')
+        admission=value.get('admission_id')
+        if admission is not None and (not isinstance(admission,str) or not 1<=len(admission)<=128):raise ValueError('Video admission bound')
         scope=value['scope']
         if set(scope)!= {'hub_boot_id','compute_boot_id','operator_epoch'} or type(scope['operator_epoch']) is not int or scope['operator_epoch']<0:
             raise ValueError('Policy scope')
         if any(not isinstance(scope[key],str) or not 1<=len(scope[key])<=128 for key in ('hub_boot_id','compute_boot_id')):raise ValueError('Boot scope')
         with self.lock:
+            if self.done.is_set():raise ValueError('Terminal video producer')
+            if admission in self.retired_admissions:raise ValueError('Retired video admission')
             owner=(scope['hub_boot_id'],scope['compute_boot_id'])
             if owner in self.retired:raise ValueError('Retired producer owner')
             if self.scope:
                 old=(self.scope['hub_boot_id'],self.scope['compute_boot_id'])
                 if owner==old:
                     if scope['operator_epoch']<self.scope['operator_epoch'] or value['seq']<=self.policy_seq:raise ValueError('Old epoch/sequence')
-                else:self.retired.append(old);self.policy_seq=-1
-            if scope!=self.scope or value['privacy_all']:self.latest=None
+                else:
+                    if len(self.retired)>=128:self.done.set();self.latest=None;raise RuntimeError('Producer fence capacity exhausted')
+                    self.retired.append(old);self.policy_seq=-1
+            if admission!=self.admission_id and self.admission_id is not None:
+                if len(self.retired_admissions)>=128:self.done.set();self.latest=None;raise RuntimeError('Video admission fence capacity exhausted')
+                self.retired_admissions.add(self.admission_id)
+            if scope!=self.scope or value['privacy_all'] or self.privacy_all!=value['privacy_all'] or admission!=self.admission_id:
+                self.latest=None;self.latest_at=None;self.generation+=1
+            self.admission_id=admission
             self.scope=dict(scope);self.policy_seq=value['seq'];self.privacy_all=value['privacy_all']
             self.policy_deadline=time.monotonic()+1.5
     def allowed(self):
-        return self.scope is not None and not self.privacy_all and time.monotonic()<self.policy_deadline and self.local_allowed()
+        return not self.done.is_set() and self.scope is not None and not self.privacy_all and time.monotonic()<self.policy_deadline and self.local_allowed()
     def packet(self):
         with self.lock:
-            if not self.allowed() or self.latest is None:return None
+            if not self.allowed():self.latest=None;self.latest_at=None;return None
+            if self.latest is None:return None
             metadata,payload=self.latest
+            if self.latest_at is not None:
+                elapsed=time.monotonic()-self.latest_at
+                if not 0<=elapsed<=2:self.latest=None;self.latest_at=None;return None
+                metadata={**metadata,'source_age_lower_ms':int(elapsed*1000)}
             raw=json.dumps(metadata).encode()
             return struct.pack('!I',len(raw))+raw+payload
+    def publish_frame(self,metadata,payload,scope,generation,dequeued):
+        with self.lock:
+            if not self.allowed() or self.scope!=scope or self.generation!=generation:return False
+            self.latest=(metadata,payload);self.latest_at=dequeued;self.frames+=1;return True
     def source_ids(self):
         return dict(frame_id=str(uuid4()),lineage_id=self.capture_lineage_id,
                     lineage_scope='producer_capture_session',independent_episode_verified=False)
@@ -71,21 +93,25 @@ class Producer:
         import numpy as np
         from reachy_mini.media.camera_gstreamer import GStreamerCamera, Gst
         from reachy_mini.media.camera_constants import get_camera_specs_by_name
-        camera=None;misses=0
+        if 'reachy_mini.media.audio_gstreamer' in sys.modules:raise RuntimeError('Camera-only import gate failed')
+        camera=None;misses=0;reader_boot=None;reader_generation=None
         try:
             while not self.done.is_set():
-                with self.lock:allowed=self.allowed();scope=dict(self.scope) if self.scope else None
+                with self.lock:allowed=self.allowed();scope=dict(self.scope) if self.scope else None;generation=self.generation;admission=self.admission_id
                 try:allowed=allowed and self.operator()
                 except Exception:allowed=False
                 if not allowed:
                     with self.lock:self.latest=None
-                    data=frame=sample=ppm=None
+                    data=frame=sample=ppm=buffer=segment=clock=None
                     if camera is not None:camera.close();camera=None
                     self.done.wait(.1);continue
                 try:
+                    if camera is not None and reader_generation!=generation:camera.close();camera=None
                     if camera is None:
-                        camera=GStreamerCamera(camera_specs=get_camera_specs_by_name('wireless'));camera.open()
+                        camera=GStreamerCamera(camera_specs=get_camera_specs_by_name('wireless'));camera.open();reader_boot=str(uuid4())
+                        reader_generation=generation
                     sample=camera._appsink_video.emit('try-pull-sample',100_000_000)
+                    dequeued=time.monotonic() # receipt of buffer, never physical exposure time
                     if sample is None:
                         self.gaps+=1;misses+=1
                         with self.lock:self.latest=None
@@ -107,21 +133,21 @@ class Producer:
                     clock=camera.pipeline.get_clock();clock_now=int(clock.get_time());base=int(camera.pipeline.get_base_time())
                     ppm=b'P6\n320 180\n255\n'+frame[::4,::4,::-1].copy().tobytes()
                     metadata=dict(producer_boot_id=self.boot_id,seq=self.seq,**self.source_ids(),
-                                  scope=scope,frame_sha256=hashlib.sha256(ppm).hexdigest(),sdk_version=version('reachy-mini'),
+                                  scope=scope,admission_id=admission,video_protocol=2,frame_sha256=hashlib.sha256(ppm).hexdigest(),sdk_version=version('reachy-mini'),
                                   audio_initialised=False,pts_ns=pts,buffer_running_time_ns=running,
                                   consumer_clock_ns=clock_now,consumer_base_time_ns=base,
-                                  presentation_age_ms=None if running is None else max(0,(clock_now-base-running)/1e6),
+                                  presentation_age_ms=None if running is None or clock_now<base+running else (clock_now-base-running)/1e6,
                                   source_capture_time_verified=False,source_age_lower_ms=0,source_age_upper_ms=None,
+                                  reader_boot_id=reader_boot,presentation_clock_only=True,
                                   robot_boot_id=Path('/proc/sys/kernel/random/boot_id').read_text().strip())
                     self.seq+=1
-                    with self.lock:
-                        if self.allowed() and self.scope==scope:self.latest=(metadata,ppm);self.frames+=1
+                    self.publish_frame(metadata,ppm,scope,generation,dequeued)
                 except Exception:
                     self.gaps+=1
                     with self.lock:self.latest=None
                     if camera is not None:camera.close();camera=None
                 finally:
-                    data=frame=sample=ppm=None
+                    data=frame=sample=ppm=buffer=segment=clock=None
                 self.done.wait(.5)
         finally:
             if camera is not None:camera.close()

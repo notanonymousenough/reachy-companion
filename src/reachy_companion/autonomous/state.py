@@ -357,7 +357,9 @@ class State:
                         now+self.config['task_timeout_s'], kind=self.candidate_kinds.pop(ref))
             if task.kind=='main' and (self.memory_items or self.context_sensors):
                 active_memory={alias:item for alias,item in self.memory_items.items() if self.memory_valid(item)}
-                task.prompt=dict(schema_version='context-1',utterance=task.prompt,memory=list(active_memory.values()),observations=self.context_view(now))
+                observations=[sensor for sensor in self.context_view(now) if sensor['state']=='fresh'
+                    and sensor.get('age_bounds_ms',{}).get('upper') is not None and sensor['age_bounds_ms']['upper']<=2000]
+                task.prompt=dict(schema_version='context-1',utterance=task.prompt,memory=list(active_memory.values()),observations=observations)
                 task.memory_dependencies=tuple((alias,hashlib.sha256(json.dumps(item,sort_keys=True,ensure_ascii=False).encode()).hexdigest()) for alias,item in active_memory.items())
             self.tasks[task.task_id] = task
             self.record('task_started', task_id=task.task_id)
