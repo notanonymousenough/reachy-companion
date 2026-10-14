@@ -61,7 +61,10 @@ The sole hardware runner owns the actual compute-worker session and rollout.
 
 1. Verify the actual three preimages and save the original two module bytes plus
    their hashes privately. Save the existing container/image/launch/config
-   reference without exposing credentials. No raw audio/text in the bundle.
+   reference without exposing credentials. Generate a fresh rollout-owner nonce.
+   Pin the actual trial container ID, immutable image ID, private config path/hash,
+   both overlay hashes/mounts and launch generation; attach the nonce to the trial's
+   ownership metadata. No raw audio/text in the bundle.
 2. Run the read-only guard with the actual installed source directory and isolated patched bundle: `python stt_diagnostics_preflight.py --before-dir /app/src/reachy_companion --patched-dir /absolute/patched/reachy_companion`. It checks all three preimages, both postimages and syntax without imports or model calls. A mismatch exits nonzero; do not deploy. Export ONLY the two patched modules from the pinned reviewed commit into an
    isolated directory, verify the postimages above, and compile them without
    loading models. Reuse the actual existing worker image/dependencies and launch
@@ -78,12 +81,19 @@ The sole hardware runner owns the actual compute-worker session and rollout.
    the finite receipt. Report whether Whisper was skipped, invoked with no
    segments, or invoked with all segments rejected. An empty result does not
    authorize forwarding room audio to the main model or count as voice acceptance.
-5. If readiness/schema/hash/default behavior fails, stop the finite replacement
-   through the existing runner procedure and restore the exact original image/
-   two modules and original launch/config. Verify original hashes and readiness.
-   After the finite run remove the overlays/private diagnostic config from the
-   launch and restore the original worker. No Agent mic/policy/volume restore from
-   an old snapshot; the current human state remains authoritative.
+5. Before any stop, restoration or cleanup, resolve the CURRENT service/container
+   and compare its container ID, image ID, rollout nonce, config path/hash, overlay
+   mounts/hashes and launch generation with the exact owned trial. Recheck that
+   the original launch/config generation has not been replaced or edited by a
+   newer human action. Restore the saved image/modules/launch only if every
+   ownership check still matches. Verify original hashes and readiness afterward.
+   If a foreign/newer container, launch or config is present, fail closed and
+   report the mismatch; preserve it, never force-stop or overwrite it from the
+   saved snapshot. Cleanup is limited to the owned trial bundle/private config;
+   retain files still referenced by a current launch or with uncertain identity.
+   The same checks apply after a successful finite run before removing overlays
+   and restoring the original worker. No Agent mic/policy/volume restore from an
+   old snapshot; the current human state remains authoritative.
 
 Local tests use synthetic RAM PCM and fake inference with actual NumPy 2.5.3.
 They cover music skip versus Whisper empty on identical PCM, exact threshold
