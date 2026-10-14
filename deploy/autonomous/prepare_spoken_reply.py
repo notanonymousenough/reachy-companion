@@ -37,24 +37,31 @@ def overlay_voice():
     return legacy.encode()
 
 
-def build(destination):
+def build(destination,include_decoder=False):
     # No existing directory overwritten. Private ownership/deploy/rollback is runner responsibility.
     files={'voice.py':overlay_voice(),'brains.py':(ROOT/PREFIX/'brains.py').read_bytes(),
            'spoken_reply.py':(ROOT/PREFIX/'spoken_reply.py').read_bytes()}
     if sha(git_file(BASE,'brains.py'))!=PREIMAGES['brains.py']:raise ValueError('Brains preimage mismatch')
-    for name,data in files.items():compile(data,name,'exec')
     dependencies=('autonomous/__init__.py','autonomous/contracts.py')
-    manifest={'kind':'spoken-reply-overlay-1','preimages':{**PREIMAGES,'spoken_reply.py':None},
+    if include_decoder:
+        for name in dependencies:files[name]=(ROOT/PREFIX/name).read_bytes()
+    for name,data in files.items():compile(data,name,'exec')
+    manifest={'kind':'spoken-reply-overlay-1','preimages':{**PREIMAGES,'spoken_reply.py':None,**({name:None for name in dependencies} if include_decoder else {})},
+        'required_absent_directory':'autonomous' if include_decoder else None,
         'outputs':{name:sha(data) for name,data in files.items()},
-        'required_existing_dependencies':{name:sha((ROOT/PREFIX/name).read_bytes()) for name in dependencies},
+        'required_existing_dependencies':{name:sha((ROOT/PREFIX/name).read_bytes()) for name in dependencies if not include_decoder},
         'default_config_changed':False,'actual_model_capability_verified':False,
         'hardware_acceptance':False}
     destination.mkdir(mode=0o700)
-    for name,data in files.items():(destination/name).write_bytes(data)
+    for name,data in files.items():
+        output=destination/name;output.parent.mkdir(parents=True,exist_ok=True)
+        output.write_bytes(data)
     (destination/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
     return manifest
 
 
 if __name__=='__main__':
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('destination',type=Path)
-    print(json.dumps(build(parser.parse_args().destination),indent=2))
+    parser.add_argument('--include-decoder',action='store_true',help='Only for a proven absent autonomous package; include its audited minimal decoder closure')
+    args=parser.parse_args()
+    print(json.dumps(build(args.destination,args.include_decoder),indent=2))
