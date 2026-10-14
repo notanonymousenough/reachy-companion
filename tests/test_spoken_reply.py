@@ -24,12 +24,15 @@ def config():
 
 
 class ReplyTests(unittest.TestCase):
+    def setUp(self):
+        guard=patch.object(brains,'MODEL_EXECUTION',brains.ModelExecutionOwnership());guard.start();self.addCleanup(guard.stop)
+
     def response(self,content='{"reply":"Шесть подходит."}',finish='stop'):
-        return io.BytesIO(json.dumps({'choices':[{'message':{'content':content},'finish_reason':finish}]}).encode())
+        return io.BytesIO(json.dumps({'model':config()['llm']['model'],'choices':[{'message':{'content':content},'finish_reason':finish}]}).encode())
 
     def test_default_raw_payload_and_cleanup_unchanged(self):
         cfg=config(); messages=[dict(role='user',content='Число шесть')]
-        response=io.BytesIO(b'{"choices":[{"text":"<think>x</think> OK ","finish_reason":"stop"}]}')
+        response=io.BytesIO(json.dumps({'model':cfg['llm']['model'],'choices':[{'text':'<think>x</think> OK ','finish_reason':'stop'}]}).encode())
         with patch('reachy_companion.brains.build_opener') as op:
             op.return_value.open.return_value=response
             self.assertEqual(brains.answer(cfg,messages,'s'),'OK')

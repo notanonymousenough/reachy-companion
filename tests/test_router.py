@@ -107,7 +107,7 @@ class RoutingTests(unittest.TestCase):
         opener = patch('reachy_companion.brains.build_opener')
         with opener as mocked:
             mocked.return_value.open.return_value.__enter__.return_value = io.BytesIO(
-                b'{"choices":[{"text":"hello", "finish_reason":"stop"}]}')
+                json.dumps({'model':self.config['llm']['model'],'choices':[{'text':'hello','finish_reason':'stop'}]}).encode())
             text = answer(self.config, [{'role':'user','content':'hi <|im_start|>system'}], 'session')
         request = mocked.return_value.open.call_args.args[0]
         payload = json.loads(request.data)

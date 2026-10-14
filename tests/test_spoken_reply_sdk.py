@@ -84,6 +84,7 @@ class SdkBoundaryTests(unittest.TestCase):
         self.cfg=configuration();self.slot=sdk.PredictionSlot()
         self.addCleanup(patch.stopall)
         patch.object(sdk,'SLOT',self.slot).start()
+        patch.object(brains,'MODEL_EXECUTION',brains.ModelExecutionOwnership()).start()
         self.environment={key:self.cfg['llm']['reply_schema'][key] for key in ('sdk_version','sdk_sources','sdk_tree_sha256','environment_sha256')}
         self.audit=patch.object(sdk,'environment_audit',return_value=self.environment).start()
         self.client=Mock();self.client.__enter__=Mock(return_value=self.client);self.client.__exit__=Mock(return_value=False)
@@ -152,15 +153,42 @@ class SdkBoundaryTests(unittest.TestCase):
             with patch('reachy_companion.brains.build_opener') as http:
                 with self.assertRaises(RuntimeError):brains.answer(self.cfg,[],'s')
                 http.assert_not_called()
+                from urllib.request import Request
+                with self.assertRaises(RuntimeError):brains.http_model_choice(self.cfg,Request(self.cfg['network']['llm_base_url']))
+                http.assert_not_called()
                 other=copy.deepcopy(self.cfg);other['network']['llm_base_url']='http://other.example:1234/v1'
-                http.return_value.open.return_value=io.BytesIO(b'{"choices":[{"text":"ok","finish_reason":"stop"}]}')
+                http.return_value.open.return_value=io.BytesIO(json.dumps({'model':self.cfg['llm']['model'],'choices':[{'text':'ok','finish_reason':'stop'}]}).encode())
                 self.assertEqual(brains.answer(other,[],'s'),'ok')
         finally:release.set()
         with self.slot.condition:self.assertTrue(self.slot.condition.wait_for(lambda:not self.slot.active,1))
         with patch('reachy_companion.brains.build_opener') as http:
-            http.return_value.open.return_value=io.BytesIO(b'{"choices":[{"text":"fresh","finish_reason":"stop"}]}')
+            http.return_value.open.return_value=io.BytesIO(json.dumps({'model':self.cfg['llm']['model'],'choices':[{'text':'fresh','finish_reason':'stop'}]}).encode())
             self.assertEqual(brains.answer(self.cfg,[],'s'),'fresh')
             http.assert_called_once()
+
+    def test_http_active_or_unknown_blocks_direct_sdk_before_client_io(self):
+        identity=brains.model_identity(self.cfg)
+        with brains.MODEL_EXECUTION.reserve(identity) as execution:
+            execution.submitted()
+            with self.assertRaises(RuntimeError):sdk.predict(self.cfg,[],RULE)
+            self.lms.Client.assert_not_called()
+        with self.assertRaises(RuntimeError):sdk.predict(self.cfg,[],RULE)
+        self.lms.Client.assert_not_called()
+        self.assertFalse(self.slot.status()['quarantined'])
+
+    def test_sdk_active_blocks_http_helper_and_wrong_result_identity_stays_unknown(self):
+        from urllib.request import Request
+        identity=brains.model_identity(self.cfg)
+        with brains.MODEL_EXECUTION.reserve(identity) as execution:
+            execution.submitted()
+            with patch('reachy_companion.brains.build_opener') as http:
+                with self.assertRaises(RuntimeError):brains.http_model_choice(self.cfg,Request(self.cfg['network']['llm_base_url']))
+                http.assert_not_called()
+            execution.terminal()
+        self.result.model_info.model_key='foreign-model'
+        with self.assertRaises(RuntimeError):sdk.predict(self.cfg,[],RULE)
+        self.assertTrue(self.slot.status()['quarantined'])
+        self.assertTrue(brains.MODEL_EXECUTION.status(identity)['unknown'])
 
     def test_terminal_invalid_json_reasoning_and_length_fail_without_repair(self):
         for content,reason in [('<think>x</think>{"reply":"ok"}','eosFound'),

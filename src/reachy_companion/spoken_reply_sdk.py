@@ -145,28 +145,34 @@ def predict(config,messages,rule):
         raise ValueError('Installed SDK dependency/source audit mismatch')
     # Import only after exact local source/version/environment validation.
     import lmstudio
-    from .brains import raw_prompt
+    from .brains import raw_prompt,MODEL_EXECUTION
     prompt=raw_prompt(config,messages)
     schema=response_format(rule)['json_schema']['schema']
+    identity=(audit['base_url'].rstrip('/'),audit['model'])
     def operation(started,terminal):
-        with lmstudio.Client(host) as client:
-            # Public RPC supports the exact reference. It never calls getOrLoad.
-            spec=dict(type='instanceReference',instanceReference=audit['instance_reference'])
-            info=client.llm.get_model_info(spec)
-            if (info.identifier!=audit['model'] or info.instance_reference!=audit['instance_reference']
-                    or info.model_key!=audit['model_key'] or info.context_length!=audit['context_tokens']):
-                raise ValueError('Expected already-loaded instance absent or changed')
-            # Source-pinned private core used by .complete. A string selector here
-            # would be an identifier query and permit ABA; never substitute one.
-            started()
-            stream=client.llm._complete_stream(spec,prompt,config=dict(
-                maxTokens=audit['max_tokens'],temperature=config['llm']['temperature'],
-                stopStrings=config['llm']['stop'],structured=dict(type='json',jsonSchema=schema)))
-            result=stream.wait_for_result()
-            terminal() # actual SDK terminal response, not a cancellation request
-            if result.model_info.model_key!=audit['model_key'] or result.stats.stop_reason not in ('eosFound','stopStringFound'):
-                raise RuntimeError('Incomplete or mismatched raw SDK result')
-            text=decode_reply(result.content,rule)
-            if len(text)>config['limits']['max_speech_chars']:raise RuntimeError('SDK reply exceeds speech limit')
-            return text
-    return SLOT.execute(operation,audit['timeout_s'],(audit['base_url'].rstrip('/'),audit['model']))
+        with MODEL_EXECUTION.reserve(identity) as execution:
+            with lmstudio.Client(host) as client:
+                # Public RPC supports the exact reference. It never calls getOrLoad.
+                spec=dict(type='instanceReference',instanceReference=audit['instance_reference'])
+                info=client.llm.get_model_info(spec)
+                if (info.identifier!=audit['model'] or info.instance_reference!=audit['instance_reference']
+                        or info.model_key!=audit['model_key'] or info.context_length!=audit['context_tokens']):
+                    raise ValueError('Expected already-loaded instance absent or changed')
+                # Source-pinned private core used by .complete. A string selector here
+                # would be an identifier query and permit ABA; never substitute one.
+                started()
+                execution.submitted()
+                stream=client.llm._complete_stream(spec,prompt,config=dict(
+                    maxTokens=audit['max_tokens'],temperature=config['llm']['temperature'],
+                    stopStrings=config['llm']['stop'],structured=dict(type='json',jsonSchema=schema)))
+                result=stream.wait_for_result()
+                if result.model_info.model_key!=audit['model_key']:
+                    raise RuntimeError('Mismatched raw SDK result identity')
+                terminal() # actual matching SDK terminal response, not a cancellation request
+                execution.terminal()
+                if result.stats.stop_reason not in ('eosFound','stopStringFound'):
+                    raise RuntimeError('Incomplete raw SDK spoken result')
+                text=decode_reply(result.content,rule)
+                if len(text)>config['limits']['max_speech_chars']:raise RuntimeError('SDK reply exceeds speech limit')
+                return text
+    return SLOT.execute(operation,audit['timeout_s'],identity)
