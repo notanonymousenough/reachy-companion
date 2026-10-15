@@ -61,12 +61,13 @@ def _destinations(config,host,mounts):
             for target in key:yield _target(target)
 
 
-def build_create_payload(inspection,*,image_id,owner_label,owner_value,overlay_mount):
+def build_create_payload(inspection,*,image_id,owner_label,owner_value,overlay_mount,overlay_request=None):
     """Return {payload, expected}; neither is a verified deployment receipt.
 
     overlay_mount is a full explicitly frozen bind inspection record with
     Type/Source/Destination/Mode/RW/Propagation. The Engine's actual output must
-    match expected; callers cannot adopt a different clone. Bare Env entries
+    match expected; Mode is preserved, never normalized. A separately frozen
+    overlay_request can be supplied; the default omits BindOptions. Bare Env entries
     remain literal strings and are never resolved against the host environment.
     """
     original=_copy(inspection)
@@ -97,7 +98,8 @@ def build_create_payload(inspection,*,image_id,owner_label,owner_value,overlay_m
     overlay=_copy(overlay_mount)
     keys={'Type','Source','Destination','Mode','RW','Propagation'}
     if (type(overlay) is not dict or set(overlay)!=keys or overlay['Type']!='bind'
-            or overlay['Mode']!='ro' or overlay['RW'] is not False or overlay['Propagation']!='rprivate'):
+            or type(overlay['Mode']) is not str or overlay['Mode'] not in ('','ro')
+            or overlay['RW'] is not False or overlay['Propagation']!='rprivate'):
         raise ValueError('Explicit complete read-only private bind inspection required')
     source=overlay['Source'];target=_target(overlay['Destination'])
     if (type(source) is not str or not source or '\x00' in source
@@ -106,11 +108,21 @@ def build_create_payload(inspection,*,image_id,owner_label,owner_value,overlay_m
         raise ValueError('Explicit absolute brains source and destination required')
     if target in set(_destinations(config,host,original['Mounts'])):
         raise ValueError('Overlay destination already occupied')
+    mount=(dict(Type='bind',Source=source,Target=target,ReadOnly=True)
+        if overlay_request is None else _copy(overlay_request))
+    core={'Type','Source','Target','ReadOnly'}
+    if (type(mount) is not dict or not core<=set(mount) or set(mount)-core-{'BindOptions'}
+            or mount['Type']!='bind' or mount['Source']!=source or mount['Target']!=target
+            or mount['ReadOnly'] is not True):
+        raise ValueError('Frozen request must match the read-only overlay binding')
+    if 'BindOptions' in mount:
+        options=mount['BindOptions']
+        if (type(options) is not dict or set(options)-{'Propagation'}
+                or 'Propagation' in options and options['Propagation']!=overlay['Propagation']):
+            raise ValueError('Frozen bind options inconsistent with expected private propagation')
     config['Image']=image_id
     config['Labels']={**(labels or {}),owner_label:owner_value}
     host['RestartPolicy']={**(policy or {}),'Name':'no','MaximumRetryCount':0}
-    mount=dict(Type='bind',Source=source,Target=target,ReadOnly=True,
-        BindOptions={'Propagation':'rprivate'})
     host['Mounts']=[*(host.get('Mounts') or []),mount]
     payload={**config,'HostConfig':host}
     expected=dict(Config=_copy(config),HostConfig=_copy(host),Mounts=original['Mounts']+[overlay])

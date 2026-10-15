@@ -13,7 +13,7 @@ identity=importlib.util.module_from_spec(identity_spec);identity_spec.loader.exe
 IMAGE='sha256:'+'1'*64
 OWNER='fixture.private-owner'
 OVERLAY=dict(Type='bind',Source='C:\\fixture\\brains.py',
-    Destination='/app/src/reachy_companion/brains.py',Mode='ro',RW=False,Propagation='rprivate')
+    Destination='/app/src/reachy_companion/brains.py',Mode='',RW=False,Propagation='rprivate')
 
 
 def original():
@@ -66,7 +66,7 @@ class CreatePayloadTests(unittest.TestCase):
         self.assertEqual(host['RestartPolicy'],{'Name':'no','MaximumRetryCount':0,'FuturePolicy':False})
         self.assertEqual(host['Mounts'],inspected['HostConfig']['Mounts']+[
             {'Type':'bind','Source':'C:\\fixture\\brains.py','Target':'/app/src/reachy_companion/brains.py',
-             'ReadOnly':True,'BindOptions':{'Propagation':'rprivate'}}])
+             'ReadOnly':True}])
         self.assertEqual(expected,{'Config':config,'HostConfig':host,'Mounts':inspected['Mounts']+[OVERLAY]})
         self.assertEqual(inspected,before);self.assertEqual(OVERLAY,overlay_before)
         # Outputs are independent, even nested metadata and overlay records.
@@ -74,6 +74,46 @@ class CreatePayloadTests(unittest.TestCase):
         expected['Mounts'][-1]['Source']='mutated'
         self.assertEqual(inspected,before);self.assertEqual(OVERLAY,overlay_before)
         self.assertNotIn('mutated',expected['HostConfig']['FutureHost']['list'])
+
+    def test_actual_empty_mode_and_request_without_bind_options_are_preserved_exactly(self):
+        plan=build(original());request=plan['payload']['HostConfig']['Mounts'][-1]
+        self.assertEqual(request,dict(Type='bind',Source=OVERLAY['Source'],
+            Target=OVERLAY['Destination'],ReadOnly=True))
+        self.assertNotIn('BindOptions',request)
+        self.assertEqual(plan['expected']['Mounts'][-1],OVERLAY)
+        self.assertEqual(plan['expected']['Mounts'][-1]['Mode'],'')
+        # An explicitly frozen different observed Mode remains different.
+        explicit_ro=build(original(),overlay_mount={**OVERLAY,'Mode':'ro'})
+        self.assertEqual(explicit_ro['expected']['Mounts'][-1]['Mode'],'ro')
+        self.assertNotEqual(identity.container_config_fingerprint(plan['expected']),
+            identity.container_config_fingerprint(explicit_ro['expected']))
+
+    def test_explicit_frozen_request_is_copied_without_reordering_or_extra_options(self):
+        request=dict(ReadOnly=True,Target=OVERLAY['Destination'],Source=OVERLAY['Source'],Type='bind')
+        for options in (None,{},dict(Propagation='rprivate')):
+            supplied=copy.deepcopy(request)
+            if options is not None:supplied['BindOptions']=options
+            before=copy.deepcopy(supplied)
+            plan=build(original(),overlay_request=supplied)
+            emitted=plan['payload']['HostConfig']['Mounts'][-1]
+            self.assertEqual(json.dumps(emitted),json.dumps(before))
+            self.assertEqual(supplied,before)
+            self.assertEqual(plan['expected']['Mounts'][-1],OVERLAY)
+            emitted['Source']='mutated';self.assertEqual(supplied,before)
+        inspected=original();before=copy.deepcopy(inspected['HostConfig']['Mounts'])
+        emitted=build(inspected)['payload']['HostConfig']['Mounts']
+        self.assertEqual(emitted[:-1],before)
+
+    def test_inconsistent_or_writable_request_flags_reject(self):
+        request=dict(Type='bind',Source=OVERLAY['Source'],Target=OVERLAY['Destination'],ReadOnly=True)
+        for change in ({'ReadOnly':False},{'ReadOnly':1},{'ReadOnly':None},{'Type':'volume'},
+                {'Source':'/foreign'},{'Target':'/foreign/brains.py'},
+                {'RW':True},{'Mode':'rw'},{'BindOptions':None},
+                {'BindOptions':{'Propagation':'shared'}},{'BindOptions':{'NonRecursive':True}}):
+            with self.subTest(change=change):
+                with self.assertRaises(ValueError):build(original(),overlay_request={**request,**change})
+        missing=dict(request);del missing['ReadOnly']
+        with self.assertRaises(ValueError):build(original(),overlay_request=missing)
 
     def test_raw_environment_and_attach_console_readonly_tmpfs_are_exact(self):
         inspected=original();plan=build(inspected)
