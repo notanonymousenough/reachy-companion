@@ -5,7 +5,7 @@ use. No import opens handles. No path-only unlink, OS fallback or ACL mutation.
 """
 import ctypes as C
 import os
-from pathlib import Path
+from pathlib import Path,PureWindowsPath
 from .contracts import uid
 from .voice_memory_fixture import FILES,CleanupOwnershipConflict
 
@@ -103,13 +103,27 @@ class WindowsKernel:
     def delete(self,handle):
         value=Disposition(1)
         if not self.lib.SetFileInformationByHandle(handle,4,C.byref(value),C.sizeof(value)):self.failed()
-    def rename(self,handle,directory,name):
+    def rename(self,handle,directory,name,*,directory_path):
         if (type(name) is not str or not name or len(name)>128 or name in ('.','..')
                 or any(c in name for c in '/\\:\x00')):raise ValueError('Simple quarantine component required')
-        encoded=name.encode('utf-16-le')
+        raw=str(directory_path).replace('/','\\');root=PureWindowsPath(raw)
+        if (not root.is_absolute() or len(root.drive)!=2 or root.drive[1]!=':' or not root.drive[0].isalpha()
+                or ':' in raw[2:] or '\x00' in raw or '..' in root.parts or raw!=str(root)):
+            raise ValueError('Canonical local absolute rename target root required')
+        self.validate_volume(str(root))
+        source_id=self.identity(handle);root_id=self.identity(directory)
+        if source_id[0]!=root_id[0]:raise CleanupOwnershipConflict('Cross-volume rename denied')
+        target=self.open(str(root),directory=True,traverse=True)
+        try:
+            if self.identity(target)!=root_id:raise CleanupOwnershipConflict('Rename target root replaced')
+        finally:self.close(target)
+        # Actual Win32 class3 rejects non-NULL RootDirectory on the target OS.
+        # Keep the verified source handle; resolve ONLY the absolute destination
+        # under the existing exclusive parent/quarantine namespace contract.
+        encoded=str(root/name).encode('utf-16-le')
         size=max(C.sizeof(RenameInformation),RenameInformation.name.offset+len(encoded)+2)
         buffer=C.create_string_buffer(size);value=RenameInformation.from_buffer(buffer)
-        value.replace=0;value.root=directory;value.length=len(encoded)
+        value.replace=0;value.root=None;value.length=len(encoded)
         C.memmove(C.addressof(buffer)+RenameInformation.name.offset,encoded,len(encoded))
         if not self.lib.SetFileInformationByHandle(handle,3,buffer,size):self.failed()
     def close(self,handle):
@@ -273,13 +287,13 @@ class WindowsOwnedCleanup:
                 self.verify_transfer(remaining,tokens)
                 handle=self.checked_handle(self.location/name,self.files[name],delete=True);handles.append(handle)
                 token=self.quarantine/('owned-'+uid())
-                self.api.rename(handle,self.quarantine_handle,token.name)
+                self.api.rename(handle,self.quarantine_handle,token.name,directory_path=self.quarantine)
                 remaining.remove(name);tokens.append((name,token))
                 self.verify_transfer(remaining,tokens)
             # Empty source only; original directory FileID remains authoritative.
             directory_delete=self.checked_handle(self.location,self.directory,directory=True,delete=True)
             handles.append(directory_delete);self.verify_transfer(remaining,tokens)
-            self.api.rename(directory_delete,self.quarantine_handle,'fixture')
+            self.api.rename(directory_delete,self.quarantine_handle,'fixture',directory_path=self.quarantine)
             self.location=self.quarantine/'fixture'
             self.verify_transfer(set(),tokens,detached=True)
             self.original_reused() # deny unknown/new source lookup BEFORE any deletion

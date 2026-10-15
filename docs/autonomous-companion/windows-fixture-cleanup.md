@@ -37,7 +37,13 @@ and [CreateFileW sharing/delete behavior](https://learn.microsoft.com/en-us/wind
 Windows cleanup uses FILE-FIRST transfer. Retain every original file pin while
 moving individual files through identity-checked DELETE-capable handles into
 unique tokens under the retained quarantine directory handle. `FileRenameInfo`
-uses a simple UTF-16 component, a retained target root handle and no replacement.
+uses the verified original source handle, `RootDirectory=NULL`, a canonical local
+absolute UTF-16 destination and no replacement. Each unique token is constructed
+under the retained quarantine root; reject relative/CWD, UNC/device/ADS, dot/dotdot
+and cross-volume forms. Recheck the target pathname's FileID against that retained
+root before calling the API, retaining all existing ancestor/root pins. Source
+is never renamed through a pathname. Before/after move inventory checks below
+remain required under the existing exclusive parent/quarantine authority.
 Before and after EVERY move, verify the original source directory identity,
 exact remaining source names, exact quarantine names and ALL previously moved
 token identities. A partial transfer, extra entry or substituted token fails
@@ -49,8 +55,15 @@ through that handle. Check its post-detach identity and emptiness. Do not close
 child pins to make an ancestor rename succeed: Microsoft's [rename rules](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/ns-ntifs-_file_rename_information#remarks)
 describe the restriction on directories containing open child files. The finite
 native handle matrix supports file-first ordering; it is not complete workflow
-acceptance. [FILE_RENAME_INFO](https://learn.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-file_rename_info)
-describes the retained target root and nonreplacement form.
+acceptance. A separate two-case actual ABI probe found relative destination plus
+non-NULL root rejected with WinError87 while NULL root plus absolute destination
+succeeded, with the same class3/layout/access and preserved source FileID. That
+is why this backend uses the documented absolute form of
+[FILE_RENAME_INFO](https://learn.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-file_rename_info).
+It is one explicit backend contract, not a retry/fallback after an API failure.
+Absolute destination resolution relies on the SAME exclusive parent/quarantine
+contract and retained-ID checks; it does not claim atomic handle-relative target
+resolution or protection against uncooperative same-user/privileged writers.
 
 Acquire and verify the COMPLETE final DELETE handle set (every token, detached
 original directory and quarantine) BEFORE the first delete disposition. Recheck
@@ -85,13 +98,15 @@ python -m unittest discover -s tests -p test_windows_fixture_cleanup.py -v
 python -m unittest discover -s tests -p test_voice_memory_acceptance.py -v
 ```
 
-All ELEVEN `NativeWindowsCleanupTests` cases must execute and pass on actual Windows,
+All THIRTEEN `NativeWindowsCleanupTests` cases must execute and pass on actual Windows,
 with no skip of those cases. On Windows a missing parent environment is an error,
 not native green. The scenarios exercise real SQLite close/delete sharing,
 ordinary-operation mutex/process exclusion and release faults, file-first source
 and prior-token identity checks, partial transfer, empty-directory rebinding before
 and after detach, full final DELETE-set acquisition, unknown source lookup and
-truthful distinct source reuse. Directory replacement injection happens only once
+truthful distinct source reuse. Two focused cases additionally require empty-directory
+source-handle detach with FileID preservation and an occupied sentinel which
+refuses replacement while preserving both files' IDs and bytes. Directory replacement injection happens only once
 the source is EMPTY with child pins already following their files to quarantine;
 an earlier OS refusal cannot substitute for the intended identity test. Every
 precommit foreign/fault scenario asserts zero delete calls plus preserved bytes
@@ -118,8 +133,8 @@ stale-lock removal, pathname fallback or ACL weakening. An original pre-cleanup
 snapshot never authorizes overwriting newer data. The code performs no deployment
 or automatic retry against a failed native filesystem capability.
 
-Local targeted source validation: seventeen POSIX-emulated/Win32-ABI tests
-passed; eleven native Windows cases skipped on Mac, explicitly NOT native proof.
+Local targeted source validation: eighteen POSIX-emulated/Win32-ABI tests
+passed; thirteen native Windows cases skipped on Mac, explicitly NOT native proof.
 The emulator models denial of ancestor-directory rename with child handles and
 original-handle journal delete-pending state. Complete real Win32/NTFS behavior
 and the final neutral fixture workflow remain independent runner gates.

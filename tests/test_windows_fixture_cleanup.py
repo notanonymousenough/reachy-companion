@@ -37,7 +37,8 @@ class PosixHandleEmulator:
     def delete(self,handle):
         identity=self.identity(handle);self.pending[identity]=self.handles[handle]
     def delete_pending(self,handle):return self.identity(handle) in self.pending or os.fstat(handle).st_nlink==0
-    def rename(self,handle,directory,name):
+    def rename(self,handle,directory,name,*,directory_path):
+        if Path(directory_path)!=self.handles[directory]:raise ValueError('Target root path changed')
         source=self.handles[handle];target=self.handles[directory]/name
         identity=self.identity(handle)
         if source.is_dir() and any(source in path.parents for path in self.handles.values()):
@@ -258,6 +259,37 @@ class NativeWindowsCleanupTests(CleanupScenarios,unittest.TestCase):
         self.addCleanup(self.tmp.cleanup);self.root=Path(self.tmp.name)
         WindowsKernel().validate_volume(self.root)
 
+    def test_native_empty_directory_detach_uses_original_handle_and_absolute_target(self):
+        api=WindowsKernel();source=self.root/'empty-source';source.mkdir();target=self.root/'quarantine';target.mkdir()
+        parent=api.open(self.root,directory=True);root=api.open(target,directory=True,traverse=True)
+        handle=api.open(source,directory=True,delete=True)
+        try:
+            before=api.identity(handle);root_id=api.identity(root);parent_id=api.identity(parent)
+            api.rename(handle,root,'fixture',directory_path=target)
+            observed=api.open(target/'fixture',directory=True)
+            try:self.assertEqual(api.identity(observed),before)
+            finally:api.close(observed)
+            self.assertEqual(api.identity(handle),before);self.assertEqual(api.identity(root),root_id)
+            self.assertEqual(api.identity(parent),parent_id);self.assertFalse(source.exists())
+        finally:api.close(handle);api.close(root);api.close(parent)
+
+    def test_native_occupied_sentinel_is_never_replaced_and_both_files_keep_ids_and_bytes(self):
+        api=WindowsKernel();source=self.root/'source.bin';source.write_bytes(b'OWNED_SOURCE')
+        target=self.root/'quarantine';target.mkdir();sentinel=target/'occupied.bin';sentinel.write_bytes(b'FOREIGN_SENTINEL')
+        parent=api.open(self.root,directory=True);root=api.open(target,directory=True,traverse=True)
+        handle=api.open(source,delete=True);foreign=api.open(sentinel)
+        try:
+            source_id=api.identity(handle);foreign_id=api.identity(foreign);root_id=api.identity(root)
+            with self.assertRaises(OSError) as error:api.rename(handle,root,'occupied.bin',directory_path=target)
+            self.assertIn(error.exception.winerror,(80,183))
+            for path,expected in ((source,source_id),(sentinel,foreign_id)):
+                observed=api.open(path)
+                try:self.assertEqual(api.identity(observed),expected)
+                finally:api.close(observed)
+            self.assertEqual(source.read_bytes(),b'OWNED_SOURCE');self.assertEqual(sentinel.read_bytes(),b'FOREIGN_SENTINEL')
+            self.assertEqual(api.identity(root),root_id)
+        finally:api.close(foreign);api.close(handle);api.close(root);api.close(parent)
+
     def test_noncleanup_mutex_blocks_other_process_and_namespace_rename_until_owned_close(self):
         store=self.make_fixture();meta,db,fd,owner=fixture.open_fixture(self.directory,store)
         saved=self.root/'renamed'
@@ -291,20 +323,38 @@ class NativeWindowsCleanupTests(CleanupScenarios,unittest.TestCase):
 
 
 class Win32AdapterTests(unittest.TestCase):
-    def test_handle_rename_has_utf16_fixed_layout_no_replace_and_retained_target_root(self):
+    def test_handle_rename_has_utf16_fixed_layout_null_root_absolute_destination_no_replace(self):
         self.assertEqual(RenameInformation.root.offset,C.sizeof(C.c_void_p))
         self.assertEqual(RenameInformation.name.offset,2*C.sizeof(C.c_void_p)+4)
         kernel=WindowsKernel.__new__(WindowsKernel);kernel.lib=Mock()
+        root='C:\\fixture\\quarantine'
         def rename(handle,kind,buffer,size):
             header=RenameInformation.from_buffer(buffer)
-            self.assertEqual((handle,kind,header.replace,header.root),(123,3,0,456))
+            self.assertEqual((handle,kind,header.replace,header.root),(123,3,0,None))
             data=C.string_at(C.addressof(buffer)+RenameInformation.name.offset,header.length)
-            self.assertEqual(data.decode('utf-16-le'),'owned-нейтральный')
+            self.assertEqual(data.decode('utf-16-le'),root+'\\owned-нейтральный')
             self.assertGreaterEqual(size,RenameInformation.name.offset+header.length+2);return 1
         kernel.lib.SetFileInformationByHandle.side_effect=rename
-        kernel.rename(123,456,'owned-нейтральный');kernel.lib.CreateFileW.assert_not_called()
+        identity=lambda handle:(77,b'source' if handle==123 else b'target-root')
+        with patch.object(kernel,'validate_volume'),patch.object(kernel,'identity',side_effect=identity),patch.object(kernel,'open',return_value=789) as opening:
+            kernel.rename(123,456,'owned-нейтральный',directory_path=root)
+            opening.assert_called_once_with(root,directory=True,traverse=True)
+        kernel.lib.CreateFileW.assert_not_called();kernel.lib.CloseHandle.assert_called_once_with(789)
         for name in ('','..','a/b','a\\b','x:y','x\x00y'):
-            with self.assertRaises(ValueError):kernel.rename(123,456,name)
+            with self.assertRaises(ValueError):kernel.rename(123,456,name,directory_path=root)
+        for invalid in ('relative','C:relative','C:\\fixture\\..\\quarantine','C:\\fixture:stream','\\\\server\\share'):
+            with self.assertRaises(ValueError):kernel.rename(123,456,'owned-token',directory_path=invalid)
+
+    def test_absolute_destination_root_rebind_or_foreign_volume_denies_before_api(self):
+        for mode in ('rebind','volume'):
+            kernel=WindowsKernel.__new__(WindowsKernel);kernel.lib=Mock()
+            def identity(handle):
+                return (88 if mode=='volume' and handle==123 else 77,
+                    b'foreign-root' if mode=='rebind' and handle==789 else b'root')
+            with patch.object(kernel,'validate_volume'),patch.object(kernel,'identity',side_effect=identity),patch.object(kernel,'open',return_value=789):
+                with self.assertRaises(fixture.CleanupOwnershipConflict):
+                    kernel.rename(123,456,'owned-token',directory_path='C:\\fixture\\quarantine')
+            kernel.lib.SetFileInformationByHandle.assert_not_called()
     def test_operation_lock_is_create_new_delete_authority_no_sharing_no_auto_delete(self):
         kernel=WindowsKernel.__new__(WindowsKernel);kernel.lib=Mock();kernel.lib.CreateFileW.return_value=123
         with patch.object(kernel,'info',return_value=((77,b'file-id'),0,1)):
