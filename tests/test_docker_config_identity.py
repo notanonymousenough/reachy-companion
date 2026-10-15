@@ -2,7 +2,10 @@
 import copy
 import importlib.util
 import json
+import hashlib
 from pathlib import Path
+import subprocess
+import types
 import unittest
 
 ROOT=Path(__file__).resolve().parents[1]
@@ -69,7 +72,60 @@ class DockerConfigIdentityTests(unittest.TestCase):
                     for key in path[:-1]:parent=parent[key]
                     if remove:del parent[path[-1]]
                     else:parent[path[-1]]='changed-fixture' if value!='changed-fixture' else 'different'
+                    if path[-1]=='Destination':
+                        with self.assertRaises(ValueError):identity.container_config_identity(changed)
+                        continue
                     self.assertNotEqual(identity.container_config_identity(changed),expected)
+
+    def test_actual_two_record_permutations_equal_without_changing_raw_records(self):
+        baseline=fixture()
+        baseline['Mounts'].append(dict(Type='bind',Source='/fixture/brains.py',Destination='/app/brains.py',
+            Mode='',RW=False,Propagation='rprivate',Future={'ordered':['first','second'],'zero':0}))
+        reversed_mounts=copy.deepcopy(baseline);reversed_mounts['Mounts'].reverse()
+        before=copy.deepcopy(reversed_mounts)
+        old_source=subprocess.check_output(['git','show',
+            'b4a53d2b66c4c44116d5430348392552e772a738:deploy/autonomous/docker_config_identity.py'],cwd=ROOT)
+        self.assertEqual(hashlib.sha256(old_source).hexdigest(),
+            'a068419e7984201f5d13b09536b248c3483d5b456f1f8bdac6eb20f1e61cc2a4')
+        old=types.ModuleType('old_ordered_mount_identity');exec(compile(old_source,'old_identity.py','exec'),old.__dict__)
+        self.assertNotEqual(old.container_config_identity(baseline),old.container_config_identity(reversed_mounts))
+        self.assertEqual(identity.container_config_identity(baseline),identity.container_config_identity(reversed_mounts))
+        self.assertEqual(reversed_mounts,before)
+        expected=identity.container_config_identity(baseline)
+        for key,value in (('Source','/different'),('RW',True),('RW',0),('Propagation','private'),
+                ('Mode','ro'),('extra',None),('Future',{'ordered':['second','first'],'zero':0})):
+            with self.subTest(key=key):
+                changed=copy.deepcopy(baseline);changed['Mounts'][1][key]=value
+                self.assertNotEqual(identity.container_config_identity(changed),expected)
+        for key in ('Source','RW','Propagation','Mode','Future'):
+            changed=copy.deepcopy(baseline);del changed['Mounts'][1][key]
+            self.assertNotEqual(identity.container_config_identity(changed),expected)
+
+    def test_duplicate_missing_invalid_or_reparse_destination_rejects(self):
+        for target in ('','relative','/app/../config','/app/./config','/app//config','/app/config/',
+                '//app/config','/app\\config','/app\x00config',None,0,False,[],{}):
+            with self.subTest(target=target):
+                changed=fixture();changed['Mounts'][0]['Destination']=target
+                with self.assertRaises(ValueError):identity.container_config_identity(changed)
+        missing=fixture();del missing['Mounts'][0]['Destination']
+        with self.assertRaises(ValueError):identity.container_config_identity(missing)
+        for same in (True,False):
+            changed=fixture();duplicate=copy.deepcopy(changed['Mounts'][0])
+            if not same:duplicate['Source']='/another-source'
+            changed['Mounts'].append(duplicate)
+            with self.assertRaises(ValueError):identity.container_config_identity(changed)
+        for invalid in (None,[],False,'mount'):
+            changed=fixture();changed['Mounts']=[invalid]
+            with self.assertRaises(ValueError):identity.container_config_identity(changed)
+
+    def test_only_top_level_mount_order_is_ignored_host_mounts_and_env_keep_order(self):
+        baseline=fixture();baseline['HostConfig']['Mounts']=[
+            dict(Type='bind',Source='/one',Target='/one',ReadOnly=True),
+            dict(Type='bind',Source='/two',Target='/two',ReadOnly=True)]
+        expected=identity.container_config_identity(baseline)
+        for section,key in (('HostConfig','Mounts'),('Config','Env')):
+            changed=copy.deepcopy(baseline);changed[section][key].reverse()
+            self.assertNotEqual(identity.container_config_identity(changed),expected)
 
     def test_other_field_types_presence_list_order_and_new_keys_preserved(self):
         baseline=fixture();expected=identity.container_config_identity(baseline)

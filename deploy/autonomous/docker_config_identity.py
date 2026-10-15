@@ -1,12 +1,13 @@
 """Pure Docker Config/HostConfig/Mounts identity; no inspection or operations.
 
 The sole value equivalence is HostConfig.OomKillDisable: exact False == None.
-All other JSON values retain their types, presence, and list order. Callers keep
-raw inspection and their separate container/operation ownership checks.
+Only top-level inspection Mounts is a set keyed by canonical Destination; all
+nested lists keep order. Callers keep raw inspection and separate owner checks.
 """
 import hashlib
 import json
 import math
+from pathlib import PurePosixPath
 
 
 def _json_copy(value):
@@ -26,7 +27,8 @@ def _json_copy(value):
 def container_config_identity(inspection):
     """Return canonical UTF-8 bytes for all three required inspect sections.
 
-    Dictionary key order has no identity meaning; array order does. Missing or
+    Dictionary key order and top-level Mounts record order have no identity
+    meaning; all nested array order does. Missing or
     malformed sections reject. Missing OomKillDisable remains a distinct key
     absence. No other top-level inspect fields are covered by this identity.
     """
@@ -35,6 +37,15 @@ def container_config_identity(inspection):
     if any(type(inspection.get(key)) is not kind for key,kind in expected.items()):
         raise ValueError('Complete Config/HostConfig/Mounts sections required')
     identity={key:_json_copy(inspection[key]) for key in expected}
+    destinations=set()
+    for record in identity['Mounts']:
+        target=record.get('Destination') if type(record) is dict else None
+        if (type(target) is not str or not target.startswith('/') or target.startswith('//')
+                or '\x00' in target or '\\' in target or '..' in target.split('/')
+                or str(PurePosixPath(target))!=target or target in destinations):
+            raise ValueError('Unique canonical nonempty mount Destination required')
+        destinations.add(target)
+    identity['Mounts'].sort(key=lambda record:record['Destination'])
     host=identity['HostConfig']
     if 'OomKillDisable' in host and host['OomKillDisable'] is None:
         host['OomKillDisable']=False
