@@ -12,7 +12,7 @@ from reachy_companion.autonomous.factory_head_adapter import NATIVE_METHODS
 
 class Native:
     pass
-for method in NATIVE_METHODS:setattr(Native,method,lambda *args:None)
+for method in (*NATIVE_METHODS,*process.STARTUP_METHODS):setattr(Native,method,lambda *args:None)
 # The actual Robot module must import this exact native class.
 ReachyMiniPyControlLoop=Native
 
@@ -28,18 +28,28 @@ class ProcessTests(unittest.TestCase):
         class Daemon:pass
         module=ModuleType('fake_factory_main');module.__file__=__file__;module.startup_app_config=SimpleNamespace(get_startup_app=lambda:'saved-config')
         calls=[]
-        def create(args):calls.append('create_app_only');return SimpleNamespace(args=args)
+        def create(args):
+            if args.hardware_config_filepath is not None:raise AssertionError('PID write path reachable before arm')
+            calls.append('create_app_only');return SimpleNamespace(args=args)
+        class Analytical:
+            def __init__(self,automatic_body_yaw=True):self.automatic_body_yaw=automatic_body_yaw
+            def fk(self,*args,**kwargs):raise AssertionError('Unbounded FK must be replaced')
+            def ik(self,*args,**kwargs):return [0]*7
+        module.fake_analytical_class=Analytical
+        Native.finite_prepare_readonly_startup=staticmethod(lambda:calls.append('native_readonly_prepare'))
+        Native.finite_startup_status=staticmethod(lambda:(True,True,63,[0]*9,[False]*9,1.))
         module.create_app=create
         args=SimpleNamespace(autostart=False,no_media=False,wake_up_on_start=True,goto_sleep_on_stop=True,
-            preload_datasets=True,dataset_update_interval_hours=24,fastapi_host='0.0.0.0',sim=True,mockup_sim=True)
+            preload_datasets=True,dataset_update_interval_hours=24,fastapi_host='0.0.0.0',sim=True,mockup_sim=True,hardware_config_filepath='private-pid-config',kinematics_engine='NN',check_collision=True)
         commands={n:type(n,(),{}) for n in ('GetStateCmd','GetMotorModeCmd','GetVersionCmd')}
         return module,Abstract,Robot,Daemon,args,commands,calls
     def prepare(self,parts,path,pins):
         main,abstract,robot,daemon,args,commands,calls=parts
         native=ModuleType('fake_native');native.__file__=str(path);native.ReachyMiniPyControlLoop=Native
-        with patch.dict(process.SOURCE_PINS,pins,clear=True):
+        with patch.dict(process.SOURCE_PINS,pins,clear=True),patch.object(process,'verify_kinematics'):
             return process.prepare_factory_app(main,abstract,robot,daemon,commands,native_module=native,
-                native_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),args=args,numpy=SimpleNamespace(asarray=lambda value:value))
+                native_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),args=args,numpy=SimpleNamespace(asarray=lambda value:value),
+                analytical_class=main.fake_analytical_class,kinematics_module=SimpleNamespace(),kinematics_sha256='a'*64)
     def test_source_mismatch_fails_before_class_patch_or_factory_creation(self):
         parts=self.setup_factory()
         with tempfile.TemporaryDirectory() as directory:
@@ -47,13 +57,35 @@ class ProcessTests(unittest.TestCase):
             with self.assertRaises(ValueError):self.prepare(parts,artifact,dict(process.SOURCE_PINS))
         self.assertEqual(parts[-1],[]);self.assertFalse(hasattr(parts[1],'_finite_head_transport_sealed'))
         self.assertTrue(parts[4].wake_up_on_start)
+    def test_existing_backend_instance_prevents_native_prepare_or_live_class_patch(self):
+        parts=self.setup_factory();existing=parts[2]();original=type(existing)._update
+        digest=hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+        with tempfile.TemporaryDirectory() as directory:
+            artifact=Path(directory)/'native.so';artifact.write_bytes(b'not-loaded')
+            with self.assertRaises(ValueError):self.prepare(parts,artifact,dict.fromkeys(process.SOURCE_PINS,digest))
+        self.assertEqual(parts[-1],[]);self.assertIs(type(existing)._update,original)
+        self.assertFalse(hasattr(parts[1],'_finite_head_transport_sealed'))
+
+    def test_legacy_startup_abi_or_prior_native_owner_rejects_before_any_class_patch(self):
+        parts=self.setup_factory();digest=hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+        with tempfile.TemporaryDirectory() as directory:
+            artifact=Path(directory)/'native.so';artifact.write_bytes(b'not-loaded')
+            with patch.object(Native,'finite_prepare_readonly_startup',None):
+                with self.assertRaises(ValueError):self.prepare(parts,artifact,dict.fromkeys(process.SOURCE_PINS,digest))
+            with patch.object(Native,'finite_prepare_readonly_startup',side_effect=RuntimeError('native owner already existed')):
+                with self.assertRaises(RuntimeError):self.prepare(parts,artifact,dict.fromkeys(process.SOURCE_PINS,digest))
+        self.assertEqual(parts[-1],[]);self.assertFalse(hasattr(parts[1],'_finite_head_transport_sealed'))
+        self.assertFalse(hasattr(parts[0].fake_analytical_class,'_finite_kinematics_prepared'))
+        self.assertEqual(parts[4].hardware_config_filepath,'private-pid-config')
+
     def test_preparation_suppresses_producers_before_app_creation_and_cached_fk_is_not_proof(self):
         parts=self.setup_factory();digest=hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
         with tempfile.TemporaryDirectory() as directory:
             artifact=Path(directory)/'native.so';artifact.write_bytes(b'not-loaded')
             result=self.prepare(parts,artifact,dict.fromkeys(process.SOURCE_PINS,digest))
         main,abstract,robot,daemon,args,commands,calls=parts
-        self.assertEqual(calls,['create_app_only']);self.assertTrue(args.no_media);self.assertFalse(args.wake_up_on_start)
+        self.assertEqual(calls,['native_readonly_prepare','create_app_only']);self.assertTrue(args.no_media);self.assertFalse(args.wake_up_on_start)
+        self.assertIsNone(args.hardware_config_filepath);self.assertEqual(args.kinematics_engine,'AnalyticalKinematics');self.assertFalse(args.check_collision)
         self.assertFalse(args.goto_sleep_on_stop);self.assertEqual(args.fastapi_host,'127.0.0.1')
         self.assertIsNone(main.startup_app_config.get_startup_app());self.assertTrue(abstract._finite_head_transport_sealed)
         instance=robot();updates=[]
@@ -65,9 +97,12 @@ class ProcessTests(unittest.TestCase):
         instance.c=Native();instance.ready=threading.Event();instance.ready.set();instance.should_stop=threading.Event()
         instance._media_server=None;instance._tracking_aim=None;instance._tracking_weight=0.;instance._speech_offsets=(0,)*6
         instance.gravity_compensation_mode=False
+        instance.head_kinematics=main.fake_analytical_class()
+        instance._tracking_enabled=False;instance._tracking_target_pose=None;instance._tracker=None;instance._idle_reset_task=None
+        instance._active_move_depth=0;instance._active_move_token=None;instance._active_audio_upload_id=None;instance.ik_required=False
         result['app'].state=SimpleNamespace(daemon=SimpleNamespace(backend=instance),startup_app_antenna_watcher_task=None)
         self.assertTrue(process.ready_factory_backend(result))
-        for key,value in (('_media_server',object()),('_tracking_aim',object()),('_speech_offsets',(1,0,0,0,0,0))):
+        for key,value in (('_media_server',object()),('_tracking_aim',object()),('_speech_offsets',(1,0,0,0,0,0)),('_active_move_depth',1),('_idle_reset_task',object()),('_tracking_enabled',True)):
             previous=getattr(instance,key);setattr(instance,key,value)
             self.assertFalse(process.ready_factory_backend(result));setattr(instance,key,previous)
         instance.should_stop.set();self.assertFalse(process.ready_factory_backend(result))

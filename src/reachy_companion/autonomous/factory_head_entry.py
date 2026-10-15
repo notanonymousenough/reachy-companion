@@ -75,6 +75,8 @@ def main():
     required=('all_mutation_paths_fenced','native_sample_clock','native_all_torque_read','owner_scoped_stop',
         'enable_pins_present_before_torque','independent_watchdog')
     if any(proof['capabilities'].get(key) is not True for key in required):raise ValueError('Every measured native/factory capability required')
+    kin_sha=proof.get('kinematics_artifact_sha256')
+    if not isinstance(kin_sha,str) or len(kin_sha)!=64:raise ValueError('Reviewed TARGET native kinematics artifact proof required')
     operator=operator_reader(args.operator_url,args.token_env)
     np=importlib.import_module('numpy');uvicorn=importlib.import_module('uvicorn')
     factory=importlib.import_module('reachy_mini.daemon.app.main')
@@ -82,10 +84,13 @@ def main():
     robot=importlib.import_module('reachy_mini.daemon.backend.robot')
     daemon=importlib.import_module('reachy_mini.daemon.daemon')
     native=importlib.import_module('reachy_mini_motor_controller.reachy_mini_motor_controller')
+    analytical=importlib.import_module('reachy_mini.kinematics.analytical_kinematics')
+    kin_native=importlib.import_module('reachy_mini_rust_kinematics.reachy_mini_rust_kinematics')
     factory_args=factory.Args(**json.loads(args.factory_args.read_text()))
     commands={key:getattr(abstract,key) for key in ('GetStateCmd','GetMotorModeCmd','GetVersionCmd')}
     prepared=prepare_factory_app(factory,abstract.Backend,robot.RobotBackend,daemon.Daemon,commands,
-        native_module=native,native_sha256=args.native_sha256,args=factory_args,numpy=np)
+        native_module=native,native_sha256=args.native_sha256,args=factory_args,numpy=np,
+        analytical_class=analytical.AnalyticalKinematics,kinematics_module=kin_native,kinematics_sha256=kin_sha)
     verify_native_clock(native.ReachyMiniPyControlLoop) # after source/binary hash check, before lifespan/UART construction
     state={};stopping=threading.Event()
     def attach_ready():

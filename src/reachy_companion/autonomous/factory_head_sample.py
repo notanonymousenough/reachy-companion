@@ -16,6 +16,9 @@ MODEL_IDS={**{n:1200 for n in range(10,17)},17:1190,18:1190}
 
 
 def raw_bytes(value,length):
+    if type(value) is bytes:
+        if len(value)!=length:raise ValueError('Exact native byte response length required')
+        return value # PyO3 0.26 Vec<u8> uses bytes; do not reinterpret/re-pad
     if type(value) is not list or len(value)!=length or any(type(item) is not int or not 0<=item<=255 for item in value):
         raise ValueError('Exact native raw-byte response required')
     return bytes(value)

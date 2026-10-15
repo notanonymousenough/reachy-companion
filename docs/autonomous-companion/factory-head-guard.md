@@ -1,14 +1,22 @@
 # Finite factory head guard: source and runtime checkpoint
 
-**Current native ABI is `1.5.6+finite.head.3`. The `.2`/`fdec07a` combination has
-a confirmed original-TTL anchor blocker and is NOT motion-admissible. Rebuild and
-independently verify `.3` before any physical run.**
+**Current preparation ABI is `1.5.6+finite.head.4`.** It adds explicit read-only
+startup before any controller and bounded shared analytical FK/IK. See the
+[current preflight sequence](factory-head-preflight.md). `.3`/`148f177` remains a
+historical static-clock/ABI checkpoint; its constructor can reboot faulty motors
+and does not qualify the new no-output startup. `.2` also has the original-TTL
+anchor blocker and is never motion-admissible.
 
-This checkpoint **does not admit a physical head movement**. It contains a
-protocol core, temporary transport fence, read-only sampler using an already-open
-factory controller, and a reproducible native safety patch. It is not a production
-rollout, factory startup adapter, complete scheduler/private-IPC implementation, or hardware proof.
-No SDK/controller constructor or second UART is created by these Python modules.
+This source checkpoint does not admit physical head movement. It includes the
+private finite runtime, transport fence, already-open-controller sampler and
+factory startup preparation. Target bounded I/O/kinematics and physical cleanup
+proof remain external runner work. No SDK or extra UART constructor is invoked by
+the helper modules; the prepared fresh factory lifespan constructs its one usual
+controller only after the runner's verified single-owner handoff. Saved vendor,
+startup, hardware PID, microphone and mixer configurations remain untouched.
+
+Earlier `.2`/`.3` build records below are historical and cannot be reused as `.4`
+artifact or target capability evidence.
 
 ## Existing 1.5.6 limitation
 
@@ -39,12 +47,12 @@ or start a controller:
 
 ```sh
 python native/factory-head-v156/prepare.py --source /absolute/source-v1.5.6 --output /absolute/new-disposable-build
-PYO3_PYTHON=/absolute/python cargo test --manifest-path /absolute/new-disposable-build/Cargo.toml --lib
+PYO3_PYTHON=/absolute/python cargo test --manifest-path /absolute/new-disposable-build/Cargo.toml --locked --lib
 ```
 
 The generator checks all three hashes before writing, leaves the input intact,
 rejects existing output directories, and versions the output
-`1.5.6+finite.head.2`. Keep the original upstream license and lockfile with the
+`1.5.6+finite.head.4`. Keep the original upstream license and lockfile with the
 build. Record the compiler, complete resolved dependency lockfile, build platform
 and artifact hash before review; a Mac build is not a Reachy binary.
 
@@ -191,8 +199,9 @@ The entry requires a private reviewed TARGET proof containing
 `capabilities` booleans. This is trusted runner evidence, not cryptographic
 hardware attestation. A Mac wheel, old temporary receipt, cached HTTP timestamp,
 or manually invented boolean does not qualify. Rebuild/audit after target changes.
-The exact actual imported native extension and installed factory source pins are
-checked before listeners/constructors. Source mismatch fails before startup.
+The exact actual imported native extension, installed factory/analytical source,
+geometry assets and native kinematics artifact pins are checked before listeners/
+constructors. The proof additionally requires `kinematics_artifact_sha256`. Source mismatch fails before startup.
 
 ```sh
 python -m reachy_companion.autonomous.factory_head_entry \
@@ -361,3 +370,70 @@ is `5c3b64dfe7865ade2b43f726209b75995deed16d5756b3ffc3332d467dfd75a1`,
 extension SHA256
 `c03965ac2d456a72889bcbb06dcd5663211c693d818120f96455a1496fedc856`.
 These supersede the earlier local `.3` check hashes above, not a target build.
+
+
+## Read-only startup and shared bounded kinematics: ABI .4
+
+`finite_prepare_readonly_startup()` is a static, irreversible process-local opt-in
+before any native controller. It rejects prior legacy controller construction;
+the finite queued constructor is single-use and the synchronous controller binding
+is denied in that prepared process. Ordinary factory construction without the
+opt-in retains its original behavior. The native readonly constructor skips the
+legacy reboot/voltage-wait/retry block and performs exactly 63 fixed read
+transactions over all nine known motors. Faults outside status0/1, nonzero torque,
+wrong model/voltage/temperature/bytes or slow actual read returns reject without
+reboot/retry. Startup attempts that fail remain consumed. Read packets still
+transmit on UART; this is no actuator-write startup, not zero UART traffic.
+
+The native readonly flag fences ordinary mutators at both enqueue and actual
+execution before arm. The shared predicate rejects torque/goal/mode/PID/raw
+packets and allows only exact reviewed read register/length pairs. Closing an
+unarmed readonly owner discards queued reads rather than executing pending work;
+owned post-arm withdrawal retains measured torque-OFF cleanup. The native finite
+constructor/close release the GIL in readonly mode. Existing absolute `.3`
+authority and permanent clock-fault quarantine remain unchanged.
+
+`finite_startup_status()` reports `(readonly_requested, complete, reads, health,
+torque, elapsed_ms)`. PyO3 returns `health` (`Vec<u8>`) as `bytes`; convert it to an
+integer list only for JSON metadata. Startup completeness is not fresh torque,
+pose, stop or target bounded-I/O proof. The sampler accepts exact native `bytes`
+as well as the reviewed list-of-integers representation, with unchanged byte
+length and signed decoding; no padding/coercion is used.
+
+Preparation clears `hardware_config_filepath` only on its in-memory Args before
+`create_app`, preventing the factory constructor's PID write loop. It forces the
+analytical engine/collision-off in that finite process. Existing factory/model
+instances reject before class patches, and only one actual model can be created.
+The shared FK/IK class patch covers startup-before-update, cached update, sampler
+and private runtime. FK makes at most20 fixed inner solver calls with unchanged
+measured joints, then checks rigid/upright output and inverse-joint residual.
+There is no unbounded upright loop, epsilon perturbation, solver reset or retry.
+Implicit startup IK preserves the fresh measured body rather than defaulting to
+neutral zero. Contended shared locks deny immediately. Actual solver failures,
+invalid residuals or late native returns permanently quarantine the model.
+Elapsed checks reject after return; they cannot preempt a hung Rust call.
+
+Readiness requires exact backend/controller/model classes, exact patched FK/IK
+function identities, readonly constructor receipt, and absent move/token/idle/
+tracking/audio/gravity/media/startup producers. It still cannot supply current
+physical sample evidence. Kinematics source SHA256 is
+`602b522febefa6c465be6cd92ba7934e0d4837cc6b7052bfbb3c6229eacbc942`;
+geometry SHA256 is
+`b07324cfe46515d7b3bd5be416f5f2ed87811ac1fcdb0e6ad841119e4ed9ab3b`.
+The exact target kinematics `.so` hash and actual Rust1.0.3 behavior remain required
+runner inputs, not inferred from the package version.
+
+Local `.4` check: 21 Rust tests; a real Maturin1.9.4/Rust1.99/CPython3.13 macOS
+ARM64 wheel exposes11 APIs (the nine previous methods plus the two startup
+statics). The import/static-only probe constructed no controller, opened no UART
+and performed zero reads. Relative arm/refresh remain absent. Mac wheel SHA256:
+`6bb52e49328c7546d4d71b2ea48100723dbc122dedf10650769d0ec774dfcbeb`;
+extension SHA256:
+`d0df5405955953050104b3da0d91ecee733619eb484191305e7f1cab828a4129`.
+These are not target artifacts. The `.4` generated Cargo.lock SHA256 is
+`8bf0c5ceb8d8334b45e6e33c91e975b07b2b15a1041b9e2f79ed67655421c944`;
+external locked package records are unchanged from the reviewed `.3` lock. Keep
+all actual target capability and hardware acceptance fields false until the
+separate runner measurements and review complete.
+
+The `.4` generator also verifies the untouched upstream Cargo.toml/Cargo.lock hashes and emits the repository-reviewed `.4` Cargo.lock above before compilation. Use `--locked` for Cargo/Maturin target builds; unreviewed manifest or lock changes reject before output creation.

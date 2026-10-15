@@ -6,13 +6,14 @@ from reachy_companion.autonomous.factory_head_sample import ExistingFactorySampl
 from reachy_companion.autonomous.factory_head_guard import FiniteHeadGuard,head_plan
 
 class Native:
-    def __init__(self):self.calls=[];self.delay=lambda:None;self.corrupt=None
+    def __init__(self):self.calls=[];self.delay=lambda:None;self.corrupt=None;self.as_bytes=False
     def get_motor_name_id(self):return MOTOR_IDS
     def async_read_raw_bytes(self,motor,address,length):
         self.calls.append((motor,address,length));self.delay()
         if self.corrupt is not None:return self.corrupt
         value=MODEL_IDS[motor] if address==0 else (2048 if address==132 else 0)
-        return list(value.to_bytes(length,'little',signed=address==132))
+        data=value.to_bytes(length,'little',signed=address==132)
+        return data if self.as_bytes else list(data)
 
 class NativeSampleTests(unittest.TestCase):
     def setUp(self):
@@ -32,8 +33,15 @@ class NativeSampleTests(unittest.TestCase):
         for raw in (-4096,-1,0,2048,4095,2**31-1):
             value=list(raw.to_bytes(4,'little',signed=True))
             self.assertAlmostEqual(xl330_position(value),raw*2*math.pi/4096-math.pi)
-        for bad in ([0]*3,[False]*4,[256]*4,b'0000'):
+            self.assertAlmostEqual(xl330_position(bytes(value)),raw*2*math.pi/4096-math.pi)
+        for bad in ([0]*3,[False]*4,[256]*4,b'000',bytearray(4)):
             with self.assertRaises(ValueError):xl330_position(bad)
+    def test_actual_pyo3_byte_format_verifies_models_positions_and_torque(self):
+        self.c.as_bytes=True;self.s.verify_models();result=self.s.read()
+        self.assertEqual(result['torque'],[False]*9)
+        self.assertEqual(result['antennas'],[0.,0.]);self.assertEqual(result['body_yaw'],0.)
+        self.assertEqual(result['sequence'],1)
+
     def test_full_read_span_and_fk_span_reject_stale_without_stamping_completion(self):
         self.c.delay=lambda:setattr(self,'now',self.now+.051)
         with self.assertRaises(ValueError):self.s.read()

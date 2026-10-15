@@ -9,12 +9,20 @@ PINS={'control_loop.rs':'62817fbc0fd13018ba4bfc5628e1a379a822888fcbdd0792dcbe3ff
       'bindings.rs':'204106cf20178b518d1bffffe76fea34b2e698a5a8fc8ac767f713e2d611e94c',
       'controller.rs':'bb618f2743e638944c65ef6839c5484319f1be2c6b74fc4d342c783a722a8843'}
 
+ROOT_PINS={'Cargo.toml':'5796f0caf01353ce83d6b626116f917d9cfaf7071325a6b40b2a8b7d12912cd2',
+           'Cargo.lock':'1e9f21fa34888f55a646b1337c6237f133c444386f8e9250c8ed3a02663a8883'}
+REVIEWED_LOCK_SHA256='8bf0c5ceb8d8334b45e6e33c91e975b07b2b15a1041b9e2f79ed67655421c944'
+
 def once(text,old,new):
     if text.count(old)!=1:raise ValueError('Pinned source anchor changed: '+old[:60])
     return text.replace(old,new,1)
 
 def prepare(source,output):
     if output.exists():raise ValueError('New disposable output directory required')
+    for name,expected in ROOT_PINS.items():
+        if hashlib.sha256((source/name).read_bytes()).hexdigest()!=expected:raise ValueError('Source manifest hash mismatch: '+name)
+    reviewed_lock=Path(__file__).with_name('Cargo.lock').read_bytes()
+    if hashlib.sha256(reviewed_lock).hexdigest()!=REVIEWED_LOCK_SHA256:raise ValueError('Reviewed native lockfile hash mismatch')
     texts={name:(source/'src'/name).read_text() for name in PINS}
     for name,expected in PINS.items():
         if hashlib.sha256(texts[name].encode()).hexdigest()!=expected:raise ValueError('Source hash mismatch: '+name)
@@ -106,6 +114,8 @@ def prepare(source,output):
     binding=once(binding,'    /// Perform an asynchronous raw read of motor bytes.',api+'    /// Perform an asynchronous raw read of motor bytes.')
     from stage2 import extend
     text,binding=extend(text,binding)
+    from stage4 import extend as readonly_startup
+    text,binding=readonly_startup(text,binding)
     # Keep the original source tree and lockfile intact in a new build directory.
     shutil.copytree(source,output,ignore=shutil.ignore_patterns('.git','target','.venv'))
     (output/'src'/'control_loop.rs').write_text(text)
@@ -114,9 +124,11 @@ def prepare(source,output):
     (output/'src'/'control_loop').mkdir(exist_ok=True)
     shutil.copyfile(Path(__file__).with_name('finite_owner.rs'),output/'src'/'control_loop'/'finite_owner.rs')
     shutil.copyfile(Path(__file__).with_name('finite_engine.rs'),output/'src'/'control_loop'/'finite_engine.rs')
+    shutil.copyfile(Path(__file__).with_name('finite_startup.rs'),output/'src'/'control_loop'/'finite_startup.rs')
     cargo=(output/'Cargo.toml').read_text()
     cargo=once(cargo,'[dependencies]','[dependencies]\nlibc = \"=0.2.177\"')
-    (output/'Cargo.toml').write_text(once(cargo,'version = "1.5.6"','version = "1.5.6+finite.head.3"'))
+    (output/'Cargo.toml').write_text(once(cargo,'version = "1.5.6"','version = "1.5.6+finite.head.4"'))
+    (output/'Cargo.lock').write_bytes(reviewed_lock)
     return output
 
 if __name__=='__main__':
