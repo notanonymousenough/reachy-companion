@@ -5,6 +5,7 @@ import re
 import threading
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.client import HTTPException
 from socket import timeout as SocketTimeout
 from urllib.error import URLError
 from urllib.parse import urlsplit
@@ -95,7 +96,7 @@ class ModelBackend:
         try:
             response = self.post(model['base_url'].rstrip('/') + path, payload,
                                  self.config['http_timeout_s'], model['api_key_env'])
-        except (TimeoutError, SocketTimeout, URLError, OSError) as exc:
+        except (TimeoutError, SocketTimeout, URLError, OSError, HTTPException) as exc:
             raise ExecutionUnknown('Tokenizer transport failed; backend execution may remain busy') from exc
         tokens = response.get('tokens')
         if not isinstance(tokens, list) or any(type(t) is not int for t in tokens):

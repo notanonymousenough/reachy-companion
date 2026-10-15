@@ -2,6 +2,7 @@
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
 import json
 import os
+import socket
 from pathlib import Path
 import threading
 from types import SimpleNamespace
@@ -18,15 +19,24 @@ from reachy_companion.autonomous.state import State
 class TokenizerHTTPTests(unittest.TestCase):
     def fixture(self,*,sdk=True,close='normal'):
         entered=threading.Event();release=threading.Event();late_terminal=threading.Event()
-        state=SimpleNamespace(mode='valid',tokenize=0,complete=0,closed=0)
+        state=SimpleNamespace(mode='valid',tokenize=0,http_tokenize=0,complete=0,closed=0)
         class ModelHandler(BaseHTTPRequestHandler):
             def log_message(self,*args):pass
             def do_POST(self):
                 body=decode(self.rfile.read(int(self.headers['Content-Length'])))
                 if self.path=='/tokenize':
-                    if body['model']=='fixture-main' and state.mode=='timeout':
-                        entered.set();release.wait(2);late_terminal.set()
-                    value=dict(tokens=[1,2])
+                    if body['model']=='fixture-main':
+                        state.http_tokenize+=1
+                        if state.mode in ('truncated','bad_status'):
+                            entered.set()
+                            if state.mode=='truncated':
+                                self.send_response(200);self.send_header('Transfer-Encoding','chunked');self.end_headers()
+                                self.wfile.write(b'10\r\nx') # promised chunk never finishes
+                            else:self.wfile.write(b'INVALID STATUS\r\n\r\n')
+                            self.wfile.flush();self.connection.shutdown(socket.SHUT_WR)
+                            release.wait(2);late_terminal.set();return
+                        if state.mode=='timeout':entered.set();release.wait(2);late_terminal.set()
+                    value=dict(tokens=[True] if state.mode=='invalid_http' else [1,2])
                 else:value=dict(choices=[dict(text='{"a":"wait","why":"fixture"}',finish_reason='stop')])
                 raw=json.dumps(value).encode();self.send_response(200);self.send_header('Content-Length',str(len(raw)));self.end_headers()
                 try:self.wfile.write(raw)
@@ -118,6 +128,30 @@ class TokenizerHTTPTests(unittest.TestCase):
         self.assertEqual(fixture.request('/main','No ABA after late producer return')[0],409)
         self.assertEqual(fixture.request('/health')[1]['quarantined'],['main'])
         self.assertEqual(fixture.request('/decision',State().snapshot(0))[0],200)
+
+    def test_http_framing_errors_quarantine_while_tokenizer_handler_is_still_occupied(self):
+        for mode in ('truncated','bad_status'):
+            with self.subTest(mode=mode):
+                fixture=self.fixture(sdk=False);fixture.state.mode=mode
+                code,body=fixture.request('/main','Neutral framing fixture')
+                self.assertEqual(code,503);self.assertEqual(body['error'],'execution_unknown_quarantined')
+                self.assertTrue(fixture.entered.is_set());self.assertFalse(fixture.late_terminal.is_set())
+                health=fixture.request('/health')[1]
+                self.assertTrue(health['busy']['main']);self.assertEqual(health['quarantined'],['main'])
+                self.assertEqual(fixture.request('/main','Must not start second tokenizer')[0],409)
+                self.assertEqual(fixture.state.http_tokenize,1)
+                fixture.release.set();self.assertTrue(fixture.late_terminal.wait(1))
+                self.assertEqual(fixture.request('/main','Late terminal is not reset')[0],409)
+                self.assertEqual(fixture.state.http_tokenize,1)
+
+    def test_fully_received_invalid_http_tokens_remain_known_422_then_release(self):
+        fixture=self.fixture(sdk=False);fixture.state.mode='invalid_http'
+        self.assertEqual(fixture.request('/main','Known complete invalid HTTP result')[0],422)
+        health=fixture.request('/health')[1]
+        self.assertFalse(health['busy']['main']);self.assertEqual(health['quarantined'],[])
+        fixture.state.mode='valid'
+        self.assertEqual(fixture.request('/main','Known later valid HTTP completion')[0],200)
+        self.assertFalse(fixture.request('/health')[1]['busy']['main'])
 
 
 if __name__=='__main__':unittest.main()
