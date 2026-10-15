@@ -10,6 +10,12 @@ from .contracts import uid
 from .voice_memory_fixture import FILES,CleanupOwnershipConflict
 
 
+def close_after_error(primary,closer):
+    try:closer()
+    except BaseException as secondary:
+        primary.add_note('Windows lock finalization: '+type(secondary).__name__+': '+str(secondary))
+
+
 class FileId(C.Structure):
     _fields_=[('volume',C.c_uint64),('identifier',C.c_ubyte*16)]
 
@@ -62,19 +68,20 @@ class WindowsKernel:
         filesystem=C.create_unicode_buffer(32)
         if not self.lib.GetVolumeInformationW(root,None,0,None,None,None,filesystem,len(filesystem)):self.failed()
         if filesystem.value.upper()!='NTFS':raise ValueError('NTFS cleanup only')
-    def open(self,path,*,directory=False,delete=False):
+    def open(self,path,*,directory=False,delete=False,share=7):
         # Attribute-only access permits SQLite READ/WRITE handles which do not
         # share DELETE. All our pins share deletion so journals can close/remove.
         access=0x80|(0x10000 if delete else 0) # FILE_READ_ATTRIBUTES | DELETE
         flags=0x00200000|(0x02000000 if directory else 0) # OPEN_REPARSE_POINT | BACKUP_SEMANTICS
-        value=self.lib.CreateFileW(str(path),access,7,None,3,flags,None)
+        value=self.lib.CreateFileW(str(path),access,share,None,3,flags,None)
         if value is None or value==C.c_void_p(-1).value:self.failed()
         try:
             identity,attributes,links=self.info(value)
             if attributes&0x400 or bool(attributes&0x10)!=directory or not directory and links!=1:
                 raise ValueError('Non-reparse directory or single-link file required')
             return value
-        except BaseException:self.close(value);raise
+        except BaseException as primary:
+            close_after_error(primary,lambda:self.close(value));raise
     def info(self,handle):
         value=FileId();ordinary=FileInformation()
         if not self.lib.GetFileInformationByHandleEx(handle,18,C.byref(value),C.sizeof(value)):self.failed()
@@ -92,6 +99,67 @@ class WindowsKernel:
         if not self.lib.SetFileInformationByHandle(handle,4,C.byref(value),C.sizeof(value)):self.failed()
     def close(self,handle):
         if not self.lib.CloseHandle(handle):self.failed()
+
+    def create_operation_lock(self,path):
+        # CREATE_NEW, DELETE authority on the ORIGINAL handle, and no sharing.
+        # No close/reopen, pathname unlink or delete-on-close at acquisition:
+        # a crashed/unknown operation deliberately leaves its marker behind.
+        value=self.lib.CreateFileW(str(path),0x40010080,0,None,1,0x00200000,None)
+        if value is None or value==C.c_void_p(-1).value:self.failed()
+        try:
+            _,attributes,links=self.info(value)
+            if attributes&(0x400|0x10) or links!=1:raise ValueError('Single-link regular operation lock required')
+            return value
+        except BaseException as primary:
+            close_after_error(primary,lambda:self.close(value));raise
+
+
+class WindowsOperationLock:
+    """Transient mutex deleted through its own handle BEFORE descriptor close.
+
+    All ancestors remain pinned without share-delete through descriptor close.
+    Failure leaves the exact marker; this grants no filesystem cleanup authority.
+    """
+    def __init__(self,directory,*,kernel=None):
+        self.api=kernel or WindowsKernel();self.path=Path(directory).absolute();self.ancestors=[]
+        self.handle=None;self.fd=None;self.api.validate_volume(self.path)
+        if self.path!=self.path.resolve():raise ValueError('Canonical non-reparse operation directory required')
+        try:
+            for parent in [*reversed(self.path.parents),self.path]:
+                self.ancestors.append(self.api.open(parent,directory=True,share=3))
+        except BaseException as primary:
+            close_after_error(primary,self.close);raise
+    def create_lock(self):
+        import msvcrt
+        handle=self.api.create_operation_lock(self.path/'operator.lock')
+        try:fd=msvcrt.open_osfhandle(handle,os.O_WRONLY|os.O_BINARY)
+        except BaseException as primary:
+            close_after_error(primary,lambda:self.api.close(handle));raise
+        # open_osfhandle transfers ownership: os.close(fd) is the sole closer.
+        try:
+            self.identity=self.api.identity(handle);self.nonce=uid()
+            marker=('voice-operation-1:'+self.nonce+'\n').encode()
+            if os.write(fd,marker)!=len(marker):raise OSError('Incomplete operation lock marker')
+            os.fsync(fd)
+        except BaseException as primary:
+            close_after_error(primary,lambda:os.close(fd));raise # preserve marker
+        self.handle=handle;self.fd=fd
+        return fd
+    def release_lock(self,fd):
+        import msvcrt
+        if fd!=self.fd or msvcrt.get_osfhandle(fd)!=self.handle:
+            raise CleanupOwnershipConflict('Operation lock descriptor changed')
+        identity,attributes,links=self.api.info(self.handle)
+        if identity!=self.identity or attributes&(0x400|0x10) or links!=1:
+            raise CleanupOwnershipConflict('Operation lock identity/link changed')
+        self.api.delete(self.handle)
+    def close(self):
+        # Called AFTER the CRT fd close, including failed deletion. Never unlink.
+        errors=[]
+        while self.ancestors:
+            try:self.api.close(self.ancestors.pop())
+            except BaseException as exc:errors.append(exc)
+        if errors:raise errors[0]
 
 
 class WindowsOwnedCleanup:

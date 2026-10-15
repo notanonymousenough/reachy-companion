@@ -126,6 +126,38 @@ def cleanup_class():
     return OwnedCleanup
 
 
+def operation_lock_class():
+    if os.name=='nt':
+        from .windows_fixture_cleanup import WindowsOperationLock
+        return WindowsOperationLock
+    return None
+
+
+def finish_fixture(directory,store,fd,owner,primary=None):
+    """Attempt every close; preserve a primary failure and unknown lock marker."""
+    errors=[]
+    if store:
+        try:store.close()
+        except BaseException as exc:errors.append(exc)
+    if fd is not None:
+        try:
+            if not errors:
+                if owner:owner.release_lock(fd)
+                else:(Path(directory)/'operator.lock').unlink()
+        except BaseException as exc:errors.append(exc)
+        finally:
+            try:os.close(fd)
+            except BaseException as exc:errors.append(exc)
+    if owner:
+        try:owner.close()
+        except BaseException as exc:errors.append(exc)
+    if errors:
+        chosen=primary or errors[0]
+        for error in errors:
+            if error is not chosen:chosen.add_note('Fixture finalization: '+type(error).__name__+': '+str(error))
+        if primary is None:raise chosen
+
+
 def read_json(path,cap):
     with Path(path).open('rb') as handle:raw=handle.read(cap+1)
     if len(raw)>cap:raise ValueError('Fixture input cap')
@@ -205,7 +237,8 @@ def open_fixture(directory,expected_store_id,*,anchor_cleanup=False):
             or meta.get('store_id')!=expected_store_id or not isinstance(meta.get('namespace'),str)
             or not re.fullmatch('fixture-voice-[0-9a-f-]{36}',meta['namespace'])
             or not (directory/'memory.sqlite').is_file()):raise ValueError('Exact fixture store binding required')
-    cleanup=cleanup_class()(directory) if anchor_cleanup else None
+    owner_class=cleanup_class() if anchor_cleanup else operation_lock_class()
+    cleanup=owner_class(directory) if owner_class else None
     lock=directory/'operator.lock';store=None;fd=None
     try:
         fd=cleanup.create_lock() if cleanup else os.open(lock,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
@@ -213,15 +246,10 @@ def open_fixture(directory,expected_store_id,*,anchor_cleanup=False):
         if current!=meta or not (directory/'memory.sqlite').is_file():raise MemoryConflict('Fixture changed during admission')
         store=MemoryStore(directory/'memory.sqlite',[meta['namespace']])
         if store.meta('store_id')!=expected_store_id:raise MemoryConflict('Fixture store replaced')
-        if cleanup:cleanup.pin_journals()
+        if anchor_cleanup:cleanup.pin_journals()
         return meta,store,fd,cleanup
-    except BaseException:
-        if store:store.close()
-        if fd is not None:
-            if cleanup:cleanup.release_lock(fd)
-            else:lock.unlink()
-            os.close(fd)
-        if cleanup:cleanup.close()
+    except BaseException as primary:
+        finish_fixture(directory,store,fd,cleanup,primary)
         raise
 
 
@@ -260,6 +288,7 @@ def operate(action,directory,expected_store_id,expected_version,operator_confirm
     if action=='cleanup' and exclusive_filesystem_cleanup is not True:raise ValueError('Exclusive private cleanup authority required')
     if action=='cleanup':cleanup_class().platform_check()
     meta,store,lock_fd,cleanup=open_fixture(directory,expected_store_id,anchor_cleanup=action=='cleanup')
+    primary=None
     try:
         row=store.db.execute('SELECT version FROM active WHERE id=?',(meta['item_id'],)).fetchone()
         if (row[0] if row else -1)!=expected_version:raise MemoryConflict('Fixture CAS changed')
@@ -294,10 +323,8 @@ def operate(action,directory,expected_store_id,expected_version,operator_confirm
                 result.update(cleanup.remove())
             return result
         raise ValueError('Unknown fixture action')
+    except BaseException as error:
+        primary=error
+        raise
     finally:
-        if store:store.close()
-        if lock_fd is not None:
-            if cleanup:cleanup.release_lock(lock_fd)
-            else:(Path(directory)/'operator.lock').unlink()
-            os.close(lock_fd)
-        if cleanup:cleanup.close()
+        finish_fixture(directory,store,lock_fd,cleanup,primary)

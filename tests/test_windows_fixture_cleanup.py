@@ -9,6 +9,8 @@ import json
 import os
 from pathlib import Path
 import stat
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import Mock,patch
@@ -150,8 +152,50 @@ class NativeWindowsCleanupTests(CleanupScenarios,unittest.TestCase):
         self.addCleanup(self.tmp.cleanup);self.root=Path(self.tmp.name)
         WindowsKernel().validate_volume(self.root)
 
+    def test_noncleanup_mutex_blocks_other_process_and_namespace_rename_until_owned_close(self):
+        store=self.make_fixture();meta,db,fd,owner=fixture.open_fixture(self.directory,store)
+        saved=self.root/'renamed'
+        try:
+            with self.assertRaises(OSError):self.directory.rename(saved)
+            with self.assertRaises(OSError):(self.directory/'operator.lock').rename(self.root/'moved-lock')
+            command=[sys.executable,'-c',
+                'import sys; from reachy_companion.autonomous.voice_memory_fixture import operate; '
+                'operate("readback",sys.argv[1],sys.argv[2],-1)',str(self.directory),store]
+            blocked=subprocess.run(command,cwd=ROOT,capture_output=True,text=True,timeout=10)
+            self.assertNotEqual(blocked.returncode,0,blocked.stdout)
+            self.assertTrue((self.directory/'operator.lock').exists())
+        finally:fixture.finish_fixture(self.directory,db,fd,owner)
+        self.assertFalse((self.directory/'operator.lock').exists())
+        admitted=subprocess.run(command,cwd=ROOT,capture_output=True,text=True,timeout=10)
+        self.assertEqual(admitted.returncode,0,admitted.stderr)
+        # A later foreign marker is never deleted by the already-closed owner.
+        marker=self.directory/'operator.lock';marker.write_bytes(b'FOREIGN_AFTER_CLOSE')
+        owner.close();self.assertEqual(marker.read_bytes(),b'FOREIGN_AFTER_CLOSE')
+
+    def test_noncleanup_disposition_failure_closes_fd_and_preserves_pending_marker(self):
+        store=self.make_fixture();meta,db,fd,owner=fixture.open_fixture(self.directory,store)
+        with patch.object(owner.api,'delete',side_effect=PermissionError('injected disposition failure')):
+            with self.assertRaisesRegex(PermissionError,'disposition failure'):
+                fixture.finish_fixture(self.directory,db,fd,owner)
+        with self.assertRaises(OSError):os.fstat(fd)
+        marker=self.directory/'operator.lock';before=marker.read_bytes()
+        with self.assertRaises(OSError):fixture.operate('readback',self.directory,store,-1)
+        self.assertEqual(marker.read_bytes(),before)
+        self.assertTrue((self.directory/'memory.sqlite').exists())
+
 
 class Win32AdapterTests(unittest.TestCase):
+    def test_operation_lock_is_create_new_delete_authority_no_sharing_no_auto_delete(self):
+        kernel=WindowsKernel.__new__(WindowsKernel);kernel.lib=Mock();kernel.lib.CreateFileW.return_value=123
+        with patch.object(kernel,'info',return_value=((77,b'file-id'),0,1)):
+            self.assertEqual(kernel.create_operation_lock('fixture'),123)
+        args=kernel.lib.CreateFileW.call_args.args
+        self.assertEqual(args[1:3],(0x40010080,0));self.assertEqual(args[4:6],(1,0x00200000))
+        # No delete-on-close at creation: crash must leave a recovery marker.
+        self.assertFalse(args[5]&0x04000000);kernel.lib.SetFileInformationByHandle.assert_not_called()
+        with patch.object(kernel,'info',return_value=((77,b'file-id'),0,2)):
+            with self.assertRaises(ValueError):kernel.create_operation_lock('fixture')
+        kernel.lib.CloseHandle.assert_called_once_with(123)
     def test_pending_delete_is_queried_on_original_handle_without_reopen(self):
         kernel=WindowsKernel.__new__(WindowsKernel);kernel.lib=Mock()
         def standard(handle,kind,value,size):
