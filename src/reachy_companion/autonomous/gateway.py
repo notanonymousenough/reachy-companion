@@ -3,6 +3,7 @@ import json
 import os
 import re
 import threading
+from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from socket import timeout as SocketTimeout
 from urllib.error import URLError
@@ -53,6 +54,22 @@ class ModelBackend:
             # Set once, not concurrently per request; private gateway process only.
             lmstudio.set_sync_api_timeout(config['http_timeout_s'])
 
+    @contextmanager
+    def sdk_client(self,model,sdk=None):
+        # Client teardown is not a terminal acknowledgement for an RPC that
+        # already failed with an unknown outcome. Do not let it mask/suppress it.
+        unknown=None
+        try:
+            with (sdk or self.sdk).Client(urlsplit(model['base_url']).netloc) as client:
+                try:yield client
+                except ExecutionUnknown as exc:unknown=exc;raise
+        except BaseException as exc:
+            if unknown is not None and exc is not unknown:
+                unknown.add_note('SDK teardown failure: '+type(exc).__name__)
+                raise unknown from exc
+            raise
+        if unknown is not None:raise unknown
+
     def post(self, url, payload, timeout, token_env=''):
         headers = {'Content-Type': 'application/json'}
         token = os.environ.get(token_env, '') if token_env else ''
@@ -69,14 +86,17 @@ class ModelBackend:
         if model.get('tokenizer_backend') == 'lmstudio_sdk':
             # Listing loaded handles cannot trigger LM Studio's JIT model loader.
             import lmstudio
-            with lmstudio.Client(urlsplit(model['base_url']).netloc) as client:
+            with self.sdk_client(model,lmstudio) as client:
                 return self.count_loaded(self.loaded(model, client), content)
         path = model['tokenize_path']
         if not path:
             raise BudgetRejected('No verified tokenizer endpoint; refusing inference')
         payload = {model['tokenize_content_key']: content, 'model': model['id']}
-        response = self.post(model['base_url'].rstrip('/') + path, payload,
-                             self.config['http_timeout_s'], model['api_key_env'])
+        try:
+            response = self.post(model['base_url'].rstrip('/') + path, payload,
+                                 self.config['http_timeout_s'], model['api_key_env'])
+        except (TimeoutError, SocketTimeout, URLError, OSError) as exc:
+            raise ExecutionUnknown('Tokenizer transport failed; backend execution may remain busy') from exc
         tokens = response.get('tokens')
         if not isinstance(tokens, list) or any(type(t) is not int for t in tokens):
             raise BudgetRejected('Expected verified tokenizer tokens list')
@@ -91,7 +111,10 @@ class ModelBackend:
 
     @staticmethod
     def count_loaded(handle, content):
-        tokens = handle.tokenize(content)
+        try:tokens = handle.tokenize(content)
+        except (BudgetRejected,ExecutionUnknown):raise # trusted adapter's explicit classification
+        except Exception as exc:
+            raise ExecutionUnknown('SDK tokenizer failed; RPC terminal outcome unknown') from exc
         if not isinstance(tokens, list) or any(type(t) is not int for t in tokens):
             raise BudgetRejected('SDK tokenizer returned invalid token IDs')
         return len(tokens)
@@ -123,7 +146,7 @@ class ModelBackend:
         if model.get('completion_backend') == 'lmstudio_sdk':
             if role != 'main' or model.get('tokenizer_backend') != 'lmstudio_sdk':
                 raise BudgetRejected('SDK completion requires paired main tokenizer')
-            with self.sdk.Client(urlsplit(model['base_url']).netloc) as client:
+            with self.sdk_client(model) as client:
                 # Both exact counts and completion use one pinned loaded instance.
                 return self.generate_loaded(role, data, self.loaded(model, client),context_input=context_input)
         if model.get('tokenizer_backend') == 'lmstudio_sdk':
