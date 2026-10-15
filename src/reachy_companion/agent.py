@@ -431,9 +431,13 @@ class Agent:
                     if len(line) > settings['max_event_bytes'] or not line.endswith(b'\n'):
                         raise ValueError('Invalid stream event size')
                     event = json.loads(line)
+                    if cancelled():return cancelled_result()
                     if event['type'] == 'reply':
                         result = event
-                        self.current_reply_text += ' ' + event.get('reply', '')
+                        spoken=event.get('spoken_text')
+                        if type(spoken) is not str or not spoken.strip() or len(spoken)>self.config['limits']['max_speech_chars']:
+                            spoken=event.get('reply','')
+                        self.current_reply_text += ' ' + spoken
                     elif event['type'] == 'motion':
                         if len(all_cues) + len(event['cues']) > self.config['conversation']['expressions']['speech_sync']['max_cues']:
                             raise ValueError('Too many speech motion cues')

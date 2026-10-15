@@ -12,6 +12,7 @@ import threading
 import time
 import wave
 import uuid
+import unicodedata
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.request import Request, build_opener, ProxyHandler
 from urllib.error import HTTPError
@@ -118,6 +119,7 @@ class Pipeline:
     def synthesize(self, text):
         text = re.sub(r'<think>.*?</think>', '', text, flags=re.S)
         text = re.sub(r'[*#`]', '', text).strip()
+        text = self.address_speech(text)
         if not text or len(text) > self.config['limits']['max_speech_chars']:
             raise ValueError('Expected 1–5000 characters for speech')
         buffer = io.BytesIO()
@@ -141,6 +143,20 @@ class Pipeline:
                     target.writeframes(frames)
             audio = fixed.getvalue()
         return base64.b64encode(audio).decode()
+
+    def address_speech(self,text):
+        prefix=self.config['conversation'].get('speech_address_prefix','')
+        if type(prefix) is not str or prefix not in ('','Алиса, '):
+            raise ValueError('Invalid conversation speech address prefix')
+        if not prefix or not text:return text
+        # Normalize only the comparison. Preserve the actual model reply body.
+        compared=unicodedata.normalize('NFKC',text).casefold().lstrip()
+        return text if re.match(r'^алиса\b',compared) else prefix+text
+
+    def speech_address_metadata(self,text):
+        prefix=self.config['conversation'].get('speech_address_prefix','')
+        return dict(speech_address_prefix=prefix,speech_address_scope='tts_utterance',
+                    spoken_text=self.address_speech(re.sub(r'[*#`]', '', text).strip())) if prefix else {}
 
     def answer(self, text, session, interrupted=False, *, reply_constraints=None):
         now = time.monotonic()
@@ -224,7 +240,8 @@ class Pipeline:
             raise RuntimeError('Backend returned an expression without spoken text')
         if pending is not None:
             pending['messages'][-1]['content'] = reply
-        return {'transcript': text, 'reply': reply, 'command': command, 'emotion': emotion, 'segments': segments, 'decision': decision}, session, pending
+        return {'transcript': text, 'reply': reply, 'command': command, 'emotion': emotion, 'segments': segments,
+                'decision': decision, **self.speech_address_metadata(reply)}, session, pending
 
     def completed(self, result, session, pending, started):
         if pending is not None:
@@ -255,10 +272,15 @@ class Pipeline:
         total = initial_bytes
         beat_offset = 0
         from .speech_motion import cues
+        spoken=[]
         for segment in segments:
             text = re.sub(r'[*#`]', '', segment['text']).strip()
-            if not text:
-                continue
+            if text:
+                if not spoken:text=self.address_speech(text)
+                spoken.append((segment,text))
+        if sum(len(text) for _,text in spoken)+max(0,len(spoken)-1)>self.config['limits']['max_speech_chars']:
+            raise ValueError('Speech exceeds character limit including address')
+        for segment,text in spoken:
             for chunk in self.tts.synthesize(text, syn_config=self.tts_settings,
                                              include_alignments=self.config['conversation']['expressions'].get('speech_sync', {}).get('phoneme_alignments', False)):
                 command = ['sox', '-t', 'raw', '-e', 'signed-integer', '-b', '16',
@@ -312,7 +334,7 @@ class Pipeline:
                     except concurrent.futures.TimeoutError:
                         intro = acknowledgements['phrases'][decision['intent']]
                         yield {'type': 'reply', 'transcript': recognized, 'reply': intro, 'emotion': decision['emotion'],
-                               'command': None, 'acknowledgement': True}
+                               'command': None, 'acknowledgement': True, **self.speech_address_metadata(intro)}
                         for event in self.audio_events([{'text': intro, 'emotion': decision['emotion'], 'gesture': 'auto'}]):
                             if event['type'] == 'audio':
                                 intro_bytes += len(base64.b64decode(event['pcm_base64']))

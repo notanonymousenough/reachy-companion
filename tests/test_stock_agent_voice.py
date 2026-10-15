@@ -2,6 +2,8 @@
 import base64
 import copy
 import json
+import io
+from email.message import Message
 import subprocess
 import sys
 import threading
@@ -306,6 +308,41 @@ class StockAgentVoiceTests(unittest.TestCase):
         self.assertIsNone(self.agent.playback_process)
         self.assertIsNone(self.agent.voice_response)
         self.assertFalse(self.agent.motion_proxy.enabled)
+
+    def test_spoken_text_echo_reference_typed_fallback_and_alice_short_reply_selfecho(self):
+        from reachy_companion.barge_in import BargeInMonitor
+        self.config.data['conversation']['expressions']['enabled']=False
+        cases=[({},'да'),({'spoken_text':None},'да'),({'spoken_text':42},'да'),
+               ({'spoken_text':''},'да'),({'spoken_text':' '},'да'),
+               ({'spoken_text':'x'*(self.config['limits']['max_speech_chars']+1)},'да'),
+               ({'spoken_text':'Алиса, да'},'Алиса, да')]
+        for extra,expected in cases:
+            events=[dict(type='reply',reply='да',**extra),dict(type='done',ok=True,reply='да')]
+            response=io.BytesIO(b''.join(json.dumps(event).encode()+b'\n' for event in events))
+            response.headers=Message();response.headers['Content-Type']='application/x-ndjson'
+            with patch.object(self.agent.http,'open',return_value=response):self.agent.voice('/turn',{})
+            self.assertEqual(self.agent.current_reply_text.strip(),expected)
+        self.config.data['conversation']['barge_in']['confirm_with_stt']=True
+        with patch.object(self.agent,'request',return_value=dict(transcript='Алиса, да',decision=dict(action='answer'))):
+            monitor=BargeInMonitor(self.agent)
+            self.assertFalse(monitor.trigger(b'fixture'))
+            self.assertFalse(monitor.interrupted.is_set())
+        self.assertEqual(self.agent.interruptions,0)
+
+    def test_late_reply_after_epoch_change_never_updates_echo_reference(self):
+        self.config.data['conversation']['expressions']['enabled']=False
+        fixture=self
+        class Response(io.BytesIO):
+            def readline(self,*args):
+                result=super().readline(*args)
+                if change=='mic':fixture.agent.microphone_epoch+=1
+                else:fixture.agent.set_motion_policy(dict(motor_enabled=True,quiet=False,privacy_all=False))
+                return result
+        for change in ('mic','policy'):
+            response=Response(json.dumps(dict(type='reply',reply='old',spoken_text='Алиса, stale')).encode()+b'\n')
+            response.headers=Message();response.headers['Content-Type']='application/x-ndjson'
+            with patch.object(self.agent.http,'open',return_value=response):result=self.agent.voice('/turn',{})
+            self.assertTrue(result['cancelled']);self.assertEqual(self.agent.current_reply_text,'')
 
 
 if __name__=='__main__':unittest.main()

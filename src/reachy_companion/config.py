@@ -32,6 +32,7 @@ class Config:
                 fill(self.data, {section: defaults[section]})
         # Safe even when a deployed checkout has no example configuration.
         fill(self.data, {'guarded_motion': {'enabled': False, 'transport':'native','socket_path':'data/native-motion.sock','policy_path':'data/motion-policy.json'}})
+        fill(self.data, {'conversation':{'speech_address_prefix':''}})
         profile = self.data.get('runtime', {}).get('profile', '')
         if profile:
             profile_path = (self.root / profile).resolve()
@@ -148,6 +149,9 @@ class Config:
             if not 0 <= eq['headroom_db'] <= 12:
                 raise ValueError('Invalid speaker EQ headroom')
         barge = self.data['conversation'].get('barge_in', {})
+        prefix=self.data['conversation']['speech_address_prefix']
+        if type(prefix) is not str or prefix not in ('','Алиса, '):
+            raise ValueError('Invalid conversation speech address prefix')
         if not 0 <= barge.get('warmup_chunks', 9) <= 30:
             raise ValueError('Invalid barge-in warmup')
         if barge.get('enabled', False):

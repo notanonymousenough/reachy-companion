@@ -310,3 +310,51 @@ endpoint. A candidate can be discarded without a completed turn. No VAD,
 threshold, endpoint, STT, model, echo or Alice timing settings are changed by this
 checkpoint. Do not treat wall-time phase polls as proof of exact first-sample
 timing, audible speech, consumed PCM or the historical failure cause.
+
+## Explicit Alice conversation address
+
+For an intentional conversation with the Alice speaker, merge this option into
+a separate copy of the active conversation profile on the compute worker:
+
+```json
+{"conversation": {"speech_address_prefix": "Алиса, "}}
+```
+
+The default is `""`; only `""` and exactly `"Алиса, "` are accepted. Verify the
+effective worker value with `companion --config "$CONFIG" config value
+conversation.speech_address_prefix`. Do not change the ordinary human profile;
+restore the exact original profile/configuration after the finite Alice run.
+An active profile overrides local JSON values. Copy and merge the existing
+profile rather than replacing its model, voice and safety settings with this
+fragment. This option does not grant microphone or motor permission, wake the
+robot, start a conversation, extend the allowed exchange count/TTL, or create
+an automatic Alice loop.
+
+The existing worker adds the address immediately before TTS, once per logical
+utterance. Emotion segments, Piper chunks and PCM chunks do not receive repeated
+prefixes. An acknowledgement and the final answer are separate utterances, each
+addressed once. Initial `Алиса` is detected with Unicode NFKC/casefold comparison
+and a word boundary; an already addressed question is not doubled. Only the
+comparison is normalized. The model reply body, requests, history and decisions
+are unchanged. Existing speech character and PCM/duration bounds include the
+added address; empty/stopped/cancelled-before-audio replies produce no prefix
+sound. Existing voice cleanup remains unchanged; no reasoning extraction or
+scripted replacement answer is introduced.
+
+Alice-mode worker metadata exposes `speech_address_prefix`,
+`speech_address_scope="tts_utterance"` and formatted `spoken_text` separately
+from the unprefixed `reply`. This reports TTS input formatting, not proof of
+audibility or consumed PCM. Agent uses a bounded, nonempty string `spoken_text`
+for its own-speech echo reference, falling back to `reply` for absent/malformed
+metadata. It rechecks current microphone/policy epochs after reading the event,
+so a late withdrawn reply cannot update that reference. This includes the
+address word when checking a short own utterance such as `Алиса, да` for echo.
+No self-speech source admission or automatic microphone activation is added.
+
+The matched source closure is worker `voice.py` + `config.py`, and robot Agent
+`agent.py` (plus `config.py` if its selected profile contains this new key).
+`config.example.json` documents the empty default; Config also fills that default
+without a newer example file. Keep the Agent metadata consumer and worker
+producer matched for the Alice trial. No new package, inference endpoint, model,
+router, hardware controller or service is required. The runner owns the finite
+real-model/Alice/mute/epoch/echo acceptance; local tests use synthetic TTS/PCM.
