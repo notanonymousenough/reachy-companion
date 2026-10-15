@@ -263,18 +263,21 @@ class Scheduler:
 
     def run(self, duration_s, events=(), output=None):
         start = time.monotonic()
-        pending = iter(events)
-        event = next(pending, None)
-        while time.monotonic() - start < duration_s:
-            now = time.monotonic()
-            while event is not None and event['at_s'] <= now-start:
-                self.ingest({k:v for k,v in event.items() if k != 'at_s'}, now)
-                event = next(pending, None)
-            self.advance(now)
-            time.sleep(min(0.01, self.config['period_s']/10))
-        # Stop new admission, invalidate any pending action; no model cancellation claim.
-        self.close()
-        motion_stopped=self.motion_adapter.close() if self.motion_adapter else True
+        try:
+            pending = iter(events)
+            event = next(pending, None)
+            while time.monotonic() - start < duration_s:
+                now = time.monotonic()
+                while event is not None and event['at_s'] <= now-start:
+                    self.ingest({k:v for k,v in event.items() if k != 'at_s'}, now)
+                    event = next(pending, None)
+                self.advance(now)
+                time.sleep(min(0.01, self.config['period_s']/10))
+        finally:
+            # Exceptions/interrupts withdraw admission too. An occupied worker
+            # remains occupied; closing never certifies model/physical stop.
+            try:self.close()
+            finally:motion_stopped=self.motion_adapter.close() if self.motion_adapter else True
         self.state.ingest(dict(type='operator', muted=True),time.monotonic())
         report = dict(mode='replay' if isinstance(self.gateway, ReplayGateway) else 'real_model_shadow',
                       actuators='bounded_native_antenna17' if self.motion_adapter else 'simulated', counts=dict(self.state.counts),

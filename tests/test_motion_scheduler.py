@@ -1,5 +1,7 @@
 import time
+import threading
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 from types import SimpleNamespace
 from reachy_companion.autonomous.config import load
@@ -16,6 +18,60 @@ def receipt():
 
 
 class SchedulerMotionTests(unittest.TestCase):
+    def test_run_exception_withdraws_owner_but_keeps_actual_motion_job_occupied(self):
+        entered=threading.Event();release=threading.Event();failure=RuntimeError('fixture loop failure')
+        class Gateway:
+            boot_id='compute'
+            def fast(self,request_id,view):
+                output=dict(a='explore',why='fixture',motion='attentive') if view['op']['motion_allowed'] else dict(a='wait',why='unavailable')
+                return dict(request_id=request_id,compute_boot_id=self.boot_id,output=output)
+        class Adapter:
+            def __init__(self):self.hub=SimpleNamespace(boot_id=None);self.closed=False;self.close_calls=0
+            def refresh(self):return receipt()
+            def execute(self,proposal):
+                entered.set();release.wait(2)
+                return dict(accepted=False,request_id=proposal['request_id'])
+            def close(self):self.closed=True;self.close_calls+=1;return False
+        adapter=Adapter();scheduler=Scheduler(self.config(),Gateway(),adapter);advance=scheduler.advance
+        def fail_after_dispatch(now=None):
+            advance(now)
+            if entered.is_set():raise failure
+        try:
+            with patch.object(scheduler,'advance',side_effect=fail_after_dispatch):
+                with self.assertRaises(RuntimeError) as caught:scheduler.run(1)
+            self.assertIs(caught.exception,failure);self.assertTrue(scheduler.closed);self.assertTrue(adapter.closed)
+            self.assertEqual(adapter.close_calls,1);self.assertIsNotNone(scheduler.motion_job)
+            self.assertFalse(scheduler.motion_job.future.done())
+            scheduler.ingest(dict(type='utterance',text='late fixture input'));self.assertFalse(scheduler.state.candidates)
+        finally:
+            release.set()
+            if scheduler.motion_job:scheduler.motion_job.thread.join(1)
+
+    def test_interrupt_closes_motion_even_when_another_adapter_close_fails(self):
+        class Speech:
+            def close(self):raise RuntimeError('fixture close failure')
+        class Adapter:
+            hub=SimpleNamespace(boot_id=None)
+            closed=False
+            def close(self):self.closed=True;return False
+        from reachy_companion.autonomous.runtime import ReplayGateway
+        adapter=Adapter();scheduler=Scheduler(self.config(),ReplayGateway(),adapter,Speech())
+        with patch.object(scheduler,'advance',side_effect=KeyboardInterrupt):
+            with self.assertRaisesRegex(RuntimeError,'fixture close failure'):scheduler.run(1)
+        self.assertTrue(scheduler.closed);self.assertTrue(adapter.closed)
+
+    def test_initial_event_iterator_failure_also_closes_constructed_owner(self):
+        class Events:
+            def __iter__(self):raise ValueError('fixture event startup failure')
+        class Adapter:
+            hub=SimpleNamespace(boot_id=None)
+            closed=False
+            def close(self):self.closed=True;return False
+        from reachy_companion.autonomous.runtime import ReplayGateway
+        adapter=Adapter();scheduler=Scheduler(self.config(),ReplayGateway(),adapter)
+        with self.assertRaisesRegex(ValueError,'fixture event startup failure'):scheduler.run(1,Events())
+        self.assertTrue(scheduler.closed);self.assertTrue(adapter.closed)
+
     def config(self):
         cfg=load(Path(__file__).resolve().parents[1]/'config.autonomous.example.json');cfg['period_s']=.03;return cfg
     def test_muted_motion_proposal_requires_fresh_actor_and_policy_epoch(self):
