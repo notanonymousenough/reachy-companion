@@ -314,14 +314,14 @@ timing, audible speech, consumed PCM or the historical failure cause.
 ## Explicit Alice conversation address
 
 For an intentional conversation with the Alice speaker, merge this option into
-a separate copy of the active conversation profile on the compute worker:
+a separate copy of the active Agent conversation profile:
 
 ```json
 {"conversation": {"speech_address_prefix": "Алиса, "}}
 ```
 
 The default is `""`; only `""` and exactly `"Алиса, "` are accepted. Verify the
-effective worker value with `companion --config "$CONFIG" config value
+effective Agent value with `companion --config "$CONFIG" config value
 conversation.speech_address_prefix`. Do not change the ordinary human profile;
 restore the exact original profile/configuration after the finite Alice run.
 An active profile overrides local JSON values. Copy and merge the existing
@@ -341,6 +341,24 @@ added address; empty/stopped/cancelled-before-audio replies produce no prefix
 sound. Existing voice cleanup remains unchanged; no reasoning extraction or
 scripted replacement answer is introduced.
 
+Authenticated `/say`, `/text`, `/turn` and their `/stream/...` variants accept an
+optional top-level `speech_address_prefix` with exactly the same two allowed
+strings. Agent explicitly copies its selected profile value into each new voice
+request. The worker captures that value locally for the request, including its
+acknowledgement, final speech, metadata and all TTS chunks. It never updates
+shared config, a pipeline prefix field or session defaults. A missing field uses
+the worker's existing global default; an explicit empty string clears that
+default for this request only. `null`, booleans and unknown strings reject before
+STT/LLM/TTS or a first stream event. This is speech formatting, not model input.
+
+For example, `POST /say` with
+`{"text":"Вопрос к колонке.","speech_address_prefix":"Алиса, "}` requests one
+addressed utterance; the next omitted-field request uses its ordinary default.
+The same local binding is preserved across emotion segments/acknowledgements;
+it cannot leak into another or the next request. Raw reply validation/constraints
+and history still see the unchanged model reply. Final character/duration bounds
+include the formatted address. Cached replay PCM is not resynthesized/prefixed.
+
 Alice-mode worker metadata exposes `speech_address_prefix`,
 `speech_address_scope="tts_utterance"` and formatted `spoken_text` separately
 from the unprefixed `reply`. This reports TTS input formatting, not proof of
@@ -351,8 +369,10 @@ so a late withdrawn reply cannot update that reference. This includes the
 address word when checking a short own utterance such as `Алиса, да` for echo.
 No self-speech source admission or automatic microphone activation is added.
 
-The matched source closure is worker `voice.py` + `config.py`, and robot Agent
-`agent.py` (plus `config.py` if its selected profile contains this new key).
+The initial Alice configuration closure is worker `voice.py` + `config.py`, and robot Agent
+`agent.py` (plus `config.py` if its selected profile contains this key). The
+request-scoped extension needs only matched worker `voice.py` and Agent
+`agent.py` over that existing Config baseline; no Config/schema package change.
 `config.example.json` documents the empty default; Config also fills that default
 without a newer example file. Keep the Agent metadata consumer and worker
 producer matched for the Alice trial. No new package, inference endpoint, model,

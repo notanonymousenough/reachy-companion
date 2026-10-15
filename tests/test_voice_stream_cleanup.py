@@ -20,7 +20,7 @@ class StreamCleanupTests(unittest.TestCase):
         p=Pipeline.__new__(Pipeline);p.lock=threading.Lock();p.phase='idle'
         p.config={'conversation':{'interaction':{}}}
         p.prepare=lambda *args:({'reply':'fixture'},'fixture',None)
-        p.audio_events=lambda *args:iter(())
+        p.audio_events=lambda *args,**kwargs:iter(())
         p.completed=lambda *args:{'fixture':True}
         return p
 
@@ -73,7 +73,7 @@ class StreamCleanupTests(unittest.TestCase):
         for fail in (False,True):
             with self.subTest(fail=fail):
                 p=self.pipeline();closed=threading.Event()
-                def audio(*args):
+                def audio(*args,**kwargs):
                     try:
                         yield {'type':'audio'}
                         if fail:raise RuntimeError('audio fixture')

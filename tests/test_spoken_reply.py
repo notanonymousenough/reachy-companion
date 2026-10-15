@@ -105,7 +105,7 @@ class PipelineTests(unittest.TestCase):
         p.config=config();p.sessions={};p.agent_sessions={};p.phase='idle';p.lock=threading.Lock()
         p.check_robot=lambda:None;p.last_turn=None
         p.classify=lambda text:dict(action='answer',intent='other',emotion='neutral')
-        p.synthesize=lambda text:'audio'
+        p.synthesize=lambda text,**kwargs:'audio'
 
     def test_commands_empty_and_say_do_not_reset_history_or_infer(self):
         p=self.pipeline;p.sessions={'s':dict(used=1,messages=[])};before=copy.deepcopy(p.sessions)
@@ -127,7 +127,7 @@ class PipelineTests(unittest.TestCase):
         p=self.pipeline
         with patch('reachy_companion.brains.answer',return_value='Шесть подходит.') as answer,patch.object(p,'synthesize',return_value='audio') as synth:
             result=p.turn(dict(text='Шесть',session='s',reply_constraints=RULE),'/text')
-            synth.assert_called_once_with('Шесть подходит.')
+            synth.assert_called_once_with('Шесть подходит.',speech_address_prefix='')
             self.assertEqual(result['reply'],'Шесть подходит.')
             self.assertEqual(p.sessions['s']['messages'][-1]['content'],'Шесть подходит.')
             self.assertEqual(answer.call_args.kwargs['reply_constraints'],RULE)

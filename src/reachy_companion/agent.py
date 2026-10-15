@@ -380,6 +380,9 @@ class Agent:
             return {'ok': True, 'cancelled': True, 'interrupted': bool(monitor and monitor.interrupted.is_set())}
         if cancelled():
             return cancelled_result()
+        prefix=self.config['conversation'].get('speech_address_prefix','')
+        if type(prefix) is not str or prefix not in ('','Алиса, '):raise ValueError('Invalid conversation speech address prefix')
+        payload=dict(payload,speech_address_prefix=prefix)
         if replay is not None and replay.get('cursor_verified') is not True:
             self.resume_audio=None
             self.resume_blocked_reason='unverified_pcm_cursor'

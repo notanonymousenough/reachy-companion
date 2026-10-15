@@ -1,5 +1,6 @@
 """Explicit Alice TTS formatting; model content stays unchanged, synthetic audio."""
 import base64
+import copy
 import json
 import shutil
 import sys
@@ -127,6 +128,79 @@ class AliceSpeechAddressTests(unittest.TestCase):
             self.assertEqual(first['spoken_text'],'Алиса, Сейчас отвечу.')
             released.set();list(iterator)
         self.assertEqual(self.spoken,['Алиса, Сейчас отвечу.','Алиса, Да.'])
+
+    def test_unary_request_override_empty_clear_and_next_request_defaults_do_not_mutate_config(self):
+        before=copy.deepcopy(self.config.data)
+        result=self.pipeline.turn(dict(text='Да.',speech_address_prefix=''),'/say')
+        self.assertEqual(self.spoken,['Да.']);self.assertNotIn('spoken_text',result)
+        self.pipeline.turn(dict(text='Ещё.'),'/say')
+        self.assertEqual(self.spoken,['Да.','Алиса, Ещё.'])
+        self.assertEqual(self.config.data,before)
+        self.config.data['conversation']['speech_address_prefix']=''
+        result=self.pipeline.turn(dict(text='Да.',speech_address_prefix='Алиса, '),'/say')
+        self.assertEqual(self.spoken[-1],'Алиса, Да.');self.assertEqual(result['reply'],'Да.')
+        self.assertEqual(result['spoken_text'],'Алиса, Да.')
+
+    def test_stream_request_prefix_once_multisegment_and_already_addressed(self):
+        self.config.data['conversation']['speech_address_prefix']=''
+        with patch('reachy_companion.brains.answer',return_value='<emotion=neutral>Да. <emotion=joy>Верно.'):
+            events=list(self.pipeline.stream(dict(text='Вопрос',speech_address_prefix='Алиса, '),'/text'))
+        self.assertEqual(self.spoken,['Алиса, Да.','Верно.'])
+        self.assertEqual(events[0]['reply'],'Да. Верно.');self.assertEqual(events[0]['spoken_text'],'Алиса, Да. Верно.')
+        self.spoken.clear()
+        list(self.pipeline.stream(dict(text='АЛИСА, вопрос.',speech_address_prefix='Алиса, '),'/say'))
+        self.assertEqual(self.spoken,['АЛИСА, вопрос.'])
+
+    def test_request_prefix_rejected_before_any_recognition_model_robot_or_tts_side_effect(self):
+        before=copy.deepcopy(self.config.data)
+        with patch.object(self.pipeline,'answer') as answer:
+            for value in (None,False,0,[],{},'alice, ','Алиса','АЛИСА, '):
+                payload=dict(text='Вопрос',pcm_base64=base64.b64encode(b'pcm').decode(),speech_address_prefix=value)
+                for path in ('/say','/text','/turn'):
+                    with self.assertRaises(ValueError):self.pipeline.turn(payload,path)
+                    with self.assertRaises(ValueError):list(self.pipeline.stream(payload,path))
+                with self.assertRaises(ValueError):self.pipeline.prepare(payload,'/turn')
+            answer.assert_not_called()
+        self.pipeline.check_robot.assert_not_called();self.pipeline.transcribe.assert_not_called()
+        self.assertEqual(self.spoken,[]);self.assertEqual(self.pipeline.sessions,{})
+        self.assertEqual(self.config.data,before);self.assertFalse(self.pipeline.lock.locked())
+
+    def test_request_prefix_is_bound_through_intro_and_final_without_global_change(self):
+        self.config.data['conversation']['speech_address_prefix']=''
+        self.config.data['conversation']['interaction']['acknowledgements']=dict(
+            enabled=True,delay_seconds=0,phrases=dict(other='Сейчас отвечу.'))
+        released=threading.Event()
+        def answer(*args):released.wait(2);return 'Да.',dict(messages=[dict(role='assistant',content='Да.')])
+        with patch.object(self.pipeline,'answer',side_effect=answer):
+            iterator=self.pipeline.stream(dict(text='Вопрос',speech_address_prefix='Алиса, '),'/text')
+            first=next(iterator);self.assertTrue(first['acknowledgement'])
+            self.assertEqual(first['spoken_text'],'Алиса, Сейчас отвечу.')
+            released.set();rest=list(iterator)
+        self.assertEqual(self.spoken,['Алиса, Сейчас отвечу.','Алиса, Да.'])
+        self.assertEqual(next(v for v in rest if v['type']=='reply')['spoken_text'],'Алиса, Да.')
+        self.assertEqual(self.config['conversation']['speech_address_prefix'],'')
+
+    def test_blocked_stream_other_request_cannot_change_local_prefix_and_next_uses_default(self):
+        self.config.data['conversation']['speech_address_prefix']=''
+        payload=dict(text='Первая.',speech_address_prefix='Алиса, ');before=copy.deepcopy(payload)
+        iterator=self.pipeline.stream(payload,'/say');self.assertEqual(next(iterator)['spoken_text'],'Алиса, Первая.')
+        with self.assertRaises(RuntimeError):self.pipeline.turn(dict(text='Не допущена.',speech_address_prefix=''),'/say')
+        list(iterator)
+        list(self.pipeline.stream(dict(text='Вторая.'),'/say'))
+        self.assertEqual(self.spoken,['Алиса, Первая.','Вторая.'])
+        self.assertEqual(payload,before);self.assertEqual(self.config['conversation']['speech_address_prefix'],'')
+
+    def test_request_prefix_character_and_duration_bounds_include_address_and_cancel_has_no_sound(self):
+        self.config.data['conversation']['speech_address_prefix']=''
+        self.config.data['limits']['max_speech_chars']=3
+        with self.assertRaises(ValueError):self.pipeline.turn(dict(text='Да',speech_address_prefix='Алиса, '),'/say')
+        with self.assertRaises(ValueError):list(self.pipeline.stream(dict(text='Да',speech_address_prefix='Алиса, '),'/say'))
+        self.assertEqual(self.spoken,[])
+        self.config.data['limits']['max_speech_chars']=100
+        iterator=self.pipeline.stream(dict(text='Да',speech_address_prefix='Алиса, '),'/say');next(iterator);iterator.close()
+        self.assertEqual(self.spoken,[])
+        self.config.data['streaming']['max_output_seconds']=.00001
+        with self.assertRaises(RuntimeError):list(self.pipeline.stream(dict(text='Да',speech_address_prefix='Алиса, '),'/say'))
 
 
 if __name__=='__main__':unittest.main()

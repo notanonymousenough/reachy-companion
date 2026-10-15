@@ -21,6 +21,7 @@ from piper import PiperVoice, SynthesisConfig
 from vosk import Model, KaldiRecognizer, SetLogLevel
 
 LOG = logging.getLogger('reachy-voice')
+DEFAULT_SPEECH_ADDRESS = object()
 
 
 def speaker_eq_effects(config):
@@ -116,10 +117,10 @@ class Pipeline:
                         self.config['conversation']['pause_phrases'], self.config['conversation']['reset_phrases'])
         return classify_with_model(self.config, text, decision)
 
-    def synthesize(self, text):
+    def synthesize(self, text, *, speech_address_prefix=DEFAULT_SPEECH_ADDRESS):
         text = re.sub(r'<think>.*?</think>', '', text, flags=re.S)
         text = re.sub(r'[*#`]', '', text).strip()
-        text = self.address_speech(text)
+        text = self.address_speech(text,speech_address_prefix)
         if not text or len(text) > self.config['limits']['max_speech_chars']:
             raise ValueError('Expected 1–5000 characters for speech')
         buffer = io.BytesIO()
@@ -144,19 +145,23 @@ class Pipeline:
             audio = fixed.getvalue()
         return base64.b64encode(audio).decode()
 
-    def address_speech(self,text):
-        prefix=self.config['conversation'].get('speech_address_prefix','')
+    def speech_address(self,value=DEFAULT_SPEECH_ADDRESS):
+        prefix=self.config['conversation'].get('speech_address_prefix','') if value is DEFAULT_SPEECH_ADDRESS else value
         if type(prefix) is not str or prefix not in ('','Алиса, '):
             raise ValueError('Invalid conversation speech address prefix')
+        return prefix
+
+    def address_speech(self,text,speech_address_prefix=DEFAULT_SPEECH_ADDRESS):
+        prefix=self.speech_address(speech_address_prefix)
         if not prefix or not text:return text
         # Normalize only the comparison. Preserve the actual model reply body.
         compared=unicodedata.normalize('NFKC',text).casefold().lstrip()
         return text if re.match(r'^алиса\b',compared) else prefix+text
 
-    def speech_address_metadata(self,text):
-        prefix=self.config['conversation'].get('speech_address_prefix','')
+    def speech_address_metadata(self,text,speech_address_prefix=DEFAULT_SPEECH_ADDRESS):
+        prefix=self.speech_address(speech_address_prefix)
         return dict(speech_address_prefix=prefix,speech_address_scope='tts_utterance',
-                    spoken_text=self.address_speech(re.sub(r'[*#`]', '', text).strip())) if prefix else {}
+                    spoken_text=self.address_speech(re.sub(r'[*#`]', '', text).strip(),prefix)) if prefix else {}
 
     def answer(self, text, session, interrupted=False, *, reply_constraints=None):
         now = time.monotonic()
@@ -183,6 +188,7 @@ class Pipeline:
         self.agent_sessions.pop(session, None)
 
     def prepare(self, payload, path, recognized_text=None, answer_result=None):
+        prefix=self.speech_address(payload.get('speech_address_prefix',DEFAULT_SPEECH_ADDRESS))
         reply_constraints=None
         if 'reply_constraints' in payload:
             from .spoken_reply import constraints,check_profile
@@ -241,7 +247,7 @@ class Pipeline:
         if pending is not None:
             pending['messages'][-1]['content'] = reply
         return {'transcript': text, 'reply': reply, 'command': command, 'emotion': emotion, 'segments': segments,
-                'decision': decision, **self.speech_address_metadata(reply)}, session, pending
+                'decision': decision, **self.speech_address_metadata(reply,prefix)}, session, pending
 
     def completed(self, result, session, pending, started):
         if pending is not None:
@@ -254,19 +260,22 @@ class Pipeline:
         return result
 
     def turn(self, payload, path):
+        prefix=self.speech_address(payload.get('speech_address_prefix',DEFAULT_SPEECH_ADDRESS))
+        payload=dict(payload,speech_address_prefix=prefix)
         if not self.lock.acquire(blocking=False):
             raise RuntimeError('Conversation pipeline is busy')
         started = time.monotonic()
         try:
             result, session, pending = self.prepare(payload, path)
             self.phase = 'speaking'
-            audio = self.synthesize(result['reply']) if result['reply'] else ''
+            audio = self.synthesize(result['reply'],speech_address_prefix=prefix) if result['reply'] else ''
             return {'ok': True, **self.completed(result, session, pending, started), 'audio_base64': audio}
         finally:
             self.phase = 'idle'
             self.lock.release()
 
-    def audio_events(self, segments, initial_bytes=0):
+    def audio_events(self, segments, initial_bytes=0, *, speech_address_prefix=DEFAULT_SPEECH_ADDRESS):
+        prefix=self.speech_address(speech_address_prefix)
         rate = self.config['streaming']['sample_rate']
         maximum = rate * 2 * self.config['streaming']['max_output_seconds']
         total = initial_bytes
@@ -276,7 +285,7 @@ class Pipeline:
         for segment in segments:
             text = re.sub(r'[*#`]', '', segment['text']).strip()
             if text:
-                if not spoken:text=self.address_speech(text)
+                if not spoken:text=self.address_speech(text,prefix)
                 spoken.append((segment,text))
         if sum(len(text) for _,text in spoken)+max(0,len(spoken)-1)>self.config['limits']['max_speech_chars']:
             raise ValueError('Speech exceeds character limit including address')
@@ -306,6 +315,8 @@ class Pipeline:
                 total += len(pcm)
 
     def stream(self, payload, path):
+        prefix=self.speech_address(payload.get('speech_address_prefix',DEFAULT_SPEECH_ADDRESS))
+        payload=dict(payload,speech_address_prefix=prefix)
         if not self.lock.acquire(blocking=False):
             raise RuntimeError('Conversation pipeline is busy')
         started = time.monotonic()
@@ -334,8 +345,8 @@ class Pipeline:
                     except concurrent.futures.TimeoutError:
                         intro = acknowledgements['phrases'][decision['intent']]
                         yield {'type': 'reply', 'transcript': recognized, 'reply': intro, 'emotion': decision['emotion'],
-                               'command': None, 'acknowledgement': True, **self.speech_address_metadata(intro)}
-                        for event in self.audio_events([{'text': intro, 'emotion': decision['emotion'], 'gesture': 'auto'}]):
+                               'command': None, 'acknowledgement': True, **self.speech_address_metadata(intro,prefix)}
+                        for event in self.audio_events([{'text': intro, 'emotion': decision['emotion'], 'gesture': 'auto'}],speech_address_prefix=prefix):
                             if event['type'] == 'audio':
                                 intro_bytes += len(base64.b64decode(event['pcm_base64']))
                             yield event
@@ -345,7 +356,7 @@ class Pipeline:
             yield {'type': 'reply', **result}
             self.phase = 'speaking'
             segments = result.get('segments') or [{'text': result['reply'], 'emotion': result.get('emotion', 'neutral'), 'gesture': 'auto'}]
-            yield from self.audio_events(segments, intro_bytes)
+            yield from self.audio_events(segments, intro_bytes,speech_address_prefix=prefix)
             terminal = {'type': 'done', 'ok': True, **self.completed(result, session, pending, started)}
         finally:
             try:

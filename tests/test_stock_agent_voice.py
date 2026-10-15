@@ -266,7 +266,7 @@ class StockAgentVoiceTests(unittest.TestCase):
         pipeline.check_robot=Mock();pipeline.transcribe=Mock(return_value='fixture fresh microphone question')
         pipeline.classify=Mock(return_value=dict(action='answer',emotion='neutral',intent='other'))
         step=plan(self.config['conversation']['expressions'],'neutral')['steps']
-        def audio_events(*args):
+        def audio_events(*args,**kwargs):
             yield dict(type='motion',cues=[dict(at=0,steps=step)])
             yield dict(type='audio',format='S16_LE',sample_rate=self.config['streaming']['sample_rate'],
                 channels=1,pcm_base64=base64.b64encode(b'\0\0'*160).decode())
@@ -343,6 +343,23 @@ class StockAgentVoiceTests(unittest.TestCase):
             response.headers=Message();response.headers['Content-Type']='application/x-ndjson'
             with patch.object(self.agent.http,'open',return_value=response):result=self.agent.voice('/turn',{})
             self.assertTrue(result['cancelled']);self.assertEqual(self.agent.current_reply_text,'')
+
+    def test_agent_profile_address_forwarded_explicitly_for_unary_and_stream_without_payload_mutation(self):
+        self.config.data['conversation']['expressions']['enabled']=False
+        self.config.data['conversation']['speech_address_prefix']='Алиса, '
+        payload=dict(text='Вопрос')
+        self.config.data['streaming']['enabled']=False
+        with patch.object(self.agent,'request',return_value=dict(ok=True,audio_base64='')) as request:
+            self.agent.voice('/say',payload)
+        self.assertEqual(request.call_args.args[2]['speech_address_prefix'],'Алиса, ')
+        self.assertEqual(payload,dict(text='Вопрос'))
+        self.config.data['streaming']['enabled']=True
+        for prefix in ('Алиса, ',''):
+            self.config.data['conversation']['speech_address_prefix']=prefix
+            response=io.BytesIO(b'{"type":"reply","reply":"fixture"}\n{"type":"done","ok":true}\n')
+            response.headers=Message();response.headers['Content-Type']='application/x-ndjson'
+            with patch.object(self.agent.http,'open',return_value=response) as opened:self.agent.voice('/turn',{})
+            self.assertEqual(json.loads(opened.call_args.args[0].data)['speech_address_prefix'],prefix)
 
 
 if __name__=='__main__':unittest.main()

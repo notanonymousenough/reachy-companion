@@ -53,7 +53,7 @@ class OwnershipTests(unittest.TestCase):
             from reachy_companion.voice import Pipeline
         p=Pipeline.__new__(Pipeline);p.config=cfg;p.sessions={};p.agent_sessions={}
         p.lock=threading.Lock();p.phase='idle';p.last_turn=None
-        p.check_robot=lambda:None;p.classify=lambda _:dict(action='answer');p.synthesize=lambda _:'audio'
+        p.check_robot=lambda:None;p.classify=lambda _:dict(action='answer');p.synthesize=lambda _,**kwargs:'audio'
         return p
 
     def test_pinned_old_source_reproduces_real_pipeline_remote_overlap(self):
