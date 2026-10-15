@@ -182,6 +182,12 @@ class DatagramTests(unittest.TestCase):
         while not peer.closed and time.monotonic()<end:time.sleep(.005)
         self.assertTrue(peer.closed);requests=peer.lease_requests
         frozen=server.status()['first_withdrawal']
+        # close revokes output before dispatching diagnostic observers. Wait
+        # for the actual frozen receipt, not merely the earlier closed flag.
+        end=time.monotonic()+1
+        while frozen is None and time.monotonic()<end:
+            time.sleep(.002);frozen=server.status()['first_withdrawal']
+        self.assertIsNotNone(frozen,'Actual first-withdrawal observer did not finish')
         self.assertEqual(frozen['source_boot'],peer.boot_id)
         self.assertEqual(frozen['ack_sequence'],server.last_sequence)
         self.assertGreaterEqual(frozen['last_accepted_age_ms'],300)

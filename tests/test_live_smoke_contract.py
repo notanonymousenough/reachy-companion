@@ -134,8 +134,12 @@ class AuditTests(unittest.TestCase):
 
 class HarnessTests(unittest.TestCase):
     def run_harness(self,root,*,unverified=False,close_error=False,unreaped=False,placement_change=False,
-            main_unknown=False,guard_directory=None,blocked=False):
+            main_unknown=False,guard_directory=None,blocked=False,anchor=None):
         args,cfg,hashes,main,gpu,artifacts,audit=fixture(root)
+        stable=(guard_directory or root/'account-guard').resolve()
+        with patch.object(execution,'guard_root',return_value=stable):
+            if anchor is None:anchor=execution.provision_namespace(execution.execution_scopes(cfg,main))
+        audit['execution_anchor']=anchor
         if unverified:
             cfg['models']['main']['audit']['verified']=False;audit['config_sha256']=contract.fingerprint(cfg)
         args.audit_file.write_text(json.dumps(audit));args.audit_sha256=hashlib.sha256(args.audit_file.read_bytes()).hexdigest()
@@ -177,7 +181,7 @@ class HarnessTests(unittest.TestCase):
         with patch.object(smoke.argparse.ArgumentParser,'parse_args',return_value=args),\
                 patch.object(smoke,'load',return_value=cfg),patch.object(smoke,'digest',side_effect=lambda path:hashes[str(path)]),\
                 patch.object(smoke,'main_identity',return_value=main) as lookup,patch.object(smoke,'gpu_sample',return_value=gpu),\
-                patch.object(smoke,'verify_sdk'),patch.object(execution,'guard_root',return_value=guard_directory or root/'account-guard'),\
+                patch.object(smoke,'verify_sdk'),patch.object(execution,'guard_root',return_value=stable),\
                 patch.object(smoke,'native_environment',return_value={}),patch.object(smoke,'urlopen'),\
                 patch.object(smoke,'placement',return_value=(dict(device='gpu_pc') if placement_change else audit['fast_placement'])),\
                 patch.object(smoke,'ModelBackend',return_value=Backend()),patch.object(smoke,'Scheduler',Scheduler),\
@@ -202,10 +206,13 @@ class HarnessTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root=Path(td);first=root/'first';second=root/'second';first.mkdir();second.mkdir()
             stable=root/'account-guard'
-            report,_=self.run_harness(first,main_unknown=True,guard_directory=stable)
+            _,cfg,_,binding,_,_,_=fixture(root)
+            with patch.object(execution,'guard_root',return_value=stable.resolve()):
+                anchor=execution.provision_namespace(execution.execution_scopes(cfg,binding))
+            report,_=self.run_harness(first,main_unknown=True,guard_directory=stable,anchor=anchor)
             self.assertTrue(report['execution_guard']['unknown'])
             self.assertFalse(report['execution_guard']['released'])
-            self.run_harness(second,guard_directory=stable,blocked=True)
+            self.run_harness(second,guard_directory=stable,blocked=True,anchor=anchor)
             self.assertFalse((second/'receipt.json').exists())
 
     def test_identical_actual_backend_prompt_and_budget_then_final_health_and_reap(self):

@@ -46,7 +46,7 @@ def main():
             for key in ('context','motion','speech','workflows'))):
         raise ValueError('PC-only smoke requires simulated actors and disabled context/physical adapters')
     verify_sdk(audit.get('sdk'))
-    lease=ExecutionLease(execution_scopes(cfg,audit['main_identity'])).acquire()
+    lease=ExecutionLease(execution_scopes(cfg,audit['main_identity']),anchor=audit['execution_anchor']).acquire()
     try:return run_guarded(args,cfg,audit,lease)
     finally:
         if not lease.closed:lease.finish(known=not lease.producer_started)

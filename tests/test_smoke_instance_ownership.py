@@ -129,6 +129,12 @@ class StableOwnershipTests(unittest.TestCase):
         _,cfg,_,binding,_,_,_=fixture.fixture(root)
         return execution.execution_scopes(cfg,binding)
 
+    def provision(self,stable,scopes):
+        stable=stable.resolve()
+        with patch.object(execution,'guard_root',return_value=stable):
+            anchor=execution.provision_namespace(scopes)
+        return stable,anchor
+
     def test_namespace_ignores_output_reload_reference_and_local_endpoint_alias(self):
         with tempfile.TemporaryDirectory() as td:
             _,cfg,_,binding,_,_,_=fixture.fixture(Path(td));before=execution.execution_scopes(cfg,binding)
@@ -143,29 +149,30 @@ class StableOwnershipTests(unittest.TestCase):
     def test_actual_other_process_held_then_unknown_blocks_new_owner_without_reclaim(self):
         with tempfile.TemporaryDirectory() as td:
             root=Path(td);stable=root/'account-guard';scopes=self.scopes(root)
+            stable,anchor=self.provision(stable,scopes)
             code="""import json,os,sys,threading
 sys.path.insert(0,sys.argv[1])
 import smoke_execution as e
 e.guard_root=lambda:e.Path(sys.argv[2])
 timer=threading.Timer(5,lambda:os._exit(9));timer.daemon=True;timer.start()
-lease=e.ExecutionLease(json.loads(sys.argv[3])).acquire()
+lease=e.ExecutionLease(json.loads(sys.argv[3]),anchor=json.loads(sys.argv[4])).acquire()
 print('HELD',flush=True)
 sys.stdin.readline()
 lease.finish(known=False)
 """
-            child=subprocess.Popen([sys.executable,'-c',code,str(fixture.DEPLOY),str(stable),json.dumps(scopes)],
+            child=subprocess.Popen([sys.executable,'-c',code,str(fixture.DEPLOY),str(stable),json.dumps(scopes),json.dumps(anchor)],
                 stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
             try:
                 self.assertEqual(child.stdout.readline().strip(),'HELD')
                 with patch.object(execution,'guard_root',return_value=stable):
-                    with self.assertRaises(RuntimeError):execution.ExecutionLease(scopes).acquire()
+                    with self.assertRaises(RuntimeError):execution.ExecutionLease(scopes,anchor=anchor).acquire()
                 second=root/'new-output-held';second.mkdir()
-                fixture.HarnessTests().run_harness(second,guard_directory=stable,blocked=True)
+                fixture.HarnessTests().run_harness(second,guard_directory=stable,blocked=True,anchor=anchor)
                 child.communicate('\n',timeout=2);self.assertEqual(child.returncode,0)
                 with patch.object(execution,'guard_root',return_value=stable):
-                    with self.assertRaises(RuntimeError):execution.ExecutionLease(scopes).acquire()
+                    with self.assertRaises(RuntimeError):execution.ExecutionLease(scopes,anchor=anchor).acquire()
                 third=root/'new-output-unknown';third.mkdir()
-                fixture.HarnessTests().run_harness(third,guard_directory=stable,blocked=True)
+                fixture.HarnessTests().run_harness(third,guard_directory=stable,blocked=True,anchor=anchor)
                 self.assertTrue(all(b'UNKNOWN' in path.read_bytes() for path in stable.glob('*/owner.jsonl')))
             finally:
                 if child.poll() is None:child.kill();child.communicate(timeout=2)
@@ -173,19 +180,27 @@ lease.finish(known=False)
     def test_known_release_and_unknown_stickiness_foreign_state_is_preserved(self):
         with tempfile.TemporaryDirectory() as td:
             root=Path(td);stable=root/'account-guard';scopes=self.scopes(root)
+            stable,anchor=self.provision(stable,scopes)
             with patch.object(execution,'guard_root',return_value=stable):
-                known=execution.ExecutionLease(scopes).acquire();known.finish(known=True)
-                self.assertTrue(known.status()['released']);self.assertEqual(list(stable.iterdir()),[])
-                unknown=execution.ExecutionLease(scopes).acquire();unknown.finish(known=False);unknown.finish(known=True)
+                known=execution.ExecutionLease(scopes,anchor=anchor).acquire();known.finish(known=True)
+                self.assertTrue(known.status()['released'])
+                self.assertTrue(all(json.loads(path.read_text().splitlines()[-1])['state']=='RELEASED'
+                    for path in stable.glob('*/owner.jsonl')))
+                unknown=execution.ExecutionLease(scopes,anchor=anchor).acquire();unknown.finish(known=False);unknown.finish(known=True)
                 self.assertTrue(unknown.status()['unknown']);self.assertFalse(unknown.status()['released'])
-                with self.assertRaises(RuntimeError):execution.ExecutionLease(scopes).acquire()
+                with self.assertRaises(RuntimeError):execution.ExecutionLease(scopes,anchor=anchor).acquire()
             # Separate private namespace: a foreign replacement is never unlinked.
-            other=root/'other-account-fixture'
+            other,other_anchor=self.provision(root/'other-account-fixture',scopes)
             with patch.object(execution,'guard_root',return_value=other):
-                lease=execution.ExecutionLease(scopes).acquire()
-                path=lease.slots[0]['path'];path.write_bytes(b'foreign state')
-                with self.assertRaises(RuntimeError):lease.finish(known=True)
-                self.assertEqual(path.read_bytes(),b'foreign state');self.assertFalse(lease.status()['released'])
+                lease=execution.ExecutionLease(scopes,anchor=other_anchor).acquire()
+                path=lease.slots[0]['path']
+                if os.name=='nt':
+                    with self.assertRaises(OSError):path.write_bytes(b'foreign state')
+                    lease.finish(known=True)
+                else:
+                    path.write_bytes(b'foreign state')
+                    with self.assertRaises(RuntimeError):lease.finish(known=True)
+                    self.assertEqual(path.read_bytes(),b'foreign state');self.assertFalse(lease.status()['released'])
 
 
 if __name__=='__main__':unittest.main()
