@@ -324,12 +324,17 @@ class Pipeline:
             self.phase = 'speaking'
             segments = result.get('segments') or [{'text': result['reply'], 'emotion': result.get('emotion', 'neutral'), 'gesture': 'auto'}]
             yield from self.audio_events(segments, intro_bytes)
-            yield {'type': 'done', 'ok': True, **self.completed(result, session, pending, started)}
+            terminal = {'type': 'done', 'ok': True, **self.completed(result, session, pending, started)}
         finally:
-            if executor is not None:
-                executor.shutdown(wait=True)
-            self.phase = 'idle'
-            self.lock.release()
+            try:
+                if executor is not None:
+                    executor.shutdown(wait=True)
+            finally:
+                self.phase = 'idle'
+                self.lock.release()
+        # A received successful terminal event must follow producer cleanup.
+        # Exceptions and generator.close() leave through finally without done.
+        yield terminal
 
 
 def main(config, worker=False):
