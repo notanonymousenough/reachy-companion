@@ -265,14 +265,19 @@ class OwnerClaimTests(unittest.TestCase):
 class RenewalRaceTests(unittest.TestCase):
     def renewal(self,outcome):
         entered=threading.Event();release=threading.Event();requests=[]
-        authority=owner_binding(dict(agent_boot_id='fixture-agent',owned_microphone_epoch=1,policy_epoch=1,owner_id='fixture-owner'))
+        authority=owner_binding(dict(agent_boot_id='fixture-agent',owned_microphone_epoch=1,policy_epoch=0 if outcome=='false_policy' else 1,owner_id='fixture-owner'))
         client=SimpleNamespace(url='http://127.0.0.1:1',timeout=.25,token='t'*32,controller='fixture-controller')
         class Response:
             status=200
             def read(self,size):
                 entered.set();release.wait(2)
                 if outcome=='unknown':raise TimeoutError('fixture renewal unknown')
-                return json.dumps(dict(source_boot='fixture-source',authority=authority)).encode()
+                reply=dict(authority)
+                if outcome=='bool_epoch':reply['microphone_epoch']=True
+                if outcome=='float_epoch':reply['microphone_epoch']=1.0
+                if outcome=='false_policy':reply['policy_epoch']=False
+                if outcome=='float_policy':reply['policy_epoch']=1.0
+                return json.dumps(dict(source_boot='fixture-source',authority=reply)).encode()
         class Connection:
             sock=None
             def connect(self):self.sock=SimpleNamespace(setsockopt=lambda *args:None)
@@ -295,10 +300,54 @@ class RenewalRaceTests(unittest.TestCase):
     def test_late_ack_after_close_never_rearms_and_retains_actual_worker_until_return(self):self.renewal('late')
     def test_unknown_renewal_is_one_attempt_without_reconnect_retry(self):self.renewal('unknown')
     def test_late_tick_after_expiry_cannot_make_held_renewal_fresh(self):self.renewal('expired')
+    def test_malformed_epoch_ack_aliases_withdraw_before_any_acceptance(self):
+        for outcome in ('bool_epoch','float_epoch','false_policy','float_policy'):
+            with self.subTest(outcome=outcome):self.renewal(outcome)
+
+
+class TypedAckTests(unittest.TestCase):
+    def test_retirement_ack_boolean_and_integer_aliases_keep_record_and_deny_new_reserve(self):
+        base=dict(source_boot='fixture-source',stream_id='fixture-source:1',stream_sequence=1,generation=1,retired=True,execution_busy=False)
+        for changes in (dict(retired=1),dict(execution_busy=0),dict(retired=0,execution_busy=1),
+                        dict(stream_sequence=True),dict(stream_sequence=1.0),dict(generation=True),dict(generation=1.0)):
+            with self.subTest(changes=changes):
+                client=PeerClient('http://127.0.0.1:1','t'*32,'fixture-controller')
+                remote=RemotePCM(client,stop_port=2,source_boot='fixture-source',lifetime='lease')
+                with patch.object(remote.transport,'call',return_value=dict(reserved=True,device_stream_id='fixture-device-stream',generation=1)) as reserve,patch.object(client,'call',return_value={**base,**changes}):
+                    remote.reserve('first-local')
+                    with self.assertRaises(ValueError):remote.retire(dict(stream_id='first-local',complete=True))
+                    self.assertTrue(remote.withdrawn);self.assertFalse(remote.admission_ready());self.assertEqual(len(remote.stream_map),1)
+                    with self.assertRaises(RuntimeError):remote.commit_retirement('first-local')
+                    with self.assertRaises(RuntimeError):remote.reserve('new-local')
+                    self.assertEqual(reserve.call_count,1)
+                remote.close_transport()
+
+    def test_udp_bool_and_float_sequences_latch_without_accepted_ack_or_retry(self):
+        from reachy_companion.autonomous.lease_datagram import DatagramRenewal
+        authority=owner_binding(dict(agent_boot_id='fixture-agent',owned_microphone_epoch=1,policy_epoch=1,owner_id='fixture-owner'))
+        for sequence in (True,1.0):
+            with self.subTest(sequence=sequence):
+                peer=PeerClient('http://127.0.0.1:1','t'*32,'fixture-controller')
+                renewal=DatagramRenewal(peer,'fixture-source',2,authority=authority);renewal.socket.close();sent=[]
+                def empty(size):raise BlockingIOError
+                renewal.socket=SimpleNamespace(setblocking=lambda _:None,settimeout=lambda _:None,recv=empty,
+                    send=lambda body:sent.append(body),getsockname=lambda:('127.0.0.1',12345),getpeername=lambda:('127.0.0.1',23456),close=lambda:None)
+                replies=[dict(kind='challenge',source_boot='fixture-source',echo='1'*32,nonce='2'*32),
+                         dict(kind='accepted',source_boot='fixture-source',sequence=sequence)]
+                with patch('reachy_companion.autonomous.lease_datagram.secrets.token_hex',return_value='1'*32),patch.object(renewal,'receive',side_effect=replies):
+                    with self.assertRaises(ValueError):renewal.renew()
+                    self.assertTrue(renewal.withdrawn);self.assertIsNone(renewal.last_ack);self.assertIsNone(renewal.ack_sequence)
+                    with self.assertRaises(RuntimeError):renewal.renew()
+                    self.assertEqual(len(sent),2);self.assertEqual(renewal.attempts,1)
+                renewal.close()
 
 
 class JoinedLeaseTests(unittest.TestCase):
     def test_first_renewal_attempt_without_ack_cannot_start_model_admission(self):
+        self.first_renewal_ack(False)
+    def test_malformed_first_ack_with_bool_epoch_has_zero_model_admission(self):
+        self.first_renewal_ack(True)
+    def first_renewal_ack(self,malformed):
         from reachy_companion.autonomous.audio_adapter import AudioAdapter,HttpSTT
         from reachy_companion.autonomous.audio_peer import AudioPolling
         from reachy_companion.autonomous.companion_session import run_session
@@ -309,7 +358,10 @@ class JoinedLeaseTests(unittest.TestCase):
         entered=threading.Event();release=threading.Event()
         class Response:
             status=200
-            def read(self,size):entered.set();release.wait(3);return json.dumps(dict(source_boot=fixture.peer.boot_id,authority=fixture.authority)).encode()
+            def read(self,size):
+                entered.set();release.wait(3)
+                authority={**fixture.authority,'microphone_epoch':True} if malformed else fixture.authority
+                return json.dumps(dict(source_boot=fixture.peer.boot_id,authority=authority)).encode()
         class Connection:
             sock=None
             def connect(self):self.sock=SimpleNamespace(setsockopt=lambda *args:None)
@@ -330,6 +382,11 @@ class JoinedLeaseTests(unittest.TestCase):
         def run():reports.append(run_session(scheduler,poller,fixture.lease,fixture.client,fixture.client.at_port(fixture.server.stop_address[1]),fixture.peer.boot_id,stop,None,status.append,lifetime='lease'))
         runner=threading.Thread(target=run);runner.start()
         try:
+            if malformed:
+                self.assertTrue(entered.wait(1));release.set();wait(lambda:fixture.lease.closed);runner.join(2)
+                self.assertFalse(runner.is_alive());self.assertEqual(gateway.fast_calls,0)
+                self.assertIsNone(fixture.lease.last_accepted);self.assertFalse(reports[0]['accepted'])
+                return
             self.assertTrue(entered.wait(1));self.assertTrue(fixture.peer.permitted());time.sleep(.12)
             self.assertEqual(fixture.lease.calls,1);self.assertIsNone(fixture.lease.last_accepted)
             self.assertEqual(gateway.fast_calls,0);self.assertTrue(status);self.assertTrue(all(value.get('stage')=='STARTING' for value in status))

@@ -208,7 +208,11 @@ class DatagramRenewal:
         self.socket.send(signed(self.secret,dict(kind='renew',source_boot=self.source,controller=self.controller,
             nonce=challenge['nonce'],sequence=self.sequence,**extra)))
         self.record('ack_wait');ack=self.receive()
-        if ack!=dict(kind='accepted',source_boot=self.source,sequence=self.sequence):raise ValueError('Renewal acknowledgement')
+        if (type(ack) is not dict or set(ack)!={'kind','source_boot','sequence'}
+                or type(ack['kind']) is not str or type(ack['source_boot']) is not str
+                or type(ack['sequence']) is not int or not 1<=ack['sequence']<2**63
+                or ack!=dict(kind='accepted',source_boot=self.source,sequence=self.sequence)):
+            raise ValueError('Typed renewal acknowledgement')
         self.last_ack=time.monotonic();self.ack_sequence=self.sequence;self.record('accepted')
     def status(self):
         now=time.monotonic()

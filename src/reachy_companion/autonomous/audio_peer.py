@@ -548,7 +548,7 @@ class RemotePCM:
             self.stream_map[stream]=actual
             if self.lifetime=='lease':
                 generation=result.get('generation')
-                if type(generation) is not int or generation<1:self.withdrawn=True;raise ValueError('Device stream generation')
+                if type(generation) is not int or not 1<=generation<2**63:self.withdrawn=True;raise ValueError('Device stream generation')
                 self.pending_stream.update(generation=generation,phase='LIVE')
     def admission_ready(self):
         with self.budget_lock:return self.lifetime=='finite' or not self.withdrawn and self.pending_stream is None
@@ -587,10 +587,17 @@ class RemotePCM:
         try:
             result=self.client.call('/retire',**scope)
             expected={key:scope[key] for key in ('source_boot','stream_id','stream_sequence','generation')}
-            if result==dict(expected,retired=False,execution_busy=True):
+            if (type(result) is not dict or set(result)!=set(expected)|{'retired','execution_busy'}
+                    or type(result['source_boot']) is not str or type(result['stream_id']) is not str
+                    or any(type(result[key]) is not int or not 1<=result[key]<2**63 for key in ('stream_sequence','generation'))
+                    or type(result['retired']) is not bool or type(result['execution_busy']) is not bool
+                    or any(result[key]!=value for key,value in expected.items())
+                    or result['stream_id']!=stream_identity(result['source_boot'],result['stream_sequence'])):
+                raise ValueError('Typed exact terminal retirement acknowledgement')
+            if result['retired'] is False and result['execution_busy'] is True:
                 with self.budget_lock:value['phase']='LIVE'
                 return False
-            if result!=dict(expected,retired=True,execution_busy=False):raise ValueError('Exact terminal retirement acknowledgement')
+            if result['retired'] is not True or result['execution_busy'] is not False:raise ValueError('Exact terminal retirement acknowledgement')
             self.transport.close() # retirement worker, after all stream callers returned
             with self.budget_lock:value['phase']='ACK'
             return True
@@ -752,7 +759,9 @@ class PeerLease:
                     answer=decode(raw)
                     with self.lock:
                         if self.source_boot is not None:
-                            if answer!=dict(source_boot=self.source_boot,authority=self.authority):raise ValueError('Lease acknowledgement scope')
+                            if (type(answer) is not dict or set(answer)!={'source_boot','authority'}
+                                    or type(answer['source_boot']) is not str or answer['source_boot']!=self.source_boot
+                                    or lease_authority(answer['authority'])!=self.authority):raise ValueError('Lease acknowledgement scope')
                             if self.closed or time.monotonic()-self.last_tick>=.1:self._withdraw('late_renewal_ack');return
                         self.last_accepted=time.monotonic()
                 except Exception as exc:
