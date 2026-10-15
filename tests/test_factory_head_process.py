@@ -7,7 +7,7 @@ import tempfile
 import threading
 from types import ModuleType,SimpleNamespace,FunctionType
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock,patch
 from reachy_companion.autonomous import factory_head_process as process
 from reachy_companion.autonomous.factory_head_adapter import NATIVE_METHODS
 
@@ -28,9 +28,11 @@ class ProcessTests(unittest.TestCase):
             def _update(self):raise AssertionError('legacy writer must be suppressed')
         module=ModuleType('fake_factory_main');module.__file__=__file__;module.startup_app_config=SimpleNamespace(get_startup_app=lambda:'saved-config')
         calls=[]
+        module.ip_probe=lambda:None;module.imu_probe=lambda:None
         def construct(self,**kwargs):
             if kwargs:
                 calls.append('backend_ctor');self.c=Native();calls.append('native_ctor')
+                if kwargs['wireless_version']:module.imu_probe() # exact public Robot constructor branch, no BMI import
                 self.head_kinematics=module.fake_analytical_class();calls.append('model_ctor')
         Robot.__init__=construct
         tools=ModuleType('reachy_mini.tools.reflash_motors');tools.calls=calls
@@ -42,6 +44,7 @@ class ProcessTests(unittest.TestCase):
         modules=patch.dict(sys.modules,{vendor.__name__:vendor,tools.__name__:tools});modules.start();self.addCleanup(modules.stop)
         def create(args):
             if args.hardware_config_filepath is not None:raise AssertionError('PID write path reachable before arm')
+            if args.wireless_version:module.ip_probe() # model of pre-backend Daemon.start branch
             calls.append('create_app_only');return SimpleNamespace(args=args)
         class Analytical:
             def __init__(self,automatic_body_yaw=True):self.automatic_body_yaw=automatic_body_yaw
@@ -52,14 +55,14 @@ class ProcessTests(unittest.TestCase):
         Native.finite_startup_status=staticmethod(lambda:(True,True,63,[0]*9,[False]*9,1.))
         module.create_app=create
         args=SimpleNamespace(autostart=False,no_media=False,wake_up_on_start=True,goto_sleep_on_stop=True,
-            preload_datasets=True,dataset_update_interval_hours=24,fastapi_host='0.0.0.0',sim=True,mockup_sim=True,hardware_config_filepath='private-pid-config',kinematics_engine='NN',check_collision=True,serialport='/dev/fixture-uart')
+            preload_datasets=True,dataset_update_interval_hours=24,fastapi_host='0.0.0.0',sim=True,mockup_sim=True,hardware_config_filepath='private-pid-config',kinematics_engine='NN',check_collision=True,serialport='/dev/fixture-uart',wireless_version=True)
         commands={n:type(n,(),{}) for n in ('GetStateCmd','GetMotorModeCmd','GetVersionCmd')}
         return module,Abstract,Robot,Daemon,args,commands,calls
     def pins(self,parts):
         return {key:hashlib.sha256(Path(inspect.getsourcefile(value)).read_bytes()).hexdigest()
             for key,value in zip(('main','abstract','robot','daemon'),parts[:4])}
     def backend_args(self):
-        return dict(wireless_version=True,sim=False,mockup_sim=False,serialport='/dev/fixture-uart',scene='fixture',
+        return dict(wireless_version=False,sim=False,mockup_sim=False,serialport='/dev/fixture-uart',scene='fixture',
             check_collision=False,kinematics_engine='AnalyticalKinematics',headless=True,use_audio=False,hardware_config_filepath=None)
     def daemon(self,parts):
         daemon=parts[3]();daemon.logger=SimpleNamespace(info=lambda *args:None);daemon.log_level='INFO';return daemon
@@ -107,6 +110,7 @@ class ProcessTests(unittest.TestCase):
         self.assertEqual(calls,['native_readonly_prepare','create_app_only']);self.assertTrue(args.no_media);self.assertFalse(args.wake_up_on_start)
         self.assertIsNone(args.hardware_config_filepath);self.assertEqual(args.kinematics_engine,'AnalyticalKinematics');self.assertFalse(args.check_collision)
         self.assertFalse(args.goto_sleep_on_stop);self.assertEqual(args.fastapi_host,'127.0.0.1')
+        self.assertIs(args.wireless_version,False)
         self.assertIsNone(main.startup_app_config.get_startup_app());self.assertTrue(abstract._finite_head_transport_sealed)
         instance=robot();updates=[]
         instance.get_all_joint_positions=lambda:([0]*7,[0]*2)
@@ -164,11 +168,34 @@ class ProcessTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             artifact=Path(directory)/'native.so';artifact.write_bytes(b'not-loaded');self.prepare(parts,artifact,self.pins(parts))
         instance=self.daemon(parts);before=list(parts[-1])
-        for key,value in (('serialport','auto'),('serialport','/dev/foreign-uart'),('sim',True),('mockup_sim',True),
+        for key,value in (('serialport','auto'),('serialport','/dev/foreign-uart'),('wireless_version',True),('wireless_version',0),('sim',True),('mockup_sim',True),
                 ('use_audio',True),('check_collision',True),('hardware_config_filepath','/fixture/pid.yaml'),('kinematics_engine','NN')):
             values=self.backend_args();values[key]=value
             with self.subTest(key=key,value=value),self.assertRaises(ValueError):instance._setup_backend(**values)
         self.assertEqual(parts[-1],before)
+
+    def test_nooutput_profile_closes_ip_and_imu_constructor_branches_before_lifespan(self):
+        # Causal model of the exact public branches reviewed in daemon/robot:
+        # wireless=True reaches both probes even with media disabled.
+        old=self.setup_factory();old[4].hardware_config_filepath=None;old[4].no_media=True
+        old[0].ip_probe=Mock();old[0].imu_probe=Mock()
+        old[0].create_app(old[4]);values=self.backend_args();values['wireless_version']=True
+        self.daemon(old)._setup_backend(**values)
+        old[0].ip_probe.assert_called_once();old[0].imu_probe.assert_called_once()
+        parts=self.setup_factory();parts[0].ip_probe=Mock(side_effect=AssertionError('IP getter reached'))
+        parts[0].imu_probe=Mock(side_effect=AssertionError('BMI constructor reached'))
+        original_serial=parts[4].serialport
+        with tempfile.TemporaryDirectory() as directory:
+            artifact=Path(directory)/'native.so';artifact.write_bytes(b'not-loaded')
+            prepared=self.prepare(parts,artifact,self.pins(parts))
+        self.assertIs(parts[4].wireless_version,False);self.assertEqual(parts[4].serialport,original_serial)
+        instance=self.daemon(parts);before=list(parts[-1])
+        with self.assertRaises(ValueError):instance._setup_backend(**values)
+        self.assertEqual(parts[-1],before) # True denied BEFORE original/controller/IMU
+        instance._setup_backend(**self.backend_args())
+        parts[0].ip_probe.assert_not_called();parts[0].imu_probe.assert_not_called()
+        self.assertEqual(parts[-1],['native_readonly_prepare','create_app_only','backend_ctor','native_ctor','model_ctor'])
+        self.assertFalse(prepared['all_mutation_paths_fenced']);self.assertFalse(prepared['head_hardware_acceptance'])
 
     def test_unknown_vendor_runtime_function_defaults_or_globals_deny_before_native_prepare(self):
         for mode in ('code','defaults','bool_confusion','backend','raw'):

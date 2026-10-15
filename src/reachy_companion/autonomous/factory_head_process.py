@@ -54,7 +54,7 @@ def prepare_factory_app(main_module,abstract_class,robot_class,daemon_class,comm
     if getattr(robot_class,'_finite_factory_prepared',False):raise ValueError('Fresh factory process required')
     if not issubclass(robot_class,abstract_class):raise ValueError('Pinned factory class inheritance required')
     if not callable(getattr(robot_class,'_update',None)):raise ValueError('Pinned robot update ABI required')
-    for key,value in dict(autostart=True,no_media=True,wake_up_on_start=False,goto_sleep_on_stop=False,
+    for key,value in dict(autostart=True,no_media=True,wireless_version=False,wake_up_on_start=False,goto_sleep_on_stop=False,
         preload_datasets=False,dataset_update_interval_hours=0,fastapi_host='127.0.0.1',sim=False,mockup_sim=False,
         hardware_config_filepath=None,kinematics_engine='AnalyticalKinematics',check_collision=False).items():
         if not hasattr(args,key):raise ValueError('Pinned factory argument ABI required')
@@ -66,7 +66,7 @@ def prepare_factory_app(main_module,abstract_class,robot_class,daemon_class,comm
     kinematics=install_bounded_kinematics(analytical_class,numpy,lock)
     fence=install_backend_read_fence(abstract_class,commands)
     main_module.startup_app_config.get_startup_app=lambda:None # process-local; no saved-config write
-    for key,value in dict(autostart=True,no_media=True,wake_up_on_start=False,goto_sleep_on_stop=False,
+    for key,value in dict(autostart=True,no_media=True,wireless_version=False,wake_up_on_start=False,goto_sleep_on_stop=False,
         preload_datasets=False,dataset_update_interval_hours=0,fastapi_host='127.0.0.1',sim=False,mockup_sim=False,
         hardware_config_filepath=None,kinematics_engine='AnalyticalKinematics',check_collision=False).items():setattr(args,key,value)
     def update_read_only(self):

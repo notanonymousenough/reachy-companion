@@ -187,7 +187,7 @@ class PhaseBPlanTests(unittest.TestCase):
         self.assertEqual(current['operator']['microphone_epoch'],self.s['operator']['microphone_epoch']+1)
 
     def test_no_arm_profile_digest_clock_and_original_begin_bounds_fail_closed(self):
-        for key,value in (('wake_up_on_start',True),('goto_sleep_on_stop',True),('no_media',False),('hardware_config_filepath','/fixture/pid.json')):
+        for key,value in (('wireless_version',True),('wireless_version',0),('wake_up_on_start',True),('goto_sleep_on_stop',True),('no_media',False),('hardware_config_filepath','/fixture/pid.json')):
             value_spec=copy.deepcopy(self.s);value_spec['candidate']['args'][key]=value
             with self.assertRaises(ValueError):h.freeze_plan(value_spec,expected_sha256=h.digest(value_spec))
         with self.assertRaises(ValueError):h.freeze_plan(self.s,expected_sha256='f'*64)

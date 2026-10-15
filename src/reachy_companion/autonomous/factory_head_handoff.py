@@ -13,7 +13,7 @@ from .factory_head_process import SOURCE_PINS
 from .factory_head_kinematics import ANALYTICAL_SHA256,ASSETS_SHA256
 
 NS=1_000_000_000
-READ_ONLY_ARGS=dict(autostart=True,no_media=True,wake_up_on_start=False,goto_sleep_on_stop=False,
+READ_ONLY_ARGS=dict(autostart=True,no_media=True,wireless_version=False,wake_up_on_start=False,goto_sleep_on_stop=False,
     preload_datasets=False,dataset_update_interval_hours=0,fastapi_host='127.0.0.1',sim=False,mockup_sim=False,
     hardware_config_filepath=None,kinematics_engine='AnalyticalKinematics',check_collision=False)
 SAFE_HOOKS={**{key:[] for key in ('ExecStop','ExecStopPost','OnFailure','OnSuccess','RestartForceExitStatus',

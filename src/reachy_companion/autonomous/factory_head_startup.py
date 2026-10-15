@@ -58,7 +58,7 @@ def install_startup_fence(review):
                 or module.RobotBackend is not review['robot_class']):raise ValueError('Startup fence binding changed')
         bound=review['signature'].bind(self,*args,**kwargs);bound.apply_defaults();values=bound.arguments
         if (type(values['serialport']) is not str or values['serialport']!=review['serialport']
-                or any(values[key] is not False for key in ('sim','mockup_sim','check_collision','use_audio'))
+                or any(values[key] is not False for key in ('wireless_version','sim','mockup_sim','check_collision','use_audio'))
                 or values['hardware_config_filepath'] is not None or values['kinematics_engine']!='AnalyticalKinematics'):
             raise ValueError('Readonly explicit-port backend profile required')
         values['reflash_motors_on_start']=False # own both positional and keyword/default paths

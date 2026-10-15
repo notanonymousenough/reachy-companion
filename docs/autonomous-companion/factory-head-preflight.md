@@ -74,6 +74,21 @@ acceptance remain false. The runner must still independently review the exact
 installed startup/producer/network closure; do not infer new listeners, mDNS
 suppression or whole-lifespan safety from this wrapper.
 
+The common no-output argument profile also sets process-local
+`wireless_version=False` BEFORE `create_app`/Daemon construction, and the startup
+wrapper requires exact false before entering the vendor setup method. This closes
+the wireless IP-getter branch and `BMI088(i2c_bus=4)` construction (which
+`no_media=True` alone does not suppress). Exact pinned daemon/robot/abstract/main
+review found no alternate motor/native profile selected by this flag when the
+explicit frozen serial path is used and sim/mockup are false; the only serial
+selection branch is `serialport == "auto"`, already forbidden. Native constructor
+parameters, motor IDs and readonly all-nine voltage/read limits are unchanged.
+This is a finite-process peripheral fence, not a claim that the physical robot
+is a Lite or permission to rewrite its installed SKU/configuration. It does not
+suppress the independent hardware-ID getter or unconditional mDNS registration;
+those still need the runner's separately reviewed candidate closure. No new
+all-paths/zero-I/O/hardware capability follows from this flag.
+
 The constructor performs only its fixed read profile, with no actuator-write instructions or automatic reboot. Its receipt is diagnostic; startup `complete=true` does not supply current sensor or stop evidence. Convert native byte vectors to lists only when writing numeric JSON metadata. The profile is specific to the reviewed wireless motors/voltage/temperature bounds; a mismatch rejects rather than silently changing hardware limits or retrying construction.
 
 ## Unarmed read/FK measurements
