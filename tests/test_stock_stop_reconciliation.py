@@ -21,8 +21,10 @@ class StockStopReconciliationTests(unittest.TestCase):
     setUp=fixture_module.StockMotionTests.setUp
     factory=fixture_module.StockMotionTests.factory
 
-    def stop_server(self,failure):
+    def stop_server(self,failure,*,initial_active=True):
         fixture=self;self.reads_after_stop=[];self.stop_attempted=False
+        self.active=[dict(uuid=fixture_module.OWN)] if initial_active else []
+        self.on_poll=lambda:None
         class Handler(BaseHTTPRequestHandler):
             def log_message(self,*args):pass
             def do_POST(self):
@@ -30,7 +32,9 @@ class StockStopReconciliationTests(unittest.TestCase):
                 payload=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
                 fixture.assertEqual(payload,dict(uuid=fixture_module.OWN))
                 fixture.stop_attempted=True
+                fixture.active=[] # Completion can race the precheck/POST.
                 if failure=='404':self.send_error(404,'move no longer exists')
+                elif failure=='500':self.send_error(500,'KeyError: move no longer exists')
                 else:
                     # Close without a response, representing an unknown HTTP
                     # completion. Fresh GET observations are independent.
@@ -79,6 +83,48 @@ class StockStopReconciliationTests(unittest.TestCase):
         self.assertTrue(self.hub.stock_unknown)
         self.assertTrue(self.hub.stock_stop_observed)
         self.assertIn('/api/move/running',self.reads_after_stop)
+
+    def test_initial_absence_skips_nonidempotent_missing_uuid_500_route(self):
+        self.stop_server('500',initial_active=False);self.hub.stock_owned=fixture_module.OWN
+        self.hub.stock_stop_owned(fixture_module.OWN)
+        self.assertFalse(self.stop_attempted)
+        self.assertTrue(self.hub.stock_stop_observed);self.assertFalse(self.hub.stock_unknown)
+        self.assertIsNone(self.hub.stock_owned);self.assertIsNone(self.hub.stock_stop_request)
+
+    def test_completed_after_active_precheck_500_remains_unknown(self):
+        self.stop_server('500');self.hub.stock_owned=fixture_module.OWN
+        with self.assertRaises(RuntimeError):self.hub.stock_stop_owned(fixture_module.OWN)
+        self.assertTrue(self.stop_attempted);self.assertTrue(self.hub.stock_unknown)
+        self.assertTrue(self.hub.stock_stop_observed)
+        self.assertEqual(self.hub.stock_owned,fixture_module.OWN)
+        self.assertEqual(self.hub.stock_stop_request['http_status'],500)
+
+    def test_unreliable_precheck_still_attempts_only_owned_stop_and_never_false_clears(self):
+        original=self.factory
+        for problem in ('foreign','malformed','unready','read_timeout'):
+            self.writes.clear();self.hub.stock_owned=fixture_module.OWN;self.hub.stock_unknown=False
+            def factory(path,payload=None):
+                if payload is not None:
+                    self.writes.append((path,payload));raise TimeoutError('stop unknown')
+                if path=='/api/daemon/status':
+                    if problem=='unready':return dict(state='running',backend_status=dict(ready=False))
+                    if problem=='read_timeout':raise TimeoutError('read unknown')
+                if path=='/api/move/running':
+                    if problem=='foreign':return [dict(uuid=fixture_module.FOREIGN)]
+                    if problem=='malformed':return [dict(uuid='bad')]
+                return original(path,payload)
+            self.hub.factory.side_effect=factory
+            with self.assertRaises(Exception):self.hub.stock_stop_owned(fixture_module.OWN)
+            self.assertTrue(self.hub.stock_unknown)
+            self.assertEqual(self.hub.stock_owned,fixture_module.OWN)
+            self.assertEqual(self.writes,[('/api/move/stop',dict(uuid=fixture_module.OWN))])
+
+    def test_initial_absence_never_clears_preexisting_unknown(self):
+        self.prepare_unknown()
+        with self.assertRaises(RuntimeError):self.hub.stock_stop_owned(fixture_module.OWN)
+        self.assertTrue(self.hub.stock_unknown);self.assertTrue(self.hub.stock_stop_observed)
+        self.assertEqual(self.hub.stock_owned,fixture_module.OWN)
+        self.assertEqual(self.writes,[])
 
     def test_timeout_stop_empty_has_same_sticky_semantics(self):
         self.stop_server('timeout');self.config.data['timeouts']['robot']=.08

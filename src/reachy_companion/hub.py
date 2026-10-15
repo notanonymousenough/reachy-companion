@@ -106,6 +106,16 @@ class Hub:
         if task_id!=self.stock_owned:raise RuntimeError('Only this lane owned UUID may be stopped')
         request_failed=False
         self.stock_stop_observed=False
+        self.stock_stop_request=None
+        # The stock daemon's stop is non-idempotent for completed UUIDs.
+        # Only a fresh ready/free/empty observation may avoid that POST.
+        began=time.monotonic()
+        try:absent=not self.stock_dependencies() and time.monotonic()-began<=.3
+        except Exception:absent=False
+        if absent:
+            self.stock_stop_observed=True
+            if self.stock_unknown:raise RuntimeError('UUID absence observed; explicit reconciliation required')
+            self.stock_owned=None;return
         self.stock_stop_request=dict(endpoint='/api/move/stop',error_class=None,http_status=None)
         try:
             self.factory('/api/move/stop',{'uuid':task_id}) # independent of withdrawn operator permission

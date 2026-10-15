@@ -82,6 +82,17 @@ Hub independently requests `/api/move/stop` for only its recorded UUID. It does
 not stop foreign UUIDs or use a global stop. UUID absence after that request is
 reported as `stop_observed` in `/status` under `stock_motion`.
 
+Before that stop POST, Hub checks fresh (within 300 ms from read-window start)
+factory readiness, free app lock and canonical running UUIDs. If the list is
+empty, the owned UUID is already absent: it records absence and avoids the
+factory's non-idempotent stop of a completed UUID (`stop_request=null`). This
+never clears a pre-existing UNKNOWN. An active, foreign, malformed, unready or
+slow/failed precheck falls through to the existing best-effort stop of only the
+owned UUID, independently of withdrawn operator permission. A completion race
+after that precheck can still make the POST fail; its existing sticky UNKNOWN
+and explicit reconciliation requirements remain unchanged. UUID absence is an
+observation, not target attainment or a physical hard-stop certificate.
+
 A POST failure without a usable UUID, or failure to observe the owned stop,
 latches `stock_motion.unknown=true`. No further stock output or blind retry is
 allowed in that Hub process. Restart is not evidence that the movement stopped:
