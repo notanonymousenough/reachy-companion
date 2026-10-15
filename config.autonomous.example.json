@@ -93,6 +93,7 @@
   },
   "context": {
     "enabled": false,
+    "mode": "camera_memory",
     "memory_path": "data/autonomous-memory.sqlite3",
     "namespaces": [
       "conversation"

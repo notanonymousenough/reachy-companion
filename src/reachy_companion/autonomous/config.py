@@ -5,6 +5,16 @@ from urllib.parse import urlsplit
 from .contracts import decode
 
 
+def context_mode(context):
+    """Validate the explicit producer selection before opening any resources."""
+    mode=context.get('mode','camera_memory')
+    if type(mode) is not str or mode not in ('camera_memory','memory_only'):
+        raise ValueError('Context mode must be camera_memory or memory_only')
+    if mode=='memory_only' and context.get('video_url') is not None:
+        raise ValueError('Memory-only context forbids video_url')
+    return mode
+
+
 def load(path):
     config = decode(Path(path).read_text())
     if config['version'] != 1 or config['actuators'] not in ('simulated','bounded_native_antenna17') or config['export_enabled']:
@@ -53,6 +63,7 @@ def load(path):
     workflows = config.get('workflows', {})
     context = config.get('context', {})
     if context:
+        context_mode(context)
         if type(context.get('enabled')) is not bool:raise ValueError('Context enable flag')
         if context.get('enabled'):
             if not context.get('memory_path') or not 1<=len(context.get('namespaces',[]))<=4:raise ValueError('Context memory configuration')

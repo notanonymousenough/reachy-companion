@@ -147,6 +147,55 @@ class MemoryTests(unittest.TestCase):
 
 
 class ContextTests(unittest.TestCase):
+    def test_explicit_mode_rejects_conflicts_before_any_resources_and_preserves_default(self):
+        base=load(Path(__file__).resolve().parents[1]/'config.autonomous.example.json')
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'config.json'
+            for mode,url in [('unknown',None),(None,None),(False,None),(1,None),([],None),({},None),
+                             ('memory_only','http://127.0.0.1:1'),('memory_only',''),('memory_only',False)]:
+                cfg=copy.deepcopy(base);cfg['context'].update(enabled=False,mode=mode,video_url=url)
+                path.write_text(json.dumps(cfg))
+                with self.subTest(mode=mode,url=url),self.assertRaises(ValueError):load(path)
+                with patch('reachy_companion.autonomous.context.MemoryStore') as store,patch('reachy_companion.autonomous.context.LatestVideo') as video:
+                    with self.assertRaises(ValueError):ContextProvider(cfg['context'],'pc')
+                    store.assert_not_called();video.assert_not_called()
+            cfg=copy.deepcopy(base);cfg['context'].update(mode='memory_only',video_url=None)
+            path.write_text(json.dumps(cfg));self.assertEqual(load(path)['context']['mode'],'memory_only')
+            for mode in (None,'camera_memory'):
+                context=dict(memory_path=str(Path(directory)/'default.sqlite'),namespaces=['fixture'])
+                if mode is not None:context['mode']=mode
+                provider=ContextProvider(context,'pc')
+                try:
+                    sensor=provider.snapshot('',False,'hub',0)['sensors'][0]
+                    self.assertEqual(sensor['state'],'no_data');self.assertIsNone(sensor['age_ms'])
+                    self.assertIsNone(sensor['age_bounds_ms']['upper']);self.assertEqual(sensor['summary'],'')
+                finally:provider.close()
+
+    def test_memory_only_never_initializes_fetches_or_admits_camera_and_fences_late_recall(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config=dict(mode='memory_only',memory_path=str(Path(directory)/'store.sqlite'),namespaces=['fixture'])
+            with patch('reachy_companion.autonomous.context.LatestVideo') as video,patch('reachy_companion.autonomous.context.LatestFrameProcessor') as processor,patch('reachy_companion.autonomous.context.build_opener') as opener:
+                provider=ContextProvider(config,'pc');entered=threading.Event();release=threading.Event();errors=[]
+                try:
+                    provider.snapshot('',False,'hub',0);ticket=(dict(provider.scope),provider.video_generation,provider.video_admission)
+                    self.assertFalse(provider.admit_video({},b'fixture-not-a-frame',time.monotonic(),ticket))
+                    self.assertFalse(provider.video_completed(None,(None,None,None,None,ticket),{}))
+                    provider.poll();self.assertIsNone(provider.thread);self.assertIsNone(provider.video)
+                    original=provider.memory.recall
+                    def recall(query):entered.set();release.wait(2);return original(query)
+                    def snapshot():
+                        try:provider.snapshot('',False,'hub',0)
+                        except Exception as exc:errors.append(exc)
+                    with patch.object(provider.memory,'recall',recall):
+                        worker=threading.Thread(target=snapshot);worker.start();self.assertTrue(entered.wait(1))
+                        provider.revoke('hub',0,True);self.assertTrue(worker.is_alive())
+                        release.set();worker.join(1);self.assertFalse(worker.is_alive())
+                    self.assertEqual(len(errors),1);self.assertIsInstance(errors[0],ValueError)
+                    with self.assertRaises(ValueError):provider.snapshot('',False,'hub',1)
+                    self.assertEqual(provider.snapshot('',False,'new-hub',0)['sensors'],[])
+                    video.assert_not_called();processor.assert_not_called();opener.assert_not_called()
+                finally:release.set();provider.close()
+
     def context(self,items):return dict(memory=dict(store_id='store',revision=max([x['version'] for x in items],default=0),items=items),sensors=[])
     def start(self,state):
         state.ingest(dict(type='utterance',text='A real mandatory turn'),0)
@@ -215,8 +264,14 @@ class ContextTests(unittest.TestCase):
         self.assertNotIn(binding.request_id,state.consumed)
 
     def test_shutdown_revokes_independently_of_occupied_context_slot(self):
+        self.check_shutdown_context_slot('camera_memory')
+
+    def test_memory_only_shutdown_retains_occupied_context_slot_until_known_completion(self):
+        self.check_shutdown_context_slot('memory_only')
+
+    def check_shutdown_context_slot(self,mode):
         with tempfile.TemporaryDirectory() as directory:
-            provider=ContextProvider(dict(memory_path=str(Path(directory)/'memory.sqlite'),namespaces=['fixture']),'replay-compute')
+            provider=ContextProvider(dict(mode=mode,memory_path=str(Path(directory)/'memory.sqlite'),namespaces=['fixture']),'replay-compute')
             entered=threading.Event();release=threading.Event();revoked=threading.Event()
             class Transport(ReplayGateway):
                 def context(self,request_id,query,privacy,authority):

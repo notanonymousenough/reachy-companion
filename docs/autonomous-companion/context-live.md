@@ -195,8 +195,8 @@ One finite reviewable sequence, with no production memory or personal facts:
    neutral four/six fixture content is writable. Reopen with `readback` in a new
    process; compare UUID/revision/version, whitelist and State projection.
 4. Prepare/review an isolated test gateway context config bound to exactly this
-   fixture's `memory.sqlite` and namespace, no video, production/private memory or
-   extra items. Do not change production configuration. Independently audit the
+   fixture's `memory.sqlite` and namespace, with explicit `context.mode=memory_only`,
+   no video, production/private memory or extra items. Do not change production configuration. Independently audit the
    real fast/main runtime and resource ownership again; a JSON audit flag or this
    endpoint is not that audit. Freeze the successful confirmed-version CLI
    `readback` report and its raw-file SHA256. Add
@@ -214,12 +214,22 @@ One finite reviewable sequence, with no production memory or personal facts:
    AuditedGateway and RemoteGateway with a counting local ModelBackend stub:
    an extra camera sensor or observation causes zero transports/model calls;
    the clean whitelist view passes.
-   **Current integration gate:** generic `ContextProvider.snapshot` always emits
-   a `camera.pixel_quality` placeholder, even without a video URL. This strict
-   profile rejects that placeholder too. The generic provider cannot yet run
-   this sequence as-is: a separately reviewed memory-only provider path returning
-   `sensors=[]` is required. Do not silently strip sensors or weaken the guard.
-   Only after that source gate passes, run the finite voice runtime with context
+   `context.mode=memory_only` selects the existing ContextProvider's memory-only
+   path before resources open: no LatestVideo cache, frame processor, poll thread
+   or video fetch/admission is created; actual `sensors=[]` is returned. A non-null
+   `video_url` (including an empty string or wrong type) conflicts and rejects
+   before opening SQLite. Unknown/non-string modes also reject, including when
+   context is disabled. Omitting the mode retains `camera_memory`, whose honest
+   camera placeholder remains even without a video URL; it fails this strict
+   whitelist guard. No mode is inferred from a missing URL and no fetched sensor
+   content is stripped to make the guard pass. The context RPC schema already
+   permits an empty sensors array; no endpoint or wire envelope changes.
+   Owner TTL, privacy, revoke/retired-owner fences and occupied execution slots
+   retain their existing behavior. A revoked/closed owner's delayed recall is
+   rejected after the read; a still-running camera worker remains busy at close
+   and cannot publish its late result. These are local synchronization checks,
+   not actual camera stop or hardware acceptance evidence.
+   After independent source review, run the finite voice runtime with context
    enabled in a NEW Hub/control session and a newly granted microphone epoch.
    Both admitted real STT turns must produce completed real main requests whose
    exact memory projection is the current confirmed fixture v1/v2, and consumed
@@ -242,6 +252,30 @@ One finite reviewable sequence, with no production memory or personal facts:
 voice_memory_acceptance.py prepare --require-live-source --allow-disposable-voice-fixture --directory <fresh-fixture> --output <fresh-prepare.json> --hub-receipt <actual-first-hub.json> --device-receipt <actual-first-device.json> --controller <first-controller> --session-boot <first-session> --source-boot <first-source>
 voice_memory_acceptance.py verify-live-context --allow-disposable-voice-fixture --directory <same-fixture> --output <fresh-next-context.json> --expected-store-id <same-UUID> --expected-version <confirmed-1-or-2> --hub-receipt <actual-next-hub.json> --device-receipt <actual-next-device.json> --controller <next-controller> --session-boot <new-session> --source-boot <next-source>
 ```
+
+The isolated gateway configuration's context block must be explicit (replace
+only these placeholders with the independently reviewed disposable binding):
+
+```json
+{
+  "context": {
+    "enabled": true,
+    "mode": "memory_only",
+    "memory_path": "<absolute-owned-fixture-directory>/memory.sqlite",
+    "namespaces": ["<exact-fixture-voice-UUID-from-binding>"],
+    "refresh_s": 0.5,
+    "owner_ttl_s": 1.5,
+    "video_url": null
+  }
+}
+```
+
+This block belongs in the isolated full autonomous configuration; it does not
+replace its independently configured gateway network, model endpoints or resource
+audit. Use that same reviewed context binding in the finite Hub config. No
+production configuration is edited automatically. Local tests use only newly
+created neutral whitelist SQLite fixtures and stub model transports; actual
+deployment and voice-to-memory acceptance remain separate closed gates.
 
 Use the same staged interpreter/PYTHONPATH prefix and finite command bound from
 the preceding section. `next_main_context_validated=true` is the endpoint result;

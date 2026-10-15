@@ -8,6 +8,7 @@ from urllib.request import Request, build_opener, ProxyHandler
 from .memory import MemoryStore
 from .video_adapter import FrameOrder,identity,decode_packet,LatestFrameProcessor
 from .contracts import uid
+from .config import context_mode
 
 
 class LatestVideo:
@@ -47,16 +48,19 @@ class LatestVideo:
 
 class ContextProvider:
     def __init__(self,config,boot_id):
-        self.config=config;self.video=LatestVideo();self.memory=MemoryStore(config['memory_path'],config['namespaces'])
+        self.memory_only=context_mode(config)=='memory_only'
+        self.config=config;self.video=None if self.memory_only else LatestVideo()
+        self.memory=MemoryStore(config['memory_path'],config['namespaces'])
         self.boot_id=boot_id;self.policy_lock=threading.Lock();self.scope=None;self.privacy_all=True;self.policy_seq=0
         self.owner_deadline=0;self.revoked_epochs={}
         self.retired_hubs=deque(maxlen=128)
         self.done=threading.Event();self.thread=None;self.video_worker=None;self.video_generation=0;self.ingress_boot=None;self.video_admission=uid()
-        if config.get('video_url'):
+        if not self.memory_only and config.get('video_url'):
             if len(os.environ.get(config['video_token_env'],''))<32:raise ValueError('Video token required')
             self.video_worker=LatestFrameProcessor(self.video_completed,ttl_s=config.get('video_processing_ttl_s',2))
             self.thread=threading.Thread(target=self.poll,name='video-latest-only',daemon=True);self.thread.start()
     def poll(self):
+        if self.memory_only:return
         opener=build_opener(ProxyHandler({}))
         while not self.done.is_set():
             try:
@@ -83,7 +87,8 @@ class ContextProvider:
             self.done.wait(self.config.get('video_poll_s',.5))
     def invalidate_video(self):
         # Called under policy_lock. Retain sequence/retirement fences on clear.
-        self.video_generation+=1;self.video_admission=uid();self.video.clear()
+        self.video_generation+=1;self.video_admission=uid()
+        if self.video is not None:self.video.clear()
         if self.video_worker:self.video_worker.invalidate()
     def admit_video(self,metadata,raw,received,ticket):
         with self.policy_lock:
@@ -96,7 +101,7 @@ class ContextProvider:
                 self.video.clear();self.ingress_boot=metadata['producer_boot_id']
             return accepted
     def video_current(self,ticket):
-        return (not self.done.is_set() and not self.privacy_all and time.monotonic()<self.owner_deadline
+        return (not self.memory_only and not self.done.is_set() and not self.privacy_all and time.monotonic()<self.owner_deadline
             and ticket==(self.scope,self.video_generation,self.video_admission))
     def video_completed(self,worker,job,metrics):
         with self.policy_lock:
@@ -141,14 +146,14 @@ class ContextProvider:
             self.scope=next_scope
             self.privacy_all=privacy_all
             self.owner_deadline=time.monotonic()+self.config.get('owner_ttl_s',1.5)
-            if privacy_all:self.video.clear()
+            if privacy_all and self.video is not None:self.video.clear()
         memory=self.memory.recall(query if not privacy_all else '')
         with self.policy_lock:
             if self.done.is_set() or operator_epoch<=self.revoked_epochs.get(hub_boot_id,-1):raise ValueError('Revoked context owner')
             if self.scope['hub_boot_id']!=hub_boot_id or self.scope['operator_epoch']!=operator_epoch:raise ValueError('Changed context owner')
             private=privacy_all or self.privacy_all or time.monotonic()>=self.owner_deadline
             if private:memory['items']=[]
-            return dict(memory=memory,sensors=[self.video.snapshot(time.monotonic(),private)],
+            return dict(memory=memory,sensors=[] if self.memory_only else [self.video.snapshot(time.monotonic(),private)],
                 video_processing=self.video_worker.status() if self.video_worker else None)
     def close(self):
         self.done.set()
@@ -156,6 +161,7 @@ class ContextProvider:
         with self.policy_lock:self.invalidate_video()
         if self.thread:self.thread.join(timeout=2)
         if self.video_worker:self.video_worker.close()
-        self.video.clear();self.memory.close()
+        if self.video is not None:self.video.clear()
+        self.memory.close()
         return dict(poll_execution_busy=bool(self.thread and self.thread.is_alive()),
             processor=self.video_worker.status() if self.video_worker else None,raw_files_created=0)

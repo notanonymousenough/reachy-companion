@@ -84,6 +84,24 @@ class ProcessorTests(unittest.TestCase):
             with self.assertRaises(ValueError):decode_packet(packet(wrong))
 
 class ScopeTests(unittest.TestCase):
+    def test_default_provider_close_reports_busy_worker_and_discards_late_completion(self):
+        with tempfile.TemporaryDirectory() as directory:
+            provider=ContextProvider(dict(memory_path=str(Path(directory)/'store'),namespaces=['fixture']),'pc')
+            entered=threading.Event();release=threading.Event()
+            def process(*args):entered.set();release.wait(2);return dict(mean_luminance=1)
+            provider.video_worker=LatestFrameProcessor(provider.video_completed,process=process)
+            try:
+                provider.snapshot('',False,'hub',0);scope=dict(provider.scope)
+                ticket=(scope,provider.video_generation,provider.video_admission)
+                self.assertTrue(provider.admit_video(meta(scope=scope,admission_id=ticket[2]),RAW,time.monotonic(),ticket))
+                self.assertTrue(entered.wait(1));closed=provider.close()
+                self.assertTrue(closed['processor']['execution_busy']);self.assertEqual(closed['processor']['pending_raw_frames'],0)
+                self.assertIsNone(provider.video.current)
+                release.set();provider.video_worker.thread.join(1)
+                self.assertFalse(provider.video_worker.status()['execution_busy']);self.assertIsNone(provider.video.current)
+            finally:
+                release.set();provider.video_worker.close()
+
     def test_privacy_ABA_epoch_and_expired_owner_drop_real_blocked_worker_completion(self):
         with tempfile.TemporaryDirectory() as directory:
             provider=ContextProvider(dict(memory_path=str(Path(directory)/'store'),namespaces=['fixture']),'pc')

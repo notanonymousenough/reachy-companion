@@ -18,6 +18,7 @@ from reachy_companion.autonomous.state import State
 from reachy_companion.autonomous.runtime import ReplayGateway,Scheduler,RemoteGateway
 from reachy_companion.autonomous.gateway import ModelBackend
 from reachy_companion.autonomous.config import load
+from reachy_companion.autonomous.context import ContextProvider
 from reachy_companion.autonomous.playback import Playback,ReplayPCM
 from reachy_companion.autonomous.speech_adapter import SpeechAdapter
 
@@ -49,6 +50,56 @@ def receipts(items=None,*,store_id=None,revision=-1):
 
 
 class ChainTests(unittest.TestCase):
+    def test_memory_only_provider_whitelist_reaches_actual_fast_main_facade(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);hp=root/'hub.json';dp=root/'device.json';owned=root/'fixture'
+            hub,device=receipts();hp.write_text(json.dumps(hub));dp.write_text(json.dumps(device))
+            report=memory.prepare(owned,hp,dp,dict(controller='controller',session_boot='session',source_boot='source'),require_live=True)
+            store_id=report['store_id'];memory.operate('confirm',owned,store_id,0,True)
+            report=dict(**memory.operate('readback',owned,store_id,1),action='readback',accepted=True,model_inference=False)
+            binding=chain.context_binding(report);meta=json.loads((owned/'binding.json').read_text())
+            provider=ContextProvider(dict(mode='memory_only',memory_path=str(owned/'memory.sqlite'),namespaces=[meta['namespace']]),'fixture-compute')
+            try:
+                context=provider.snapshot('',False,'hub',0)
+                self.assertEqual(context['sensors'],[]);self.assertIsNone(provider.video);self.assertIsNone(provider.video_worker)
+                state=State();state.update_context(context,0);clean=state.snapshot(0)
+                state.ingest(dict(type='utterance',text='Neutral fixture request'),0)
+                ref=next(iter(state.candidates));task=state.apply(dict(a='think',why='fixture',start=dict(type='main',input_ref=ref)),state.bind(0,5),0)
+                self.assertEqual(task.prompt['memory'],context['memory']['items']);self.assertEqual(task.prompt['observations'],[])
+                cfg=load(ROOT/'config.autonomous.example.json');cfg['gateway'].update(client_url='http://127.0.0.1:1',token_env='CHAIN_FIXTURE_TOKEN')
+                for role in ('fast','main'):
+                    model=cfg['models'][role]
+                    model.update(completion_backend='llama_native',id='fixture-'+role,base_url='http://127.0.0.1:1',decision_format='object')
+                    model['audit'].update(verified=True,runtime_build='fixture',weight_sha256='fixture',template_sha256='fixture',tokenizer_sha256='fixture',runtime_context_tokens=model['context_tokens'],device='cpu_pc')
+                backend=ModelBackend(cfg);backend.count=lambda *args:1;transport_calls=[];model_calls=[]
+                def model(url,payload,*args):
+                    model_calls.append(payload)
+                    content=json.dumps(dict(a='wait',why='fixture')) if 'json_schema' in payload else 'Neutral fixture reply'
+                    return dict(content=content,stop_type='word',tokens_predicted=3)
+                backend.post=model
+                def transport(owner,path,payload=None):
+                    if path=='/health':return dict(compute_boot_id='fixture-compute')
+                    transport_calls.append(path);role='fast' if path=='/decision' else 'main'
+                    return {**backend.generate(role,payload['data']), 'request_id':payload['request_id']}
+                with patch.dict(os.environ,CHAIN_FIXTURE_TOKEN='fixture-token'*4),patch.object(RemoteGateway,'call',transport):
+                    gateway=fixture.runtime.AuditedGateway(cfg,memory_scope=binding)
+                    gateway.fast('clean-memory-only',clean);gateway.main(task)
+                    self.assertEqual(transport_calls,['/decision','/main']);self.assertEqual(len(model_calls),2)
+                    transport_calls.clear();model_calls.clear()
+                    state.ingest(dict(type='sensor',id='camera.injected',summary='Injected fixture observation',availability='available'),0)
+                    with self.assertRaises(ValueError):gateway.fast('injected',state.snapshot(0))
+                    bad=copy.deepcopy(task);bad.prompt['observations']=[dict(summary='Injected fixture observation')]
+                    with self.assertRaises(ValueError):gateway.main(bad)
+                    self.assertEqual(transport_calls,[]);self.assertEqual(model_calls,[])
+                private=provider.snapshot('',True,'hub',0)
+                self.assertEqual(private['memory']['items'],[]);self.assertEqual(private['sensors'],[])
+                provider.revoke('hub',0,True)
+                with self.assertRaises(ValueError):provider.snapshot('',False,'hub',1)
+            finally:
+                closed=provider.close()
+            self.assertFalse(closed['poll_execution_busy']);self.assertIsNone(closed['processor'])
+            with self.assertRaises(ValueError):provider.snapshot('',False,'new-hub',0)
+
     def test_actual_audited_gateway_rejects_extra_fast_sensor_before_transport_or_model(self):
         state=State();meta=dict(item_id='fixture-note',namespace='fixture-space',created_at='2020-01-01T00:00:00Z',
             voice=dict(lineage_id='fixture-source'),operator_root='fixture-owner')
