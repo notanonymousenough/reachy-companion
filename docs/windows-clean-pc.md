@@ -141,6 +141,55 @@ Enrollment не делает shared LM Studio или все загруженны
 
 ## 4. Native smoke на новом ПК
 
+### Проверка реально импортируемого кода worker
+
+`worker/Dockerfile` выполняет `pip install --no-deps /app`: сервис с обычным
+`python -m reachy_companion` из `/app` импортирует установленный пакет из
+`site-packages`. Наличие `/app/src/reachy_companion/voice.py`, bind mount в этот
+каталог и совпадающий SHA такого файла **не доказывают**, что сервис использует
+его. Не добавлять `PYTHONPATH` для получения желаемого результата проверки.
+
+Новые образы создают `/app/worker-code-identity.json` из reviewed `src` во время
+сборки; ожидаемый install root берётся из `sysconfig.get_path('purelib')` этой
+сборки. Manifest версии 1 содержит точный набор top-level Python-модулей пакета,
+их SHA256 и абсолютный package root. Он не включает сторонние зависимости,
+подпакет `autonomous`, assets или конфиг. Commit исходников, immutable image ID
+и SHA256 самого manifest записываются отдельно как ожидаемые значения; JSON не
+является подписью и не заменяет эти проверки. Нельзя строить новое «ожидаемое»
+доказательство из файлов уже наблюдаемого контейнера.
+
+При заданном образом `REACHY_COMPANION_CODE_MANIFEST` команды `worker prepare`
+и `worker serve` проверяют эффективные loader origins, SHA256 и соответствие
+loader bytecode исходнику **до** чтения Config/токена и загрузки моделей.
+Несовпадение, namespace package, другой root, symlink escape, отсутствующий или
+нечитаемый исходник/manifest отклоняют запуск. Проверка не меняет `sys.path` и
+не создаёт bytecode cache. Для отдельного отчёта под теми же native Python flags,
+cwd и environment, что заданы reviewed service command, используется:
+
+```text
+python -B -X pycache_prefix=/tmp/reachy-pycache -m reachy_companion worker code-identity
+```
+
+Здесь `-B`, `-X` и путь — только пример: воспроизвести фактические service flags,
+cwd и env, а не подменять их этим примером. Не задавать новый `PYTHONPATH`/`HOME`
+и не запускать probe из каталога, меняющего import precedence. В Docker
+`REACHY_COMPANION_CODE_MANIFEST` берётся из образа; explicit вариант
+`worker code-identity --code-manifest /reviewed/manifest.json` требует отдельно
+проверенного manifest и его SHA. Отчёт содержит origins/SHA, executable, cwd,
+`sys.flags`, pycache prefix и manifest SHA, без значений секретов или полного env.
+Без ожидаемого manifest отчёт имеет `ok=false`, exit 2. Probe не загружает
+Config/токен, STT/LLM/TTS, не начинает inference и не выдаёт доступ к устройствам.
+
+Это проверка разрешения импортов в **новом** процессе с воспроизведённым
+контекстом запуска, а не доказательство уже загруженного bytecode или RAM
+работающего PID 1. Уже запущенный старый образ не приобретает новую защиту.
+Для него runner отдельно доказывает фактический import origin и reviewed
+closure; изменения раскладываются по эффективным путям только в согласованной
+новой generation. Проверка нового manifest не разрешает менять текущий
+контейнер или перезапускать модель. При overlay новых исходников в образ с
+manifest старый manifest обязан дать отказ; обновление ожиданий — отдельная
+reviewed операция, не автоматическая подгонка под результат наблюдения.
+
 1. Записать commit, версии Python/Docker/lms, локальный model key и эффективные
    настройки. `check-pc.ps1` должен пройти без изменения конфига/токена.
 2. Запустить baseline. Сопоставить текущий полный container ID/labels/engine и

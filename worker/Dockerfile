@@ -10,6 +10,10 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 COPY pyproject.toml /app/
 COPY src /app/src
 RUN pip install --no-cache-dir --no-deps /app
+ENV REACHY_COMPANION_CODE_MANIFEST=/app/worker-code-identity.json
+# Expectations come from build source; observations come from effective imports.
+RUN python /app/src/reachy_companion/code_identity.py --source-root /app/src/reachy_companion --write-manifest /app/worker-code-identity.json \
+    && python -m reachy_companion worker code-identity
 ENV PYTHONUNBUFFERED=1
 ENV LD_LIBRARY_PATH=/usr/local/lib/python3.13/site-packages/nvidia/cublas/lib:/usr/local/lib/python3.13/site-packages/nvidia/cudnn/lib:/usr/local/lib/python3.13/site-packages/nvidia/cuda_nvrtc/lib
 ENV HF_HOME=/config/data/hf-cache

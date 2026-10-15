@@ -1,9 +1,8 @@
 import argparse
 import json
+import os
 from pathlib import Path
 import sys
-
-from .config import Config, initialize
 
 
 def main():
@@ -21,7 +20,8 @@ def main():
     agent = commands.add_parser('agent')
     agent.add_argument('action', choices=('serve', 'test-speaker'))
     worker = commands.add_parser('worker')
-    worker.add_argument('action', choices=('serve', 'prepare'))
+    worker.add_argument('action', choices=('serve', 'prepare', 'code-identity'))
+    worker.add_argument('--code-manifest', help='Expected reviewed source manifest; defaults to image manifest environment')
     deploy = commands.add_parser('deploy')
     deploy.add_argument('role', choices=('hub', 'robot', 'worker', 'both'))
     deploy.add_argument('--dry-run', action='store_true')
@@ -38,6 +38,16 @@ def main():
     update = commands.add_parser('update')
     update.add_argument('role', choices=('hub', 'robot', 'worker'))
     args = parser.parse_args()
+    if args.group == 'worker':
+        manifest = args.code_manifest if args.code_manifest is not None else os.environ.get('REACHY_COMPANION_CODE_MANIFEST')
+        if (args.action == 'code-identity' or args.code_manifest is not None
+                or 'REACHY_COMPANION_CODE_MANIFEST' in os.environ):
+            from .code_identity import effective_identity
+            identity = effective_identity(manifest)
+            if args.action == 'code-identity' or not identity['ok']:
+                print(json.dumps(identity, sort_keys=True))
+                return 0 if identity['ok'] else 2
+    from .config import Config, initialize
     if args.group == 'config' and args.action == 'init':
         print(initialize(Path.cwd()))
         return 0
