@@ -80,6 +80,17 @@ Baseline использует локальную модель, не платны
 не загружаются из репозитория. Docker bind mount содержит существующий token-файл,
 а Docker build исключает конфиги, токен, модели и приватные inventory.
 
+`deployment.hub.root`, `deployment.robot.root`, `deployment.worker.root` — пути
+удалённых Linux-узлов для SSH/apt/systemd, например `/home/deploy/reachy-companion`.
+На Windows PC они также остаются абсолютными Linux-путями; не заменять их на
+`C:\...`, UNC или путь локального checkout. Валидация не зависит от ОС оператора
+и не нормализует значения: относительные пути, `.`/`..`, пробелы, управляющие и
+shell/systemd-метасимволы отклоняются. Локальный Windows checkout задаётся отдельно
+параметрами запуска и Docker mount. Для повторной проверки блокера Config нужен
+только обновлённый `src/reachy_companion/config.py`; затем повторить read-only
+`check-pc.ps1` на реальном PC. Локальный тест с Windows-семантикой путей не заменяет
+этот native preflight.
+
 ## 3. Preflight, запуск и локальное enrollment
 
 ```powershell

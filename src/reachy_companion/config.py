@@ -1,7 +1,7 @@
 """One configuration for operator, hub and robot; credentials stay outside JSON."""
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import secrets
 from urllib.parse import urlsplit
 
@@ -187,8 +187,13 @@ class Config:
                     validate_steps(plan(expressions, phase, emotion)['steps'], expressions)
         for role in ('hub', 'robot', 'worker'):
             item = self.data['deployment'][role]
-            if not Path(item['root']).is_absolute() or '\n' in item['root']:
-                raise ValueError('Deployment root must be an absolute single-line path')
+            # These SSH/apt/systemd targets are Linux, regardless of the
+            # operator host. Do not interpret remote roots as Windows paths.
+            root = item['root']
+            if (type(root) is not str or not PurePosixPath(root).is_absolute()
+                    or root.startswith('//') or any(part in ('.', '..') for part in root.split('/'))
+                    or any(c.isspace() or ord(c) < 32 or ord(c) == 127 or c in '\\%\"\'`$;&|<>()[]{}*?!#~:' for c in root)):
+                raise ValueError('Deployment root must be an absolute Linux path without traversal, whitespace or metacharacters')
             for key in ('host', 'user'):
                 if not item[key] or any(c.isspace() for c in item[key]) or item[key].startswith('-'):
                     raise ValueError('Invalid SSH ' + key)

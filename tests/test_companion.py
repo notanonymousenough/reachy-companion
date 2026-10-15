@@ -1,7 +1,7 @@
 import copy
 import json
 import shutil
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import sys
 import tempfile
 import types
@@ -104,6 +104,50 @@ class ConfigurationTests(unittest.TestCase):
         args = ssh_args(self.config, 'robot')
         self.assertIn('-J', args)
         self.assertEqual(args[args.index('-J') + 1], 'deploy@reachy-hub.lan')
+
+    def test_remote_linux_roots_validate_under_windows_and_posix_host_path_semantics(self):
+        before = copy.deepcopy(self.config.data['deployment'])
+        self.assertFalse(PureWindowsPath(before['worker']['root']).is_absolute())
+        for host_path in (PureWindowsPath, PurePosixPath):
+            with self.subTest(host_path=host_path), patch('reachy_companion.config.Path', host_path), \
+                    patch.object(self.config, 'path', side_effect=lambda value: self.root / Path(value)):
+                self.config.validate()
+        self.assertEqual(self.config.data['deployment'], before)
+
+    def test_remote_linux_roots_reject_foreign_relative_traversal_and_unsafe_paths_on_both_hosts(self):
+        invalid = (None, False, 4, '', 'home/deploy/reachy', 'C:/Reachy', r'C:\Reachy',
+                   'C:Reachy', r'\Reachy', r'\\server\share', '//server/share',
+                   '/home/../other', '/home/./reachy', '/home/reachy\n', '/home/reachy\r',
+                   '/home/reachy\0', '/home/a b', '/home/a\t', '/home/a\\b')
+        invalid += tuple('/home/a' + c + 'b' for c in '%\"\'`$;&|<>()[]{}*?!#~:')
+        for host_path in (PureWindowsPath, PurePosixPath):
+            for role in ('hub', 'robot', 'worker'):
+                original = self.config.data['deployment'][role]['root']
+                try:
+                    for value in invalid:
+                        self.config.data['deployment'][role]['root'] = value
+                        with self.subTest(host_path=host_path, role=role, value=value):
+                            with patch('reachy_companion.config.Path', host_path), \
+                                    patch.object(self.config, 'path', side_effect=lambda value: self.root / Path(value)), \
+                                    self.assertRaisesRegex(ValueError, 'Deployment root'):
+                                self.config.validate()
+                finally:
+                    self.config.data['deployment'][role]['root'] = original
+
+    def test_linux_root_validation_keeps_ssh_identity_checks(self):
+        for role in ('hub', 'robot', 'worker'):
+            for key in ('host', 'user'):
+                original = self.config.data['deployment'][role][key]
+                try:
+                    for value in ('', '-option', 'two words'):
+                        self.config.data['deployment'][role][key] = value
+                        with self.subTest(role=role, key=key, value=value):
+                            with patch('reachy_companion.config.Path', PureWindowsPath), \
+                                    patch.object(self.config, 'path', side_effect=lambda value: self.root / Path(value)), \
+                                    self.assertRaisesRegex(ValueError, 'Invalid SSH'):
+                                self.config.validate()
+                finally:
+                    self.config.data['deployment'][role][key] = original
 
     def test_operator_speech_routes_via_hub(self):
         with patch('reachy_companion.client.request', return_value={'ok': True}) as request:
