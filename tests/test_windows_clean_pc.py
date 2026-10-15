@@ -55,15 +55,43 @@ class WindowsCleanPCTests(unittest.TestCase):
 
     def test_wrong_nonce_running_wrong_image_command_or_mount_denies_no_inventory_write(self):
         original=copy.deepcopy(self.value)
-        for problem in ('nonce','running','image','command','mount'):
+        for problem in ('nonce','running','image','command','mount','source'):
             self.value=copy.deepcopy(original)
             if problem=='nonce':self.value['Config']['Labels']['io.reachy-companion.launch-id']='foreign'
             if problem=='running':self.value['State'].update(Status='running',Running=True)
             if problem=='image':self.value['Image']='sha256:'+'0'*64
             if problem=='command':self.value['Config']['Cmd']=['foreign']
             if problem=='mount':self.value['Mounts'][0]['Destination']='/foreign'
+            if problem=='source':self.value['Mounts'][0]['Source']='/run/desktop/mnt/host/c/Other/private'
             with self.assertRaises(enroll.Denied):enroll.enroll(self.backend,**self.args)
             self.assertFalse(self.inventory.exists())
+
+    def test_supported_windows_and_docker_desktop_source_mappings_are_bound_to_requested_scope(self):
+        for source in (r'c:\REACHY\repo','C:/Reachy/repo','C:/REACHY\\repo/',
+                       '/run/desktop/mnt/host/c/Reachy/repo','/run/desktop/mnt/host/C/REACHY/repo/',
+                       '/host_mnt/c/Reachy/repo'):
+            with self.subTest(source=source):
+                self.value['Mounts'][0]['Source']=source
+                result=enroll.enroll(self.backend,**self.args)
+                self.assertTrue(result['enrolled'])
+                self.assertEqual(json.loads(self.inventory.read_text())['docker']['containers'][0]['mount_source'],source)
+                self.inventory.unlink()
+
+    def test_wrong_scope_traversal_unknown_mapping_and_conflicting_hostconfig_never_write(self):
+        for source in ('/run/desktop/mnt/host/c/Other/private','/run/desktop/mnt/host/d/Reachy/repo',
+                       '/run/desktop/mnt/host/c/Reachy/repository','/run/desktop/mnt/host/c/Reachy/../Other/private',
+                       '/mnt/c/Reachy/repo',r'C:\Other\private',r'C:\Reachy\repo\..\Other',None):
+            self.value['Mounts'][0]['Source']=source
+            with self.subTest(source=source):
+                with self.assertRaises(enroll.Denied):enroll.enroll(self.backend,**self.args)
+                self.assertFalse(self.inventory.exists())
+                self.assertFalse(self.inventory.parent.exists())
+        self.value['Mounts'][0]['Source']='/run/desktop/mnt/host/c/Reachy/repo'
+        self.value['HostConfig']['Mounts']=[dict(Type='bind',Source=r'C:\Other\private',Target='/config')]
+        with self.assertRaises(enroll.Denied):enroll.enroll(self.backend,**self.args)
+        self.assertFalse(self.inventory.exists())
+        self.value['HostConfig']['Mounts'][0]['Source']='C:/Reachy/repo'
+        self.assertTrue(enroll.enroll(self.backend,**self.args)['enrolled'])
 
     def test_existing_targets_preserved_but_engine_change_busy_and_unknown_deny(self):
         enroll.enroll(self.backend,**self.args);old=json.loads(self.inventory.read_text())
@@ -98,6 +126,11 @@ class WindowsCleanPCTests(unittest.TestCase):
             with self.assertRaises(enroll.Denied):enroll.verify_registered(self.backend,**dict(args,**changes))
         self.value['State'].update(Status='running',Running=True)
         self.assertTrue(enroll.verify_registered(self.backend,**args)['running'])
+        data=json.loads(self.inventory.read_text())
+        data['docker']['containers'][0]['mount_source']='/run/desktop/mnt/host/c/Other/private'
+        self.inventory.write_text(json.dumps(data))
+        self.value['Mounts'][0]['Source']='/run/desktop/mnt/host/c/Other/private'
+        with self.assertRaises(enroll.Denied):enroll.verify_registered(self.backend,**args)
 
     def test_public_config_preflight_requires_real_inputs_without_mutating_token_or_config(self):
         shutil.copy(ROOT/'config.example.json',self.path);shutil.copytree(ROOT/'profiles',self.path/'profiles')

@@ -98,7 +98,14 @@ Preflight только читает конфиг/токен, проверяет 
 Worker сначала создаётся **остановленным** с новым UUID launch label. Публичный
 `enroll_worker.py` проверяет full container ID, engine, image, worker command,
 mount и свежие labels; записывает local ownership в единственный canonical
-`%LOCALAPPDATA%\ReachyCompanion\stop-inventory.local.json` **до** `docker start`
+inventory. Источник mount отдельно сверяется с запрошенным `scope_root`, а не
+принимается из inspect как собственное доказательство. Поддержаны Windows drive
+paths (case/separator эквивалентность) и явные Docker Desktop mappings
+`/run/desktop/mnt/host/<drive>/...`, `/host_mnt/<drive>/...`; неизвестные mappings,
+traversal и несовпадающий Source отклоняются до записи inventory. Если inspect
+содержит `HostConfig.Mounts`, его `/config` Source также должен совпадать.
+Только после этих проверок запись сохраняется в canonical файл
+`%LOCALAPPDATA%\ReachyCompanion\stop-inventory.local.json`, **до** `docker start`
 по этому точному ID. Существующие независимые зарегистрированные цели сохраняются.
 Busy/UNKNOWN/неизвестный inventory/другой engine не перезаписываются автоматически.
 Приватный custom inventory старого kit не мигрируется и не заменяется молча.

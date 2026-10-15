@@ -2,12 +2,33 @@
 import argparse
 import json
 import os
+import re
 from pathlib import Path
 import tempfile
 import time
 import uuid
 
 from stop_reachy import Denied,WindowsBackend,checked_manifest,digest,strict_json,windows_path
+
+
+def mount_windows_scope(source):
+    """Map only Windows drive paths and explicit Docker Desktop host mappings.
+
+    The expected scope comes from the launch request, never from inspection.
+    Unknown Linux/WSL paths are not inferred or adopted.
+    """
+    if type(source) is not str or not source or any(c in source for c in '\x00\r\n'):
+        raise Denied('mount_source_scope')
+    if re.match(r'^[A-Za-z]:[\\/]',source):
+        candidate=source.replace('/','\\').rstrip('\\')
+    else:
+        prefix=next((value for value in ('/run/desktop/mnt/host/','/host_mnt/') if source.startswith(value)),None)
+        if prefix is None:raise Denied('unrecognized_mount_mapping')
+        parts=source[len(prefix):].rstrip('/').split('/')
+        if len(parts)<2 or not re.fullmatch('[A-Za-z]',parts[0]) or any(not p or p in ('.','..') or '\\' in p for p in parts):
+            raise Denied('mount_source_scope')
+        candidate=parts[0]+':\\'+'\\'.join(parts[1:])
+    return windows_path(candidate)
 
 
 def require_idle(manifest):
@@ -20,7 +41,6 @@ def require_idle(manifest):
 def enroll(backend,*,inventory_path,scope_root,docker_executable,endpoint,container_id,launch_id,config_sha256,image_id):
     root=windows_path(scope_root)
     if str(uuid.UUID(launch_id))!=launch_id:raise Denied('launch_identity')
-    import re
     if not re.fullmatch('[0-9a-f]{64}',container_id):raise Denied('full_container_identity')
     if not re.fullmatch('[0-9a-f]{64}',config_sha256):raise Denied('config_identity')
     windows_path(docker_executable)
@@ -39,6 +59,13 @@ def enroll(backend,*,inventory_path,scope_root,docker_executable,endpoint,contai
             or labels.get('io.reachy-companion.launch-id')!=launch_id
             or windows_path(labels.get('io.reachy-companion.scope-root'))!=root or len(mounts)!=1):
         raise Denied('not_just_created_owned_worker')
+    if mount_windows_scope(mounts[0].get('Source'))!=root:raise Denied('mount_source_scope_mismatch')
+    requested=value.get('HostConfig',{}).get('Mounts')
+    if requested is not None:
+        if type(requested) is not list:raise Denied('requested_mount_scope')
+        config_mounts=[mount for mount in requested if mount.get('Type')=='bind' and mount.get('Target')=='/config']
+        if len(config_mounts)!=1 or mount_windows_scope(config_mounts[0].get('Source'))!=root:
+            raise Denied('requested_mount_scope_mismatch')
     evidence=digest(dict(kind='created_worker',engine_id=engine,id=container_id,launch_id=launch_id,scope_root=root))
     entry=dict(confirmed_reachy_owned=True,evidence_sha256=evidence,scope_root=scope_root,id=container_id,
         image_id=value['Image'],command_sha256=digest(dict(entrypoint=value['Config'].get('Entrypoint'),cmd=value['Config'].get('Cmd'))),
@@ -89,6 +116,8 @@ def registered_entry(*,inventory_path,scope_root,docker_executable,endpoint,cont
     if (len(entries)!=1 or windows_path(entries[0]['scope_root'])!=windows_path(scope_root)
             or entries[0].get('worker_config_sha256')!=config_sha256 or entries[0]['image_id']!=image_id):
         raise Denied('registered_worker_config_or_image_changed')
+    if mount_windows_scope(entries[0].get('mount_source'))!=windows_path(scope_root):
+        raise Denied('registered_mount_source_scope_mismatch')
     return manifest,entries[0]
 
 
