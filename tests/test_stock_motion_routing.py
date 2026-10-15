@@ -154,6 +154,7 @@ class StockMotionTests(unittest.TestCase):
 
     def test_stop_failure_latches_unknown(self):
         original = self.factory
+        self.on_poll=lambda:None
         self.on_post = lambda: self.operator['motion_policy'].update(quiet=True)
         def factory(path, payload=None):
             if path == '/api/move/stop': raise TimeoutError('stop unobserved')

@@ -180,6 +180,25 @@ class StockAgentVoiceTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):self.hub.expression(dict(steps=step,operator_binding=valid))
         self.assertEqual(self.writes,[])
 
+    def test_failed_neutral_expression_completes_wait_and_does_not_prevent_capture(self):
+        self.hub.stock_unknown=True
+        self.agent.listening.set()
+        capture=b'\xff\x1f'*(self.agent.chunk_bytes//2)+b'\0'*self.agent.chunk_bytes
+        real_popen=subprocess.Popen;processes=[]
+        def popen(command,*args,**kwargs):
+            self.assertEqual(command[0],'arecord')
+            process=real_popen([sys.executable,'-c',
+                'import sys,time;sys.stdout.buffer.write(bytes.fromhex(sys.argv[1]));sys.stdout.flush();time.sleep(2)',
+                capture.hex()],*args,**kwargs)
+            processes.append(process);return process
+        with patch('reachy_companion.agent.subprocess.Popen',side_effect=popen):
+            actual=self.agent.capture()
+        self.assertEqual(actual,capture)
+        self.assertTrue(self.rpc_entered.is_set())
+        self.assertEqual(self.writes,[])
+        self.assertTrue(all(process.poll() is not None for process in processes))
+        self.assertFalse(self.agent.capture_active)
+
     def test_actual_capture_run_worker_stream_playback_and_stock_expression(self):
         piper=types.ModuleType('piper');piper.PiperVoice=piper.SynthesisConfig=object
         vosk=types.ModuleType('vosk');vosk.Model=vosk.KaldiRecognizer=vosk.SetLogLevel=object

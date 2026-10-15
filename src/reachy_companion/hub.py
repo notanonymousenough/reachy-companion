@@ -9,6 +9,7 @@ import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.request import Request, build_opener, ProxyHandler
+from urllib.error import HTTPError
 
 LOG = logging.getLogger("reachy-hub")
 
@@ -20,6 +21,7 @@ class Hub:
         self.lock = threading.Lock()
         self.boot_id = str(uuid.uuid4())
         self.stock_scope=threading.local();self.stock_unknown=False;self.stock_owned=None;self.stock_stop_observed=None
+        self.stock_stop_request=None
 
     def stock_selected(self):
         return self.config['guarded_motion'].get('transport','native')=='stock'
@@ -79,20 +81,80 @@ class Hub:
         return ids
 
     def stock_stop_owned(self,task_id):
+        self.move_uuid(task_id)
         if task_id!=self.stock_owned:raise RuntimeError('Only this lane owned UUID may be stopped')
+        request_failed=False
+        self.stock_stop_observed=False
+        self.stock_stop_request=dict(endpoint='/api/move/stop',error_class=None,http_status=None)
         try:
             self.factory('/api/move/stop',{'uuid':task_id}) # independent of withdrawn operator permission
+        except BaseException as exc:
+            request_failed=True;self.stock_unknown=True
+            error_class=('HTTPError' if isinstance(exc,HTTPError) else 'TimeoutError' if isinstance(exc,TimeoutError)
+                         else 'TransportError' if isinstance(exc,OSError) else 'ResponseError')
+            status=exc.code if isinstance(exc,HTTPError) and type(exc.code) is int and 100<=exc.code<=599 else None
+            self.stock_stop_request.update(error_class=error_class,http_status=status)
+        try:
             deadline=time.monotonic()+min(2,self.config['timeouts']['move'])
             while time.monotonic()<deadline:
                 active=self.factory('/api/move/running')
                 if type(active) is not list:raise RuntimeError('Stock running observation unknown')
                 ids=[self.move_uuid(item['uuid']) for item in active]
                 if task_id not in ids:
-                    self.stock_owned=None;self.stock_stop_observed=True;return
+                    self.stock_stop_observed=True
+                    if request_failed:
+                        # Observation is useful but cannot silently recover an
+                        # unknown request. Retain exact UUID for explicit audit.
+                        raise RuntimeError('Stock stop request failed; UUID absence observed; explicit reconciliation required')
+                    self.stock_owned=None;return
                 time.sleep(self.config['motion']['move_poll_seconds'])
             raise TimeoutError('Owned stock stop not observed')
         except BaseException:
-            self.stock_unknown=True;self.stock_stop_observed=False;raise
+            self.stock_unknown=True
+            if not request_failed or self.stock_stop_observed is not True:self.stock_stop_observed=False
+            raise
+
+    def stock_reconcile(self,payload):
+        """Explicit read-only reconciliation; never acquires permission or retries output."""
+        if (type(payload) is not dict or set(payload)!={'expected_hub_boot_id','owned_uuid','operator_binding'}
+                or type(payload['expected_hub_boot_id']) is not str or payload['expected_hub_boot_id']!=self.boot_id):
+            raise ValueError('Current Hub reconciliation binding required')
+        task_id=self.move_uuid(payload['owned_uuid'])
+        expected=payload['operator_binding']
+        if (type(expected) is not dict or set(expected)!={'agent_boot_id','microphone_epoch','policy_epoch','microphone_enabled'}
+                or type(expected.get('agent_boot_id')) is not str or not 1<=len(expected['agent_boot_id'])<=256
+                or any(type(expected.get(k)) is not int or not 0<=expected[k]<2**63 for k in ('microphone_epoch','policy_epoch'))
+                or type(expected.get('microphone_enabled')) is not bool):
+            raise ValueError('Typed original reconciliation operator required')
+        expected_tuple=(expected['agent_boot_id'],expected['microphone_epoch'],expected['policy_epoch'],expected['microphone_enabled'])
+        if not self.lock.acquire(False):raise RuntimeError('Hub is busy')
+        try:
+            if not self.stock_selected() or not self.stock_unknown or self.stock_owned!=task_id:
+                raise RuntimeError('Exact known owned unknown movement required')
+            def operator():
+                began=time.monotonic();value=self.agent('/operator')
+                policy=value.get('motion_policy') if type(value) is dict else None
+                if (time.monotonic()-began>.3 or type(policy) is not dict
+                        or type(value.get('agent_boot_id')) is not str
+                        or any(type(v) is not int or not 0<=v<2**63 for v in (value.get('microphone_epoch'),policy.get('epoch')))
+                        or type(value.get('microphone_enabled')) is not bool
+                        or 'microphone_state_error' not in value or value['microphone_state_error'] is not None
+                        or policy.get('motor_enabled') is not False
+                        or any(type(policy.get(k)) is not bool for k in ('quiet','privacy_all'))):
+                    raise RuntimeError('Fresh operator with motors denied required for reconciliation')
+                return value['agent_boot_id'],value['microphone_epoch'],policy['epoch'],value['microphone_enabled']
+            began=time.monotonic()
+            self.stock_compare(expected_tuple,operator())
+            if self.stock_dependencies():raise RuntimeError('Factory movement still active')
+            state=self.factory('/api/state/full')
+            if type(state) is not dict or state.get('control_mode') not in ('enabled','disabled'):
+                raise RuntimeError('Factory actual state unknown')
+            self.stock_compare(expected_tuple,operator())
+            if time.monotonic()-began>.3:raise RuntimeError('Reconciliation observation window expired')
+            self.stock_owned=None;self.stock_unknown=False;self.stock_stop_observed=True
+            return dict(reconciled=True,uuid_absence_observed=True,factory_ready=True,
+                operator_motor_enabled=False,pose_verified=False,hard_stop_certified=False)
+        finally:self.lock.release()
 
     def factory(self,path,payload=None):
         data = None if payload is None else json.dumps(payload).encode()
@@ -144,7 +206,8 @@ class Hub:
                 'robot': self.robot('/api/state/full'),
                 'action_running': self.lock.locked() or self.stock_unknown,
                 'stock_motion':dict(selected=self.stock_selected(),unknown=self.stock_unknown,
-                    owned_uuid=self.stock_owned,stop_observed=self.stock_stop_observed,hard_stop_certified=False)}
+                    hub_boot_id=self.boot_id,owned_uuid=self.stock_owned,stop_observed=self.stock_stop_observed,
+                    stop_request=self.stock_stop_request,hard_stop_certified=False)}
 
     def move(self, path, payload):
         if self.stock_selected():
@@ -378,6 +441,16 @@ def serve(hub):
             token = self.headers.get('Authorization', '')
             if not hmac.compare_digest(token, 'Bearer ' + hub.config.token):
                 self.reply(401, {'error': 'Bearer token required'})
+                return
+            if self.path=='/actions/stock-reconcile':
+                try:
+                    size=int(self.headers.get('Content-Length',0))
+                    if not 0<size<=4096:raise ValueError('Reconciliation request size')
+                    self.connection.settimeout(min(2,hub.config['timeouts']['http']))
+                    from .autonomous.contracts import decode
+                    self.reply(200,hub.stock_reconcile(decode(self.rfile.read(size))))
+                except (ValueError,KeyError,TypeError):self.reply(400,dict(error='invalid_reconciliation_request'))
+                except Exception:self.reply(409,dict(error='reconciliation_denied'))
                 return
             if self.path in ('/actions/expression', '/control/microphone', '/control/volume', '/control/motion-policy'):
                 try:

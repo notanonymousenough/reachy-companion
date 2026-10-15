@@ -199,3 +199,77 @@ consumption nor certified stopping latency. Unverified automatic audio resume
 remains blocked. Local regression uses synthetic microphone/model/TTS/PCM IO;
 the runner owns actual fresh-mic, audible speech, movement and interruption
 acceptance and must report these observations separately.
+
+## Explicit reconciliation of a known owned UUID
+
+A failed stop POST (including 404 for an expired UUID or a timeout) is followed
+by bounded independent GET observations. `/status` distinguishes `stop_request`
+(`endpoint`, sanitized `error_class`, optional numeric `http_status`) from
+`stop_observed`. UUID absence can set `stop_observed=true` while `unknown=true`
+and `owned_uuid` remain retained. That observation does not reopen output.
+There is no blind retry of the stop POST or movement.
+
+For a future unknown state with a known UUID, the authenticated Hub endpoint
+`POST /actions/stock-reconcile` accepts exactly this JSON structure (replace all
+example values with the current, explicitly reviewed binding):
+
+```json
+{
+  "expected_hub_boot_id": "CURRENT_HUB_BOOT_ID",
+  "owned_uuid": "00000000-0000-4000-8000-000000000001",
+  "operator_binding": {
+    "agent_boot_id": "CURRENT_AGENT_BOOT_ID",
+    "microphone_epoch": 0,
+    "policy_epoch": 0,
+    "microphone_enabled": false
+  }
+}
+```
+
+The UUID must equal the exact canonical known `stock_motion.owned_uuid` and the
+Hub boot must equal `stock_motion.hub_boot_id`. The operator binding comes from
+the current authenticated Agent `/operator` (`policy_epoch` is
+`motion_policy.epoch`). `motor_enabled` must already be explicitly false; the
+endpoint never changes microphone, quiet/privacy, volume, policy or factory
+state. Neither a missing UUID from an unknown movement POST nor a foreign UUID
+can be reconciled this way. No additional fields, duplicate JSON keys, nonfinite
+numbers or bodies over 4096 bytes are accepted.
+
+The endpoint takes the existing nonblocking Hub command lock, requires a latched
+unknown with that same owned UUID, and checks an error-free ready factory,
+cooperative app lock free, running list completely empty and actual state with
+known enabled/disabled control mode. It reads the typed current operator before
+those GETs and again immediately before clearing the latch; Agent boot, mic
+epoch/state and policy epoch must match the supplied original binding, with
+motors denied. Each operator read and the entire reconciliation observation
+window must complete within 300 ms from the beginning of the read/window.
+Stale, busy, changed, foreign or unavailable observations retain the latch.
+
+Successful explicit reconciliation returns `reconciled=true`,
+`uuid_absence_observed=true`, `pose_verified=false`, `hard_stop_certified=false`.
+It clears only this exact local latch/owned UUID and records the observed
+absence. Existing stop-request diagnostics remain available. It grants no
+permission, emits no motor/mic/factory write, and performs no wake, return,
+sleep or automatic retry. Further movement still requires a new current explicit
+motor permission and ordinary command admission. Denied HTTP replies use static
+error enums and do not return exception bodies or credentials.
+
+This endpoint cannot be injected into an older running Hub process. Installing
+the source requires an orderly restart; restart alone is not reconciliation.
+For a currently latched older process the runner may perform a separately
+reviewed one-time external transition: record its exact instance and known UUID,
+quiescence, fresh factory ready/free/empty and unchanged operator binding with
+motors denied; stop the old Hub and confirm its process is gone; repeat the
+factory/operator checks before starting the new Hub. Record the old latch and
+new boot, with no physical hard-stop claim. This is a deliberate bounded
+reconciliation, not a persistent recovery/reset framework.
+
+`Agent.capture` waits for the requested neutral expression's transport attempt
+to finish before opening arecord. A rejected expression still advances the
+completed version in ExpressionPlayer's `finally`, so a completed 409 alone does
+not block microphone capture. A hanging request can delay that wait or cause its
+finite timeout. Zero turns and an expression error do not establish which of
+those happened: actual capture/last-error/stream diagnostics are needed. Local
+tests specifically verify that a latched Hub's rejected neutral expression does
+not prevent subsequent synthetic capture. The historical device failure cause
+must remain unknown without the corresponding actual diagnostics.
