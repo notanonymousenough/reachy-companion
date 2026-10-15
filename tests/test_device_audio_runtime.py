@@ -20,7 +20,8 @@ runtime=importlib.util.module_from_spec(spec);spec.loader.exec_module(runtime)
 
 class DeviceRuntimeTests(unittest.TestCase):
     def test_invalid_pcm_controls_fail_before_agent_activation(self):
-        for option,value in (('--echo-tail-seconds','nan'),('--echo-tail-seconds','.1'),('--endpoint-silence-frames','9')):
+        for option,value in (('--echo-tail-seconds','nan'),('--echo-tail-seconds','.1'),('--endpoint-silence-frames','9'),
+                ('--stop-port','-1'),('--stop-port','65536'),('--stop-port','8780')):
             with self.subTest(option=option,value=value),patch.object(runtime,'Config'),patch.object(runtime,'agent') as agent:
                 argv=['device_audio_runtime','--config','fixture','--output','fixture-out','--owner-file','fixture-owner',
                     '--controller','controller','--allow-capture-output',option,value]

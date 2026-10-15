@@ -53,6 +53,7 @@ def main():
     p.add_argument('--controller',required=True);p.add_argument('--duration',type=float,default=90)
     p.add_argument('--allow-capture-output',action='store_true');p.add_argument('--allow-agent-mute',action='store_true');p.add_argument('--cleanup-only',action='store_true')
     p.add_argument('--port',type=int,default=8780)
+    p.add_argument('--stop-port',type=int)
     p.add_argument('--capture-device',choices=('reachymini_audio_src','plug:reachymini_audio_src'))
     p.add_argument('--capture-channel',type=int,choices=(0,1),default=0)
     p.add_argument('--echo-tail-seconds',type=float,default=.2)
@@ -67,6 +68,8 @@ def main():
     ResponseEndpoint(None,**endpoint_settings) # validate before activating an owner/microphone
     if not 1<=a.port<=65535 or a.lease_datagram_port is not None and not 1<=a.lease_datagram_port<=65535:
         raise ValueError('Explicit valid local transport ports required')
+    if a.stop_port is not None and (not 0<=a.stop_port<=65535 or a.stop_port==a.port):
+        raise ValueError('Explicit separate stop port required')
     if a.listen!='127.0.0.1':
         import ipaddress
         address=ipaddress.ip_address(a.listen)
@@ -95,7 +98,8 @@ def main():
             mute_owner=(lambda:mute_owned_agent(cfg,owner)) if a.allow_agent_mute else None)
         if a.lease_datagram_port is not None:
             datagram=LeaseDatagramServer(peer,cfg.token,a.listen,a.lease_datagram_port)
-        server=create_server(peer,cfg.token,bind=a.listen,port=a.port)
+        server=create_server(peer,cfg.token,bind=a.listen,port=a.port,**({'stop_port':a.stop_port} if a.stop_port is not None else {}))
+        if a.stop_port is not None:report['stop_port']=server.stop_address[1]
         threading.Thread(target=server.serve_forever,daemon=True).start()
         import webrtcvad
         capture_device=a.capture_device or cfg['audio']['capture_device']
@@ -149,7 +153,9 @@ def main():
             report['capture_call_seconds']=capture.call_seconds
             report['max_capture_call_ms']=capture.max_call_seconds*1000
             report['capture_closed']=capture.close()
-        if server:server.shutdown();server.server_close()
+        if server:
+            server.shutdown();server.server_close()
+            if a.stop_port is not None:report['stop_transport']=server.transport_status()
         if datagram:
             datagram.close();report['lease_datagram']=datagram.status()
             report['lease_datagram_execution_busy']=datagram.worker.is_alive()
@@ -175,6 +181,10 @@ def main():
             and report.get('peer_status',{}).get('watch_execution_busy') is False
             and report.get('peer_status',{}).get('operator_execution_busy') is False
             and report.get('peer_status',{}).get('operator_control_execution_busy') is False)
+        if a.stop_port is not None:
+            transport=report.get('stop_transport',{})
+            report['accepted']=(report['accepted'] and transport.get('media_handlers')==0
+                and transport.get('stop_handlers')==0 and transport.get('stop_listener_busy') is False)
         with a.output.open('x') as f:json.dump(report,f,ensure_ascii=False,indent=2)
     print(json.dumps(report,ensure_ascii=False),flush=True)
     if not report['accepted']:raise SystemExit(2)

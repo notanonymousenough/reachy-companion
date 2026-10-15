@@ -92,6 +92,7 @@ def admit_working_audio(ingest,state,event,now=None):
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     for name in ('config','companion-config','token-file','output'):p.add_argument('--'+name,type=Path,required=True)
+    p.add_argument('--peer-stop-port',type=int)
     p.add_argument('--peer-url',required=True);p.add_argument('--controller',required=True)
     p.add_argument('--duration',type=float,default=70);p.add_argument('--allow-capture-output',action='store_true')
     p.add_argument('--status-port',type=int,default=8790)
@@ -104,6 +105,7 @@ def main():
     if a.tts_gain is not None:PcmGain(a.tts_gain)
     if a.lease_datagram_port is not None and not 1<=a.lease_datagram_port<=65535:
         raise ValueError('Explicit valid datagram port required')
+    if a.peer_stop_port is not None and not 1<=a.peer_stop_port<=65535:raise ValueError('Bound peer stop port required')
     config=load(a.config);companion=Config(a.companion_config);hub=Hub(companion)
     if config.get('motion',{}).get('enabled'):raise ValueError('This first audio session requires a separately accepted joint motion profile')
     os.environ[config['gateway']['token_env']]=a.token_file.read_text().strip()
@@ -111,7 +113,8 @@ def main():
     initial_peer=client.call('/status');source=initial_peer['source_boot']
     if a.actual_agent_cancel and initial_peer.get('agent_mute_supported') is not True:
         raise ValueError('Device explicit Agent mute opt-in required')
-    playback=Playback(RemotePCM(client),chunk_frames=4096)
+    stop_client=client.at_port(a.peer_stop_port) if a.peer_stop_port is not None else client
+    playback=Playback(RemotePCM(client,**({'stop_port':a.peer_stop_port,'source_boot':source} if a.peer_stop_port is not None else {})),chunk_frames=4096)
     tts=PracticeTTS(HttpTTS(companion['network']['voice_url'],companion.token,timeout=5,
         max_event=companion['streaming']['max_event_bytes'],
         gain=a.tts_gain if a.tts_gain is not None else config.get('speech',{}).get('tts_gain',1)))
@@ -256,7 +259,7 @@ def main():
             max_scheduler_advance_ms=max(latencies,default=None))
         # Owned device stop uses a separate bounded job. An HTTP failure never
         # becomes a false physical stop-known acknowledgement.
-        stop_job=Job(client.call,'/stop');deadline=time.monotonic()+1
+        stop_job=Job(lambda:stop_client.call('/stop',**({'source_boot':source} if a.peer_stop_port is not None else {})));deadline=time.monotonic()+1
         while time.monotonic()<deadline and (not stop_job.future.done() or speech.status()['execution_busy']):time.sleep(.005)
         report['tts_pcm_levels']=tts.pcm_status()
         report['speech_after']=speech.status();report['peer_stop_execution_busy']=not stop_job.future.done()

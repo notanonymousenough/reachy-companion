@@ -223,10 +223,23 @@ class AudioPeer:
             with self.playback.lock:
                 if self.playback.backend.stream!=actual:raise RuntimeError('Retired stream stop')
                 self.playback.interrupt('remote_stop',preserve=False,wait=False)
-            receipt=dict(self.playback.backend.stop(actual));receipt['stream_id']=stream
+            job,result=self.playback.request_stop(actual) # deduplicate actual backend operation
+            job.join(self.playback.stop_timeout)
+            if job.is_alive():
+                return dict(stream_id=stream,verified_stopped=False,verified=False,consumed_frames=None,execution_busy=True)
+            receipt=dict(result.get('receipt',{}));receipt['stream_id']=stream
+            receipt['execution_busy']=self.playback.status()['execution_busy']
             self.last_output_end=self.clock()
             return receipt
         raise ValueError('Typed peer path')
+
+    def dispatch_stop(self,path,body):
+        """Dedicated listener: exact owned revocation, independent of permission."""
+        keys={'controller','source_boot'}|({'stream_id'} if path=='/stream-stop' else set())
+        if (path not in ('/stop','/stream-stop') or not isinstance(body,dict) or set(body)!=keys
+                or body.get('controller')!=self.controller or body.get('source_boot')!=self.boot_id):
+            raise ValueError('Exact current peer stop binding required')
+        return self.dispatch(path,{key:value for key,value in body.items() if key!='source_boot'})
 
     def on_close(self,observer):
         with self.lock:
@@ -234,6 +247,7 @@ class AudioPeer:
             else:self.close_observers.append(observer)
 
     def close(self,reason='shutdown'):
+        observers=[]
         with self.lock:
             if self.close_reason is None:
                 self.close_reason=reason
@@ -241,49 +255,105 @@ class AudioPeer:
                 self.first_close=dict(reason=reason,source_boot=self.boot_id,
                     last_accepted_age_ms=None if self.last_lease is None else max(0,(now-self.last_lease)*1000),
                     operator_age_remaining_ms=max(0,(self.operator_deadline-now)*1000),controller_lease_remaining_ms=max(0,(self.lease_deadline-now)*1000),lease_requests=self.lease_requests)
-                for observer in self.close_observers:
-                    try:self.first_close.update(observer(now))
-                    except Exception:self.first_close['observer_error']=True
-                self.close_observers.clear()
+                observers=self.close_observers;self.close_observers=[]
             self.closed=True;self.observation=None
         with self.playback.lock:self.playback.closed=True
-        return self.playback.interrupt('peer_withdrawal',preserve=False,wait=False)
+        result=self.playback.interrupt('peer_withdrawal',preserve=False,wait=False)
+        for observer in observers:
+            try:observed=observer(self.closed_at)
+            except Exception:observed={'observer_error':True}
+            with self.lock:self.first_close.update(observed)
+        return result
 
 
-def create_server(peer, token, bind='127.0.0.1', port=8780):
+def create_server(peer, token, bind='127.0.0.1', port=8780, *, stop_port=None):
     if len(token)<32:raise ValueError('Audio peer auth required')
-    slots=threading.BoundedSemaphore(4)
-    class Server(ThreadingHTTPServer):
-        def process_request(self, request, address):
-            if not slots.acquire(False):
-                self.shutdown_request(request)
-                return
-            try:super().process_request(request,address)
-            except BaseException:
-                slots.release()
-                raise
-        def process_request_thread(self, request, address):
-            try:super().process_request_thread(request,address)
-            finally:slots.release()
-    class Handler(BaseHTTPRequestHandler):
-        protocol_version='HTTP/1.1'
-        def setup(self):
-            super().setup();self.connection.setsockopt(socket.IPPROTO_TCP,socket.TCP_NODELAY,1)
-            self.connection.settimeout(.5)
-        def log_message(self,*args):pass
-        def do_POST(self):
-            if not hmac.compare_digest(self.headers.get('Authorization',''), 'Bearer '+token):
-                self.send_error(401);return
-            try:
-                size=int(self.headers.get('Content-Length','0'))
-                if not 0<size<=16384:raise ValueError('Peer request cap')
-                body=decode(self.rfile.read(size))
-                result=peer.dispatch(self.path,body)
-                payload=json.dumps(result).encode()
-                self.send_response(200);self.send_header('Content-Type','application/json')
-                self.send_header('Content-Length',str(len(payload)));self.end_headers();self.wfile.write(payload)
-            except Exception:self.send_error(409)
-    server=Server((bind,port),Handler);server.daemon_threads=True
+    if stop_port is not None and (type(stop_port) is not int or not 0<=stop_port<=65535):
+        raise ValueError('Explicit valid stop listener port required')
+    def listener(selected_port,control_only,capacity):
+        slots=threading.BoundedSemaphore(capacity)
+        class Server(ThreadingHTTPServer):
+            daemon_threads=True
+            def __init__(self,*args):
+                self.stop_server=self.stop_worker=None
+                self.lifecycle_lock=threading.Lock();self.before_start_stop=threading.Event();self.entered=threading.Event()
+                self.handlers_lock=threading.Lock();self.handlers=0
+                super().__init__(*args)
+            def process_request(self,request,address):
+                if not slots.acquire(False):self.shutdown_request(request);return
+                with self.handlers_lock:self.handlers+=1
+                try:super().process_request(request,address)
+                except BaseException:
+                    with self.handlers_lock:self.handlers-=1
+                    slots.release();raise
+            def process_request_thread(self,request,address):
+                try:super().process_request_thread(request,address)
+                finally:
+                    with self.handlers_lock:self.handlers-=1
+                    slots.release() # only actual connection handler return releases capacity
+            def serve_forever(self,poll_interval=.5):
+                try:
+                    with self.lifecycle_lock:
+                        if self.before_start_stop.is_set():return
+                        if self.stop_server is not None:
+                            self.stop_worker=threading.Thread(target=self.stop_server.serve_forever,kwargs={'poll_interval':.02},daemon=True)
+                            self.stop_worker.start()
+                        self.entered.set()
+                    super().serve_forever(poll_interval)
+                except BaseException:
+                    self.server_close();raise
+                finally:self._stop_control()
+            def _stop_control(self):
+                with self.lifecycle_lock:
+                    if self.stop_server is not None:
+                        self.stop_server.shutdown()
+                        if self.stop_worker and self.stop_worker.ident is not None and self.stop_worker is not threading.current_thread():self.stop_worker.join(.5)
+            def shutdown(self):
+                with self.lifecycle_lock:
+                    self.before_start_stop.set();entered=self.entered.is_set()
+                if entered:super().shutdown()
+                self._stop_control()
+            def server_close(self):
+                self._stop_control();super().server_close()
+                if self.stop_server is not None:self.stop_server.server_close()
+            def transport_status(self):
+                with self.handlers_lock:media=self.handlers
+                stop=self.stop_server
+                if stop:
+                    with stop.handlers_lock:control=stop.handlers
+                else:control=0
+                return dict(media_handlers=media,stop_handlers=control,
+                    stop_listener_busy=bool(self.stop_worker and self.stop_worker.is_alive()))
+        class Handler(BaseHTTPRequestHandler):
+            protocol_version='HTTP/1.1'
+            def setup(self):
+                super().setup();self.connection.setsockopt(socket.IPPROTO_TCP,socket.TCP_NODELAY,1)
+                self.connection.settimeout(.5)
+            def log_message(self,*args):pass
+            def do_POST(self):
+                if control_only:self.close_connection=True
+                if not hmac.compare_digest(self.headers.get('Authorization',''), 'Bearer '+token):
+                    self.send_error(401);return
+                if control_only and self.path not in ('/stop','/stream-stop'):
+                    self.send_error(404);return
+                try:
+                    size=int(self.headers.get('Content-Length','0'))
+                    if not 0<size<=(1024 if control_only else 16384):raise ValueError('Peer request cap')
+                    body=decode(self.rfile.read(size))
+                    result=peer.dispatch_stop(self.path,body) if control_only else peer.dispatch(self.path,body)
+                    payload=json.dumps(result).encode()
+                    self.send_response(200);self.send_header('Content-Type','application/json')
+                    if control_only:self.send_header('Connection','close')
+                    self.send_header('Content-Length',str(len(payload)));self.end_headers();self.wfile.write(payload)
+                except OSError:self.close_connection=True
+                except Exception:
+                    try:self.send_error(409)
+                    except OSError:self.close_connection=True
+        return Server((bind,selected_port),Handler)
+    server=listener(port,False,4)
+    try:server.stop_server=listener(stop_port,True,2) if stop_port is not None else None
+    except BaseException:server.server_close();raise
+    server.stop_address=server.stop_server.server_address if server.stop_server else None
     return server
 
 
@@ -299,7 +369,15 @@ class PeerClient:
                 or endpoint.query or endpoint.fragment or endpoint.path not in ('','/')):
             raise ValueError('Owned loopback or explicit RFC1918 peer transport required')
         self.url,self.token,self.controller,self.timeout=url.rstrip('/'),token,controller,timeout
+        self.trusted_private_lan=trusted_private_lan
         self.opener=build_opener(ProxyHandler({}))
+    def at_port(self,port):
+        if type(port) is not int or not 1<=port<=65535:raise ValueError('Bound stop port required')
+        endpoint=urlsplit(self.url)
+        if port==(endpoint.port or 80):raise ValueError('Separate stop listener must not use the media port')
+        host=endpoint.hostname
+        return PeerClient('http://'+('['+host+']' if ':' in host else host)+':'+str(port),
+            self.token,self.controller,self.timeout,trusted_private_lan=self.trusted_private_lan)
     def call(self,path,**body):
         body['controller']=self.controller
         request=Request(self.url+path,data=json.dumps(body).encode(),headers={
@@ -334,7 +412,12 @@ class PersistentPeer:
 
 
 class RemotePCM:
-    def __init__(self,client):self.client=client;self.transport=PersistentPeer(client);self.stream_map={}
+    def __init__(self,client,*,stop_port=None,source_boot=None):
+        if stop_port is not None and (not isinstance(source_boot,str) or not 1<=len(source_boot)<=128):
+            raise ValueError('Current peer boot required for separate stop transport')
+        self.client=client;self.transport=PersistentPeer(client);self.stream_map={}
+        self.stop_client=client.at_port(stop_port) if stop_port is not None else None
+        self.source_boot=source_boot
     def reserve(self,stream):
         self.transport.close()
         result=self.transport.call('/reserve',stream_id=stream)
@@ -347,6 +430,9 @@ class RemotePCM:
     def progress(self,stream):return self.transport.call('/progress',stream_id=stream)
     def finish(self,stream):return self.transport.call('/finish',stream_id=stream)
     def stop(self,stream):
+        if self.stop_client is not None:
+            # Never acquire/close the media lock, or retry on the media listener.
+            return self.stop_client.call('/stream-stop',source_boot=self.source_boot,stream_id=stream)
         try:return self.client.call('/stream-stop',stream_id=stream)
         finally:self.transport.close()
 
