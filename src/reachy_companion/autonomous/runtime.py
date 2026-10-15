@@ -138,10 +138,17 @@ class Scheduler:
         if self.closed:return
         # Revoke in an independent real transport slot. The occupied context
         # request remains accounted until its actual completion.
-        self.revoke_context(self.state.authority,True)
         self.closed=True
-        if self.speech_adapter:self.speech_adapter.close()
-        if self.audio_adapter:self.audio_adapter.close()
+        error=None
+        finalizers=[lambda:self.revoke_context(self.state.authority,True)]
+        if self.speech_adapter:finalizers.append(self.speech_adapter.close)
+        if self.audio_adapter:finalizers.append(self.audio_adapter.close)
+        for finalize in finalizers:
+            try:finalize()
+            except BaseException as exc:
+                if error is None:error=exc
+                else:error.add_note('Additional scheduler close failure: '+type(exc).__name__)
+        if error is not None:raise error
 
     def speech_activity(self,origin):
         # Trusted classifier hook; echo cannot create a State human utterance.
@@ -263,6 +270,7 @@ class Scheduler:
 
     def run(self, duration_s, events=(), output=None):
         start = time.monotonic()
+        primary=None
         try:
             pending = iter(events)
             event = next(pending, None)
@@ -273,11 +281,23 @@ class Scheduler:
                     event = next(pending, None)
                 self.advance(now)
                 time.sleep(min(0.01, self.config['period_s']/10))
+        except BaseException as exc:
+            primary=exc;raise
         finally:
             # Exceptions/interrupts withdraw admission too. An occupied worker
             # remains occupied; closing never certifies model/physical stop.
-            try:self.close()
-            finally:motion_stopped=self.motion_adapter.close() if self.motion_adapter else True
+            cleanup_error=None;motion_stopped=self.motion_adapter is None
+            finalizers=[self.close]
+            if self.motion_adapter:finalizers.append(self.motion_adapter.close)
+            for index,finalize in enumerate(finalizers):
+                try:
+                    result=finalize()
+                    if index==1:motion_stopped=result
+                except BaseException as exc:
+                    if primary is not None:primary.add_note('Scheduler run cleanup failure: '+type(exc).__name__)
+                    elif cleanup_error is None:cleanup_error=exc
+                    else:cleanup_error.add_note('Additional scheduler run cleanup failure: '+type(exc).__name__)
+            if cleanup_error is not None:raise cleanup_error
         self.state.ingest(dict(type='operator', muted=True),time.monotonic())
         report = dict(mode='replay' if isinstance(self.gateway, ReplayGateway) else 'real_model_shadow',
                       actuators='bounded_native_antenna17' if self.motion_adapter else 'simulated', counts=dict(self.state.counts),

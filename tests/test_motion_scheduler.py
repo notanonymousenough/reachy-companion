@@ -53,12 +53,59 @@ class SchedulerMotionTests(unittest.TestCase):
         class Adapter:
             hub=SimpleNamespace(boot_id=None)
             closed=False
-            def close(self):self.closed=True;return False
+            def close(self):self.closed=True;raise OSError('fixture motion close failure')
         from reachy_companion.autonomous.runtime import ReplayGateway
         adapter=Adapter();scheduler=Scheduler(self.config(),ReplayGateway(),adapter,Speech())
         with patch.object(scheduler,'advance',side_effect=KeyboardInterrupt):
-            with self.assertRaisesRegex(RuntimeError,'fixture close failure'):scheduler.run(1)
+            with self.assertRaises(KeyboardInterrupt) as caught:scheduler.run(1)
+        self.assertTrue(any('RuntimeError' in note for note in caught.exception.__notes__))
+        self.assertTrue(any('OSError' in note for note in caught.exception.__notes__))
         self.assertTrue(scheduler.closed);self.assertTrue(adapter.closed)
+
+    def test_all_close_failures_attempted_and_first_exception_preserved(self):
+        from reachy_companion.autonomous.runtime import ReplayGateway
+        calls=[];first=RuntimeError('fixture revoke failure');second=ValueError('fixture speech failure')
+        class Speech:
+            def close(self):calls.append('speech');raise second
+        class Audio:
+            closed=False
+            def close(self):self.closed=True;calls.append('audio');raise OSError('fixture audio failure')
+        audio=Audio();scheduler=Scheduler(self.config(),ReplayGateway(),speech_adapter=Speech(),audio_adapter=audio)
+        def revoke(*args):calls.append('context');raise first
+        with patch.object(scheduler,'revoke_context',side_effect=revoke):
+            with self.assertRaises(RuntimeError) as caught:scheduler.close()
+        self.assertIs(caught.exception,first);self.assertEqual(calls,['context','speech','audio'])
+        self.assertTrue(scheduler.closed);self.assertTrue(audio.closed);self.assertEqual(len(first.__notes__),2)
+        scheduler.close();self.assertEqual(len(calls),3)
+
+    def test_failing_speech_close_withdraws_real_audio_adapter_without_releasing_held_stt(self):
+        from reachy_companion.autonomous.runtime import ReplayGateway
+        from reachy_companion.autonomous.audio_adapter import AudioAdapter
+        entered=threading.Event();release=threading.Event();revoked=threading.Event()
+        class STT:
+            def transcribe(self,pcm):entered.set();release.wait(2);return 'late fixture transcript'
+        class Speech:
+            def close(self):raise RuntimeError('fixture speech close failure')
+        class Gateway(ReplayGateway):
+            def revoke_context(self,authority,terminal=False):
+                revoked.set();release.wait(2);return dict(revoked=True,terminal=terminal)
+        cfg=self.config();cfg['context']['enabled']=True
+        audio=AudioAdapter(STT());scheduler=Scheduler(cfg,Gateway(),speech_adapter=Speech(),audio_adapter=audio)
+        authority=scheduler.state.authority
+        operator=dict(binding=('fixture-agent',1,1),microphone_enabled=True,quiet=False,privacy_all=False,valid_until=time.monotonic()+1)
+        try:
+            audio.bind_source('fixture-source',0);audio.advance(authority,operator)
+            self.assertTrue(audio.submit(b'\x00\x00'*160,source_boot='fixture-source',sequence=1,captured_end=time.monotonic(),authority=authority,operator_binding=operator['binding']))
+            audio.advance(authority,operator);self.assertTrue(entered.wait(1));job=audio.job
+            with self.assertRaisesRegex(RuntimeError,'fixture speech close failure'):scheduler.close()
+            self.assertTrue(revoked.wait(1));self.assertFalse(scheduler.context_terminal_job.future.done())
+            self.assertTrue(audio.closed);self.assertIs(audio.job,job);self.assertTrue(audio.status()['execution_busy'])
+            self.assertFalse(audio.submit(b'\x00\x00',source_boot='fixture-source',sequence=2,captured_end=time.monotonic(),authority=authority,operator_binding=operator['binding']))
+            release.set();job.join(1);self.assertIsNone(audio.advance(authority,operator));self.assertIsNone(audio.result)
+            self.assertFalse(audio.status()['execution_busy'])
+        finally:
+            release.set();audio.close()
+            if scheduler.context_terminal_job:scheduler.context_terminal_job.thread.join(1)
 
     def test_initial_event_iterator_failure_also_closes_constructed_owner(self):
         class Events:
