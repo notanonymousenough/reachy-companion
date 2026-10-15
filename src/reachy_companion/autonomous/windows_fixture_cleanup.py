@@ -39,6 +39,11 @@ class FileStandardInformation(C.Structure):
         ('delete_pending',C.c_ubyte),('directory',C.c_ubyte)]
 
 
+class RenameInformation(C.Structure):
+    # WCHAR is always UTF-16 on Windows, including tests hosted on POSIX.
+    _fields_=[('replace',C.c_uint32),('root',C.c_void_p),('length',C.c_uint32),('name',C.c_uint16*1)]
+
+
 class WindowsKernel:
     """Documented kernel32 API only; unsupported IDs/volumes fail closed."""
     def __init__(self):
@@ -68,10 +73,11 @@ class WindowsKernel:
         filesystem=C.create_unicode_buffer(32)
         if not self.lib.GetVolumeInformationW(root,None,0,None,None,None,filesystem,len(filesystem)):self.failed()
         if filesystem.value.upper()!='NTFS':raise ValueError('NTFS cleanup only')
-    def open(self,path,*,directory=False,delete=False,share=7):
+    def open(self,path,*,directory=False,delete=False,share=7,traverse=False):
         # Attribute-only access permits SQLite READ/WRITE handles which do not
         # share DELETE. All our pins share deletion so journals can close/remove.
-        access=0x80|(0x10000 if delete else 0) # FILE_READ_ATTRIBUTES | DELETE
+        if traverse and not directory:raise ValueError('Rename target root must be a directory')
+        access=0x80|(0x10000 if delete else 0)|(0x20 if traverse else 0) # attributes | DELETE | FILE_TRAVERSE
         flags=0x00200000|(0x02000000 if directory else 0) # OPEN_REPARSE_POINT | BACKUP_SEMANTICS
         value=self.lib.CreateFileW(str(path),access,share,None,3,flags,None)
         if value is None or value==C.c_void_p(-1).value:self.failed()
@@ -97,6 +103,15 @@ class WindowsKernel:
     def delete(self,handle):
         value=Disposition(1)
         if not self.lib.SetFileInformationByHandle(handle,4,C.byref(value),C.sizeof(value)):self.failed()
+    def rename(self,handle,directory,name):
+        if (type(name) is not str or not name or len(name)>128 or name in ('.','..')
+                or any(c in name for c in '/\\:\x00')):raise ValueError('Simple quarantine component required')
+        encoded=name.encode('utf-16-le')
+        size=max(C.sizeof(RenameInformation),RenameInformation.name.offset+len(encoded)+2)
+        buffer=C.create_string_buffer(size);value=RenameInformation.from_buffer(buffer)
+        value.replace=0;value.root=directory;value.length=len(encoded)
+        C.memmove(C.addressof(buffer)+RenameInformation.name.offset,encoded,len(encoded))
+        if not self.lib.SetFileInformationByHandle(handle,3,buffer,size):self.failed()
     def close(self,handle):
         if not self.lib.CloseHandle(handle):self.failed()
 
@@ -181,6 +196,7 @@ class WindowsOwnedCleanup:
             # The exclusive parent contract keeps these paths stable thereafter.
             for parent in reversed(self.path.parents):self.ancestors.append((parent,self.api.open(parent,directory=True)))
             self.directory=self.api.open(self.path,directory=True)
+            self.original_directory_id=self.api.identity(self.directory)
             for name in os.listdir(self.path):
                 if name not in FILES:raise CleanupOwnershipConflict('Unexpected cleanup entry')
                 self.files[name]=self.api.open(self.path/name)
@@ -224,52 +240,111 @@ class WindowsOwnedCleanup:
             if handle is not None and self.api.delete_pending(handle):
                 self.api.close(handle);del self.files[name]
         self.verify(source_name=True)
-    def remove(self):
-        self.verify(source_name=True)
-        self.quarantine=self.path.parent/('.voice-cleanup-'+uid());self.quarantine.mkdir(mode=0o700)
-        delete_handles=[]
+    def verify_transfer(self,remaining,tokens,*,detached=False):
+        for parent,handle in self.ancestors:self.check(parent,handle,directory=True)
+        self.check(self.location,self.directory,directory=True)
+        self.check(self.quarantine,self.quarantine_handle,directory=True)
+        if set(os.listdir(self.location))!=set(remaining):raise CleanupOwnershipConflict('Source remaining set changed')
+        expected={token.name for _,token in tokens}|({'fixture'} if detached else set())
+        if set(os.listdir(self.quarantine))!=expected:raise CleanupOwnershipConflict('Quarantine entries changed')
+        for name in remaining:self.check(self.location/name,self.files[name])
+        for name,token in tokens:self.check(token,self.files[name])
+    def original_reused(self):
+        # Only a confirmed detached original plus a DISTINCT FileID is reuse.
+        # Unknown lookup is an error, never absence; no Path.exists suppression.
+        try:handle=self.api.open(self.path,directory=True)
+        except FileNotFoundError:return False
         try:
-            self.quarantine_handle=self.api.open(self.quarantine,directory=True)
-            destination=self.quarantine/'fixture';os.rename(self.path,destination);self.location=destination
-            names=self.verify();tokens=[]
+            if self.api.identity(handle)==self.api.identity(self.directory):
+                raise CleanupOwnershipConflict('Original directory still bound at source')
+            return True
+        finally:self.api.close(handle)
+    def remove(self):
+        names=self.verify(source_name=True)
+        if set(names)!=set(self.files):raise CleanupOwnershipConflict('Unresolved closed-SQLite journal pins')
+        self.quarantine=self.path.parent/('.voice-cleanup-'+uid());self.quarantine.mkdir(mode=0o700)
+        handles=[];tokens=[];remaining=set(names);primary=None
+        try:
+            self.quarantine_handle=self.api.open(self.quarantine,directory=True,traverse=True)
+            self.verify_transfer(remaining,tokens)
+            # Windows denies ancestor-directory rename with open child handles.
+            # Retain ALL pins: move each original file by its checked handle first.
             for name in sorted(names):
-                token=self.quarantine/('owned-'+uid());os.rename(self.location/name,token)
-                self.check(token,self.files[name]);tokens.append((name,token))
-            if os.listdir(self.location):raise CleanupOwnershipConflict('New entries after detachment')
-            # Acquire every identity-matched DELETE handle before any deletion.
+                self.verify_transfer(remaining,tokens)
+                handle=self.checked_handle(self.location/name,self.files[name],delete=True);handles.append(handle)
+                token=self.quarantine/('owned-'+uid())
+                self.api.rename(handle,self.quarantine_handle,token.name)
+                remaining.remove(name);tokens.append((name,token))
+                self.verify_transfer(remaining,tokens)
+            # Empty source only; original directory FileID remains authoritative.
+            directory_delete=self.checked_handle(self.location,self.directory,directory=True,delete=True)
+            handles.append(directory_delete);self.verify_transfer(remaining,tokens)
+            self.api.rename(directory_delete,self.quarantine_handle,'fixture')
+            self.location=self.quarantine/'fixture'
+            self.verify_transfer(set(),tokens,detached=True)
+            self.original_reused() # deny unknown/new source lookup BEFORE any deletion
+            # Full final delete set, including both directories, BEFORE first delete.
+            final=[]
             for name,token in tokens:
-                delete_handles.append((name,token,self.checked_handle(token,self.files[name],delete=True)))
-            for name,token,handle in delete_handles:
-                self.api.delete(handle);self.api.close(self.files.pop(name))
-            while delete_handles:
-                _,_,handle=delete_handles.pop();self.api.close(handle)
-            # Close removed SQLite journal pins which disappeared on SQLite close.
-            while self.files:
-                _,handle=self.files.popitem();self.api.close(handle)
-            self.remove_directory(self.location,'directory')
-            self.remove_directory(self.quarantine,'quarantine_handle')
-            if self.quarantine.exists():raise CleanupOwnershipConflict('Quarantine deletion not complete')
+                handle=self.checked_handle(token,self.files[name],delete=True);handles.append(handle)
+                final.append((name,token,handle))
+            quarantine_delete=self.checked_handle(self.quarantine,self.quarantine_handle,directory=True,delete=True)
+            handles.append(quarantine_delete)
+            self.verify_transfer(set(),tokens,detached=True)
+            for name,token,handle in final:
+                if self.api.identity(handle)!=self.api.identity(self.files[name]):raise CleanupOwnershipConflict('Delete set changed')
+            if (self.api.identity(directory_delete)!=self.api.identity(self.directory)
+                    or self.api.identity(quarantine_delete)!=self.api.identity(self.quarantine_handle)):
+                raise CleanupOwnershipConflict('Delete directory set changed')
+            # Commit deletion only after complete transfer and final set verification.
+            for name,token,handle in final:self.api.delete(handle)
+            # Close all file DELETE/rename handles and pins before empty dirs delete.
+            file_handles=[h for h in handles if h not in (directory_delete,quarantine_delete)]
+            for handle in file_handles:self.api.close(handle);handles.remove(handle)
+            for name in list(self.files):self.api.close(self.files.pop(name))
+            if os.listdir(self.location):raise CleanupOwnershipConflict('Detached directory no longer empty')
+            self.api.delete(directory_delete);self.api.close(self.directory);self.directory=None
+            self.api.close(directory_delete);handles.remove(directory_delete)
+            if os.listdir(self.quarantine):raise CleanupOwnershipConflict('Quarantine not empty after owned deletion')
+            self.api.delete(quarantine_delete);self.api.close(self.quarantine_handle);self.quarantine_handle=None
+            self.api.close(quarantine_delete);handles.remove(quarantine_delete)
+            # Keep original FileID as metadata after its last handle is closed.
+            reused=self.original_reused_after_close()
         except BaseException as exc:
-            raise CleanupOwnershipConflict('Windows cleanup preserved remaining quarantine',str(self.quarantine)) from exc
+            primary=exc
+            raise CleanupOwnershipConflict('Windows cleanup preserved remaining locations',str(self.quarantine)) from exc
         finally:
-            while delete_handles:
-                _,_,handle=delete_handles.pop();self.api.close(handle)
+            errors=[]
+            while handles:
+                handle=handles.pop()
+                if primary is not None:close_after_error(primary,lambda:self.api.close(handle))
+                else:
+                    try:self.api.close(handle)
+                    except BaseException as exc:errors.append(exc)
+            if errors:raise errors[0]
         return dict(owned_files_removed=True,cleanup_contract='exclusive_private_quarantine',
             cleanup_backend='win32_local_ntfs_file_id_delete_handle',adversarial_same_uid_race_safe=False,
-            original_path_reused=self.path.exists())
-    def remove_directory(self,path,attribute):
-        if os.listdir(path):raise CleanupOwnershipConflict('Directory not empty')
-        handle=self.checked_handle(path,getattr(self,attribute),directory=True,delete=True)
+            original_path_reused=reused)
+    def original_reused_after_close(self):
+        try:handle=self.api.open(self.path,directory=True)
+        except FileNotFoundError:return False
         try:
-            self.api.delete(handle);self.api.close(getattr(self,attribute));setattr(self,attribute,None)
+            if self.api.identity(handle)==self.original_directory_id:raise CleanupOwnershipConflict('Original source identity reappeared')
+            return True
         finally:self.api.close(handle)
-        if path.exists():raise CleanupOwnershipConflict('Directory deletion not complete')
     def release_lock(self,lock_fd):return # failure preserves original lock/quarantine
     def close(self):
-        for handle in self.files.values():self.api.close(handle)
-        self.files.clear()
+        errors=[]
+        def attempt(handle):
+            try:self.api.close(handle)
+            except BaseException as exc:errors.append(exc)
+        while self.files:
+            _,handle=self.files.popitem();attempt(handle)
         for attribute in ('directory','quarantine_handle'):
             handle=getattr(self,attribute,None)
-            if handle is not None:self.api.close(handle);setattr(self,attribute,None)
-        for _,handle in self.ancestors:self.api.close(handle)
-        self.ancestors.clear()
+            if handle is not None:setattr(self,attribute,None);attempt(handle)
+        while self.ancestors:
+            _,handle=self.ancestors.pop();attempt(handle)
+        if errors:
+            for error in errors[1:]:errors[0].add_note('Additional owned handle close: '+str(error))
+            raise errors[0]
