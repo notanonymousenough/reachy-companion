@@ -1,6 +1,8 @@
-"""Finite owned realtime audio service. Device capture/PCM only; no inference."""
+"""Owned device capture/PCM, finite by default; lease consumes an existing grant."""
 import argparse
 import json
+import os
+import stat
 import signal
 import threading
 import time
@@ -9,14 +11,54 @@ from urllib.request import Request,build_opener,ProxyHandler
 from reachy_companion.config import Config
 from reachy_companion.autonomous.alsa_capture import AlsaCapture
 from reachy_companion.autonomous.alsa_pcm import AlsaPCM
-from reachy_companion.autonomous.audio_peer import diagnostic_operator,AudioPeer,create_server
+from reachy_companion.autonomous.audio_peer import diagnostic_operator,AudioPeer,create_server,owner_binding,lease_authority
 from reachy_companion.autonomous.playback import Playback
 from reachy_companion.autonomous.response_endpoint import ResponseEndpoint
-from reachy_companion.autonomous.contracts import uid
+from reachy_companion.autonomous.contracts import uid,decode
 from reachy_companion.autonomous.lease_datagram import LeaseDatagramServer
 from reachy_companion.autonomous.pcm_controls import StereoChannels,CaptureExclusion
 
 HTTP=build_opener(ProxyHandler({}))
+
+
+def claim_lease_owner(path,actual,controller):
+    """Consume an already granted private owner once. Never activate its mic."""
+    if not isinstance(controller,str) or not 1<=len(controller)<=128:raise ValueError('Exact lease controller required')
+    import fcntl
+    fd=os.open(path,os.O_RDWR|os.O_NOFOLLOW)
+    try:
+        fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        info=os.fstat(fd);named=os.stat(path,follow_symlinks=False)
+        if (not stat.S_ISREG(info.st_mode) or info.st_nlink!=1 or info.st_size>8192
+                or info.st_uid!=os.getuid() or stat.S_IMODE(info.st_mode)&0o077
+                or (info.st_dev,info.st_ino)!=(named.st_dev,named.st_ino)):
+            raise ValueError('Pinned private owner file required')
+        owner=decode(os.read(fd,8193))
+        if (not isinstance(owner,dict) or 'lease_source_claim' in owner
+                or not isinstance(owner.get('owner_id'),str) or not 1<=len(owner['owner_id'])<=128
+                or type(owner.get('initial_microphone_epoch')) is not int or not 0<=owner['initial_microphone_epoch']<2**63-1
+                or type(owner.get('owned_microphone_epoch')) is not int
+                or owner['owned_microphone_epoch']!=owner['initial_microphone_epoch']+1):
+            raise ValueError('Fresh one-shot lease owner required')
+        lease_authority(owner_binding(owner))
+        if (type(actual.get('microphone_epoch')) is not int or type(actual.get('motion_policy',{}).get('epoch')) is not int
+                or actual.get('agent_boot_id')!=owner['agent_boot_id'] or actual.get('microphone_epoch')!=owner['owned_microphone_epoch']
+                or actual.get('microphone_owner_id')!=owner['owner_id'] or actual.get('microphone_enabled') is not True
+                or actual.get('capture_active') is not False or actual.get('listening') is not False
+                or actual.get('phase')!='paused' or actual.get('microphone_state_error')
+                or actual.get('motion_policy',{}).get('epoch')!=owner['policy_epoch']
+                or actual['motion_policy'].get('quiet') is not False or actual['motion_policy'].get('privacy_all') is not False):
+            raise ValueError('Already granted exact owner is not current')
+        source=uid();owner['lease_source_claim']=dict(schema='audio-lease-claim-1',controller=controller,source_boot=source)
+        raw=json.dumps(owner,separators=(',',':')).encode();os.lseek(fd,0,os.SEEK_SET)
+        view=memoryview(raw)
+        while view:
+            count=os.write(fd,view)
+            if count<=0:raise OSError('Owner claim write incomplete')
+            view=view[count:]
+        os.ftruncate(fd,len(raw));os.fsync(fd)
+        return fd,owner,source
+    except BaseException:os.close(fd);raise
 
 def agent(cfg,path,payload=None):
     request=Request(cfg['network']['agent_url']+path,
@@ -28,15 +70,16 @@ def agent(cfg,path,payload=None):
     return json.loads(raw)
 
 
-def cleanup(cfg,owner_path):
-    if not owner_path.exists():return
-    owner=json.loads(owner_path.read_text());actual=agent(cfg,'/operator')
+def cleanup(cfg,owner_path,*,expected_owner=None):
+    if expected_owner is None and not owner_path.exists():return
+    owner=dict(expected_owner) if expected_owner is not None else json.loads(owner_path.read_text())
+    actual=agent(cfg,'/operator')
     if actual['agent_boot_id']!=owner['agent_boot_id']:return
     if (actual['microphone_epoch']==owner['owned_microphone_epoch']
             and actual.get('microphone_owner_id')==owner['owner_id']):
         agent(cfg,'/microphone',dict(enabled=False,expected_boot_id=owner['agent_boot_id'],
             expected_epoch=owner['owned_microphone_epoch'],expected_owner_id=owner['owner_id']))
-    elif actual['microphone_epoch']==owner['initial_microphone_epoch']:
+    elif 'lease_source_claim' not in owner and actual['microphone_epoch']==owner['initial_microphone_epoch']:
         agent(cfg,'/microphone',dict(enabled=False,expected_boot_id=owner['agent_boot_id'],
             expected_epoch=owner['initial_microphone_epoch']))
 
@@ -50,7 +93,8 @@ def mute_owned_agent(cfg,owner):
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     for name in ('config','output','owner-file'):p.add_argument('--'+name,type=Path,required=True)
-    p.add_argument('--controller',required=True);p.add_argument('--duration',type=float,default=90)
+    p.add_argument('--controller',required=True);p.add_argument('--duration',type=float)
+    p.add_argument('--lifetime',choices=('finite','lease'),default='finite')
     p.add_argument('--allow-capture-output',action='store_true');p.add_argument('--allow-agent-mute',action='store_true');p.add_argument('--cleanup-only',action='store_true')
     p.add_argument('--port',type=int,default=8780)
     p.add_argument('--stop-port',type=int)
@@ -63,6 +107,7 @@ def main():
     p.add_argument('--lease-datagram-port',type=int)
     a=p.parse_args();cfg=Config(a.config)
     if a.cleanup_only:cleanup(cfg,a.owner_file);return
+    if a.lifetime=='finite' and a.duration is None:a.duration=90
     channels=StereoChannels(a.capture_channel);exclusion=CaptureExclusion(a.echo_tail_seconds)
     endpoint_settings=dict(max_seconds=a.endpoint_max_seconds,silence_frames=a.endpoint_silence_frames)
     ResponseEndpoint(None,**endpoint_settings) # validate before activating an owner/microphone
@@ -70,32 +115,38 @@ def main():
         raise ValueError('Explicit valid local transport ports required')
     if a.stop_port is not None and (not 0<=a.stop_port<=65535 or a.stop_port==a.port):
         raise ValueError('Explicit separate stop port required')
+    if a.lifetime=='lease' and a.stop_port is None:raise ValueError('Lease owner requires independent stop listener')
     if a.listen!='127.0.0.1':
         import ipaddress
         address=ipaddress.ip_address(a.listen)
         if not any(address in ipaddress.ip_network(network) for network in ('10.0.0.0/8','172.16.0.0/12','192.168.0.0/16')):
             raise ValueError('Explicit local private IPv4 interface required')
-    if (not a.allow_capture_output or not 1<=a.duration<=180 or a.output.exists() or a.owner_file.exists()
+    if (not a.allow_capture_output or a.lifetime=='finite' and not 1<=a.duration<=180
+            or a.lifetime=='lease' and a.duration is not None or a.output.exists()
+            or a.lifetime=='finite' and a.owner_file.exists() or a.lifetime=='lease' and not a.owner_file.exists()
             or not 1<=len(a.controller)<=128):raise ValueError('Explicit fresh finite audio owner required')
     before=agent(cfg,'/operator');policy=before['motion_policy']
-    if (before['microphone_enabled'] or before['capture_active'] or before['phase']!='paused'
-            or policy['quiet'] or policy['privacy_all']):raise RuntimeError('Idle operator baseline required')
-    owner=dict(agent_boot_id=before['agent_boot_id'],initial_microphone_epoch=before['microphone_epoch'],
-        owned_microphone_epoch=before['microphone_epoch']+1,owner_id=uid(),policy_epoch=policy['epoch'])
-    with a.owner_file.open('x') as f:json.dump(owner,f);f.flush();__import__('os').fsync(f.fileno())
-    report=dict(mode='finite_realtime_device_audio_owner',accepted=False,controller=a.controller,inference_on_robot=False,
+    owner_fd=None;source=None
+    if a.lifetime=='lease':owner_fd,owner,source=claim_lease_owner(a.owner_file,before,a.controller)
+    else:
+        if (before['microphone_enabled'] or before['capture_active'] or before['phase']!='paused'
+                or policy['quiet'] or policy['privacy_all']):raise RuntimeError('Idle operator baseline required')
+        owner=dict(agent_boot_id=before['agent_boot_id'],initial_microphone_epoch=before['microphone_epoch'],
+            owned_microphone_epoch=before['microphone_epoch']+1,owner_id=uid(),policy_epoch=policy['epoch'])
+        with a.owner_file.open('x') as f:json.dump(owner,f);f.flush();__import__('os').fsync(f.fileno())
+    report=dict(mode=a.lifetime+'_realtime_device_audio_owner',lifetime=a.lifetime,continuous_acceptance=False,accepted=False,controller=a.controller,inference_on_robot=False,
         raw_audio_retained=False,physical_motor_commands=0,operator_before=diagnostic_operator(before),capture_frames=0,
         capture_timestamp_samples=0,utterances=0,no_response_windows=0,owned_output_frames_excluded=0)
     peer=capture=server=endpoint=datagram=None;stop=threading.Event()
     for signum in (signal.SIGTERM,signal.SIGINT):signal.signal(signum,lambda *_:stop.set())
     try:
-        actual=agent(cfg,'/microphone',dict(enabled=True,listen=False,
-            expected_boot_id=owner['agent_boot_id'],expected_epoch=owner['initial_microphone_epoch'],owner_id=owner['owner_id']))
+        actual=(before if a.lifetime=='lease' else agent(cfg,'/microphone',dict(enabled=True,listen=False,
+            expected_boot_id=owner['agent_boot_id'],expected_epoch=owner['initial_microphone_epoch'],owner_id=owner['owner_id'])))
         if actual.get('microphone_owner_id')!=owner['owner_id'] or actual['microphone_epoch']!=owner['owned_microphone_epoch']:
             raise RuntimeError('Mic activation owner mismatch')
         playback=Playback(AlsaPCM(cfg['audio']['playback_device']),chunk_frames=4096)
         peer=AudioPeer(playback,lambda:agent(cfg,'/operator'),owner,controller=a.controller,
-            mute_owner=(lambda:mute_owned_agent(cfg,owner)) if a.allow_agent_mute else None)
+            mute_owner=(lambda:mute_owned_agent(cfg,owner)) if a.allow_agent_mute else None,lifetime=a.lifetime,source_boot=source)
         if a.lease_datagram_port is not None:
             datagram=LeaseDatagramServer(peer,cfg.token,a.listen,a.lease_datagram_port)
         server=create_server(peer,cfg.token,bind=a.listen,port=a.port,**({'stop_port':a.stop_port} if a.stop_port is not None else {}))
@@ -106,7 +157,7 @@ def main():
         report['capture_device']=capture_device
         endpoint=ResponseEndpoint(webrtcvad.Vad(2),**endpoint_settings)
         start=time.monotonic()
-        while not stop.is_set() and not peer.closed and time.monotonic()-start<a.duration:
+        while not stop.is_set() and not peer.closed and (a.lifetime=='lease' or time.monotonic()-start<a.duration):
             if not peer.permitted():
                 endpoint.clear();time.sleep(.003);continue
             if capture is None:capture=AlsaCapture(capture_device)
@@ -136,7 +187,7 @@ def main():
             capture_timestamp_provenance='alsa_monotonic_available_position',peer_close_reason=peer.close_reason,
             max_operator_ms=peer.max_operator_ms,operator_requests=peer.operator_requests)
         report['accepted']=(peer.started_lease and report['capture_timestamp_samples']>0
-            and (stop.is_set() or time.monotonic()-start>=a.duration or peer.close_reason=='controller_stop'))
+            and (stop.is_set() or a.lifetime=='finite' and time.monotonic()-start>=a.duration or peer.close_reason=='controller_stop'))
     except Exception as exc:report['error']=type(exc).__name__+': '+str(exc)[:128]
     finally:
         report.update(channel_levels=channels.status(),echo_tail_seconds=exclusion.tail_seconds,endpoint_settings=endpoint_settings)
@@ -160,10 +211,11 @@ def main():
             datagram.close();report['lease_datagram']=datagram.status()
             report['lease_datagram_execution_busy']=datagram.worker.is_alive()
         try:
-            cleanup(cfg,a.owner_file);after=agent(cfg,'/operator')
+            cleanup(cfg,a.owner_file,expected_owner=owner if a.lifetime=='lease' else None);after=agent(cfg,'/operator')
             report['operator_after']=diagnostic_operator(after)
             report['microphone_restored']=after['microphone_enabled'] is False
         except Exception as exc:report['cleanup_error']=type(exc).__name__
+        if owner_fd is not None:os.close(owner_fd)
         cancel=report.get('peer_status',{}).get('agent_mute_receipt')
         if cancel is not None:
             after=report.get('operator_after',{})

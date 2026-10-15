@@ -126,3 +126,93 @@ speaker identity, acoustic audibility, actual model/hardware attestation, a
 voice-to-memory acceptance verdict or continuous-operation proof. The runner's
 first real integrated demonstration must independently establish actual STT,
 fast/main FINAL, consumed reply, bounded movement and final owned cleanup.
+
+## Separate opt-in lease lifetime and sequenced retirement
+
+This source extension adds `--lifetime lease` to the existing device and normal
+Hub entrypoints. Omitting it preserves finite durations/cumulative stream budget.
+The lease mode rejects `--duration`: its authority consists of the existing
+300 ms operator/controller leases and fresh reducer validation, not an increased
+absolute timeout. Per-stream PCM/deadline limits remain unchanged. Selecting the
+mode is not actual continuous acceptance; reports keep
+`continuous_acceptance=false` until independent real-device review.
+
+| Existing file | Lease-only dependency |
+| --- | --- |
+| `device_audio_runtime.py` | Consume one already explicitly granted exact Agent owner from a private file; pinned FD/flock, one-shot fsynced source claim, no microphone-enable call. |
+| `audio_peer.py` | Current typed owner binding on TCP lease; sequenced source-derived wire IDs, high-water before reserve, per-stream/handler refs, exact retirement; sticky PeerLease withdrawal. |
+| `lease_datagram.py` | The same owner binding in authenticated hello/renew; unknown exchange latches the lease client. |
+| `playback.py` | One bounded terminal receipt; full measured consumption for normal completion or verified cancelled prefix, actual worker/stop return before cache retirement. |
+| `speech_adapter.py` | Hold a fresh proposal while terminal retirement blocks admission; do not label pending metadata as a physically executing job. |
+| `companion_session.py` | Validate fresh authenticated peer/operator authority before renewal; one accounted retirement Job; no reconnect/reacquire after withdrawal. |
+
+The private owner file must already contain the reviewed `agent_boot_id`,
+`initial_microphone_epoch`, `owned_microphone_epoch=initial+1`, `owner_id` and
+`policy_epoch` from an **explicit separate operator grant**. It must be a regular
+single-link file owned by the device user, mode 0600. The runtime never creates
+this grant or enables the microphone in lease mode. The actual Agent must still
+match that owner, boot, epochs, paused/listen=false state and allowed policy.
+The runtime holds the file lock and adds `lease_source_claim` with the chosen
+controller/source boot before capture starts. This marker is never automatically
+cleared, including after successful shutdown: a crash, process exit or free flock
+does not authorize adopting the old grant into a new source boot. A new window
+requires a new explicit grant/epoch/owner and fresh private file. Do not copy or
+reset an old owner file to recover ownership.
+
+Automatic cleanup uses the frozen admitted owner rather than rereading a possibly
+replaced pathname. It can only mute that exact boot/owned epoch/owner ID. It does
+not use the finite path's initial-epoch fallback, restore the original enabled
+state, modify a replacement owner, or turn the microphone on again.
+
+```text
+<device-python> deploy/autonomous/device_audio_runtime.py --lifetime lease --config <reviewed-device-companion.json> --output <new-device-receipt.json> --owner-file <already-granted-private-owner.json> --controller <controller> --allow-capture-output --listen <reviewed-device-interface> --port <media-port> --stop-port <separate-stop-port>
+<hub-python> -m reachy_companion.autonomous.companion_session --mode normal --lifetime lease --config <reviewed-hub-autonomous.json> --companion-config <reviewed-hub-companion.json> --token-file <gateway-token-file> --peer-url <reviewed-peer-url> --peer-stop-port <separate-stop-port> --controller <controller> --source-boot <actual-claimed-source-boot> --status-port <local-normal-control-port> --allow-capture-output
+```
+
+The earlier independent motion/context/transport gates and status/stop/cleanup
+commands still apply. Device and Hub must both explicitly select lease mode;
+mixed protocols reject. TCP renew includes source boot plus typed Agent boot,
+microphone/policy epochs and a hash of the owner ID. UDP checks the same binding
+within its signed challenge/renew protocol. The raw owner nonce is not sent in
+status/renewal. First renewal waits for verified authority; subsequent ticks
+require fresh peer/operator receipts, not just loop activity. Unknown renewal,
+expired reducer freshness, source/owner changes and stop latch withdrawal.
+Late ACKs or ticks cannot rearm it and no reconnect/retry resets the latch.
+
+Wire stream IDs are exactly `<source_boot>:<stream_sequence>`; sequence is a
+bounded monotonic integer without wrap/reset. The device spends high-water before
+the potentially unknown reserve operation. One live/unknown record blocks the
+next reservation. Internal Playback UUIDs remain behind that bounded mapping.
+Deleting a terminal mapping never makes an old ID reusable.
+
+`/finish` remains an input-queue ACK. New `/retire` requires exact stream,
+sequence and device generation. Ordinary HTTP stream handlers hold refs through
+response completion; backend dispatch refs use the same lock. Retirement waits
+for input completion/full measured consumption, or a cancelled stream's measured
+prefix, plus verified backend stop and returned worker/stop/reservation jobs.
+It cannot run while another handler still references the stream. Its own ACK
+contains terminal metadata only, with no later backend access. A known busy
+reply retains metadata and permits only another accounted retirement attempt;
+unknown/error results preserve the record and withdraw output admission.
+
+On the Hub, a retirement ACK alone does not reopen admission: the actual TTS,
+cancel and PCM jobs must have returned, and local terminal/cache retirement must
+commit first under the Playback lock. Both maps and completed Playback caches
+then clear; scalar high-water and bounded diagnostic tails remain. Unknown stop
+cursor or a held backend cannot be discarded to free capacity. No PCM resume,
+blind tombstone eviction or new owner boot is substituted for this proof.
+Successful retirement also closes its drained media connection on the retirement
+worker. Final shutdown uses a separate accounted media-close Job that waits for
+actual producer/cancel/PCM return before closing the transport; it remains busy
+if a remote progress call is still held. Dedicated stop never waits for or closes
+the media lock, and socket closure is not evidence of remote execution stop.
+
+Local tests cover 40 completed worker/HTTP streams with bounded empty retired
+caches, replay/foreign generation/overflow denial, held progress/stop refs,
+cancelled prefix, unknown reserve/cursor, late ACK/tick, owner-file alias/reuse,
+normal reducer integration and unchanged finite mode. These synthetic fixtures
+do not establish hardware consumption or elapsed continuous operation. Actual
+acceptance separately requires **more than 180 seconds and more than 32 real
+streams**, stable current owner/epochs, measured consumed PCM/known stop, bounded
+metadata and mute/network-loss tests without authority recovery. No service is
+installed or restarted by this source checkpoint.

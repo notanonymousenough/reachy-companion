@@ -136,7 +136,7 @@ class SpeechAdapter:
                     proposal=self.pending
                     if proposal and (proposal['authority']!=self.current_authority or time.monotonic()>=proposal['deadline']):
                         self.pending=None;proposal=None
-                    if proposal and fresh and not (self.worker and self.worker.is_alive()) and not (self.cancel_job and self.cancel_job.is_alive()) and not self.playback.status()['execution_busy']:
+                    if proposal and fresh and not (self.worker and self.worker.is_alive()) and not (self.cancel_job and self.cancel_job.is_alive()) and not self.playback.status()['execution_busy'] and not self.playback.status()['admission_blocked']:
                         self.pending=None;self._execute(proposal)
                 if expired:self.interrupt('operator_expired',False)
                 # Backend reserve on resume runs on this control slot, never scheduler.

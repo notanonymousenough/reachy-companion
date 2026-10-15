@@ -251,13 +251,13 @@ class SessionTests(unittest.TestCase):
         root=Path(__file__).resolve().parents[1];run=module.run_session;sent=[]
         before=signal.getsignal(signal.SIGTERM)
         def control(*args,**kwargs):return control_server(*args,**{**kwargs,'port':0})
-        def session(*args):
+        def session(*args,**kwargs):
             publish=args[-1]
             def stop_when_ready(value):
                 publish(value)
                 if value.get('listening_ready') and not sent:
                     sent.append(True);signal.raise_signal(signal.SIGTERM)
-            return run(*args[:-1],stop_when_ready)
+            return run(*args[:-1],stop_when_ready,**kwargs)
         with tempfile.TemporaryDirectory() as directory:
             path=Path(directory);(path/'token').write_text('t'*32)
             data=json.loads((root/'config.example.json').read_text());data['paths']['token_file']='token'

@@ -16,6 +16,7 @@ import threading
 import time
 from urllib.parse import urlsplit
 from .contracts import decode
+from .audio_peer import lease_authority,owner_binding
 
 
 def key(token,boot):return hmac.new(token.encode(),('audio-lease:'+boot).encode(),hashlib.sha256).digest()
@@ -52,14 +53,18 @@ class LeaseDatagramServer:
         if body.get('source_boot')!=self.peer.boot_id or body.get('controller')!=self.peer.controller:
             raise ValueError('Datagram source/controller')
         if not self.peer.operator_ready():raise RuntimeError('Device permission withdrawn')
+        authority=body.get('authority') if getattr(self.peer,'lifetime','finite')=='lease' else None
+        if getattr(self.peer,'lifetime','finite')=='lease' and lease_authority(authority)!=owner_binding(self.peer.expected_owner):
+            raise ValueError('Datagram owner authority')
+        extra={'authority'} if authority is not None else set()
         self.nonces={nonce:deadline for nonce,deadline in self.nonces.items() if now<deadline}
         if body.get('kind')=='hello':
-            if set(body)!={'kind','source_boot','controller','echo'} or not isinstance(body['echo'],str) or len(body['echo'])!=32:
+            if set(body)!=({'kind','source_boot','controller','echo'}|extra) or not isinstance(body['echo'],str) or len(body['echo'])!=32:
                 raise ValueError('Challenge request')
             if len(self.nonces)>=4:raise RuntimeError('Bounded challenge slots')
             nonce=secrets.token_hex(16);self.nonces[nonce]=now+.1
             return dict(kind='challenge',source_boot=self.peer.boot_id,nonce=nonce,echo=body['echo'])
-        if body.get('kind')!='renew' or set(body)!={'kind','source_boot','controller','nonce','sequence'}:
+        if body.get('kind')!='renew' or set(body)!=({'kind','source_boot','controller','nonce','sequence'}|extra):
             raise ValueError('Typed renewal')
         sequence=body['sequence'];nonce=body['nonce']
         if (type(sequence) is not int or not 0<=sequence<2**63 or sequence<=self.last_sequence
@@ -67,7 +72,8 @@ class LeaseDatagramServer:
         deadline=self.nonces.pop(nonce)
         with self.peer.lock:
             if self.peer.clock()>=deadline:raise ValueError('Challenge expired')
-            self.peer.dispatch('/lease',dict(controller=self.peer.controller))
+            self.peer.dispatch('/lease',dict(controller=self.peer.controller,**(
+                {'source_boot':self.peer.boot_id,'authority':authority} if authority is not None else {})))
             with self.diagnostics_lock:
                 self.last_sequence=sequence;self.last_accepted=self.peer.clock();self.accepted+=1
         return dict(kind='accepted',source_boot=self.peer.boot_id,sequence=sequence)
@@ -130,7 +136,8 @@ class LeaseDatagramServer:
 
 class DatagramRenewal:
     """One actual two-packet exchange slot; no retry of expired challenges."""
-    def __init__(self,client,source_boot,port):
+    def __init__(self,client,source_boot,port,*,authority=None):
+        self.authority=lease_authority(authority) if authority is not None else None;self.withdrawn=False
         endpoint=urlsplit(client.url)
         self.last_send=None;self.last_ack=None;self.ack_sequence=None
         self.diagnostics_lock=threading.Lock();self.exchange_phase='idle';self.exchange_tail=deque(maxlen=16)
@@ -163,9 +170,11 @@ class DatagramRenewal:
             self.exchange_phase=phase
             self.exchange_tail.append(dict(at=time.monotonic(),phase=phase,sequence=self.sequence,attempt=self.attempts,error_kind=error_kind))
     def renew(self):
+        if self.authority is not None and self.withdrawn:raise RuntimeError('Datagram lease permanently withdrawn')
         with self.diagnostics_lock:self.attempts+=1;self.attempt_started=time.monotonic()
         try:self.exchange()
         except Exception as exc:
+            if self.authority is not None:self.withdrawn=True
             phase=self.exchange_phase;kind=type(exc).__name__
             self.record('failed:'+phase,kind)
             with self.diagnostics_lock:
@@ -189,14 +198,15 @@ class DatagramRenewal:
         self.record('socket_binding');self.capture_socket_receipt()
         began=time.monotonic();echo=secrets.token_hex(16)
         self.record('hello_send');self.last_send=time.monotonic()
-        self.socket.send(signed(self.secret,dict(kind='hello',source_boot=self.source,controller=self.controller,echo=echo)))
+        extra={'authority':self.authority} if self.authority is not None else {}
+        self.socket.send(signed(self.secret,dict(kind='hello',source_boot=self.source,controller=self.controller,echo=echo,**extra)))
         self.record('challenge_wait');challenge=self.receive()
         if (challenge.get('kind')!='challenge' or challenge.get('source_boot')!=self.source
                 or challenge.get('echo')!=echo or time.monotonic()-began>=.08):raise ValueError('Fresh challenge required')
         self.sequence+=1
         self.record('renew_send');self.last_send=time.monotonic()
         self.socket.send(signed(self.secret,dict(kind='renew',source_boot=self.source,controller=self.controller,
-            nonce=challenge['nonce'],sequence=self.sequence)))
+            nonce=challenge['nonce'],sequence=self.sequence,**extra)))
         self.record('ack_wait');ack=self.receive()
         if ack!=dict(kind='accepted',source_boot=self.source,sequence=self.sequence):raise ValueError('Renewal acknowledgement')
         self.last_ack=time.monotonic();self.ack_sequence=self.sequence;self.record('accepted')
@@ -211,6 +221,7 @@ class DatagramRenewal:
             last_send_age_ms=None if self.last_send is None else max(0,(now-self.last_send)*1000),
             last_ack_age_ms=None if self.last_ack is None else max(0,(now-self.last_ack)*1000))
     def close(self):
+        if self.authority is not None:self.withdrawn=True
         with self.diagnostics_lock:
             if self.first_close is None:
                 self.first_close=dict(socket_receipt=copy.deepcopy(self.socket_receipt),

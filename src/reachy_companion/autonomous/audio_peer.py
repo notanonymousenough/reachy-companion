@@ -1,4 +1,4 @@
-"""Authenticated finite audio peer: device ownership on Reachy, scheduler on Hub.
+"""Authenticated audio peer: finite by default, with an opt-in sequenced lease.
 
 PCM writes queue bytes on the device owner; progress still reports measured
 device consumption. No elapsed-time cursor, model-selected endpoint or resume.
@@ -6,6 +6,8 @@ device consumption. No elapsed-time cursor, model-selected endpoint or resume.
 import base64
 import hmac
 import http.client
+import hashlib
+from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import socket
@@ -16,10 +18,35 @@ from urllib.parse import urlsplit
 from .contracts import decode, uid
 
 
+def stream_identity(boot,sequence):
+    if (not isinstance(boot,str) or not 1<=len(boot)<=96 or type(sequence) is not int
+            or not 1<=sequence<2**63):raise ValueError('Bounded sequenced stream identity')
+    return boot+':'+str(sequence)
+
+
+def owner_binding(owner):
+    return dict(agent_boot_id=owner['agent_boot_id'],microphone_epoch=owner['owned_microphone_epoch'],
+        policy_epoch=owner['policy_epoch'],owner_sha256=hashlib.sha256(owner['owner_id'].encode()).hexdigest())
+
+
+def lease_authority(value):
+    if (type(value) is not dict or set(value)!={'agent_boot_id','microphone_epoch','policy_epoch','owner_sha256'}
+            or not isinstance(value['agent_boot_id'],str) or not 1<=len(value['agent_boot_id'])<=256
+            or any(type(value[key]) is not int or not 0<=value[key]<2**63 for key in ('microphone_epoch','policy_epoch'))
+            or not isinstance(value['owner_sha256'],str) or len(value['owner_sha256'])!=64
+            or any(char not in '0123456789abcdef' for char in value['owner_sha256'])):
+        raise ValueError('Typed lease authority required')
+    return dict(value)
+
+
 class AudioPeer:
-    def __init__(self, playback, operator, expected_owner, *, controller, clock=time.monotonic, mute_owner=None):
+    def __init__(self, playback, operator, expected_owner, *, controller, clock=time.monotonic, mute_owner=None,lifetime='finite',source_boot=None):
+        if type(lifetime) is not str or lifetime not in ('finite','lease'):raise ValueError('Explicit audio lifetime')
+        self.lifetime=lifetime;self.stream_high_water=0;self.stream_records={};self.reservation_handlers=0
         self.playback, self.operator, self.expected_owner = playback, operator, dict(expected_owner)
-        self.controller, self.clock, self.boot_id = controller, clock, uid()
+        if source_boot is not None and lifetime!='lease':raise ValueError('Explicit source claim only for lease lifetime')
+        if source_boot is not None:stream_identity(source_boot,1)
+        self.controller, self.clock, self.boot_id = controller, clock, source_boot or uid()
         self.mute_owner=mute_owner;self.operator_control_busy=False;self.operator_control_receipt=None
         self.lock = threading.RLock()
         self.cached_operator = None
@@ -119,6 +146,7 @@ class AudioPeer:
             raise ValueError('Bounded mono16k observation')
         with self.lock:
             if not self.permitted():return False
+            if self.lifetime=='lease' and self.sequence>=2**63-1:self.close('observation_sequence_exhausted');return False
             self.sequence += 1
             self.observation = dict(pcm=pcm, captured_end=captured_end,
                 source_boot=self.boot_id, sequence=self.sequence, echo_reference=echo_reference)
@@ -128,11 +156,38 @@ class AudioPeer:
         with self.lock:
             return diagnostic_operator(self.cached_operator)
 
-    def dispatch(self, path, body):
+    @contextmanager
+    def stream_reference(self,path,body):
+        record=None;reservation=self.lifetime=='lease' and path=='/reserve'
+        if reservation:
+            with self.lock:self.reservation_handlers+=1
+        if self.lifetime=='lease' and path in ('/start','/write','/finish','/progress','/stream-stop'):
+            with self.lock:
+                stream=body.get('stream_id');sequence=body.get('stream_sequence')
+                if (body.get('source_boot')!=self.boot_id or stream!=stream_identity(self.boot_id,sequence)):
+                    raise ValueError('Exact sequenced stream scope')
+                record=self.stream_records.get(stream)
+                if record is None or record['retiring'] or record['actual'] is None:
+                    raise RuntimeError('Retired or unknown stream')
+                record['refs']+=1
+        try:yield
+        finally:
+            if reservation:
+                with self.lock:self.reservation_handlers-=1
+            if record is not None:
+                with self.lock:record['refs']-=1
+
+    def dispatch(self,path,body):
+        with self.stream_reference(path,body):return self._dispatch(path,body)
+
+    def _dispatch(self, path, body):
         if body.pop('controller', None) != self.controller:
             raise ValueError('Controller owner mismatch')
         if path == '/status':
-            return dict(source_boot=self.boot_id, closed=self.closed, permitted=self.permitted(), operator_ready=self.operator_ready(),
+            return dict(source_boot=self.boot_id,lifetime=self.lifetime,
+                lease_binding=owner_binding(self.expected_owner) if self.lifetime=='lease' else None,
+                stream_high_water=self.stream_high_water,stream_records=len(self.stream_records),
+                closed=self.closed, permitted=self.permitted(), operator_ready=self.operator_ready(),
                 agent_mute_supported=self.mute_owner is not None,operator_control_execution_busy=self.operator_control_busy,
                 agent_mute_receipt=None if self.operator_control_receipt is None else dict(self.operator_control_receipt),operator=self.operator_status(), playback=self.playback.status(), observation_sequence=self.sequence,
                 close_reason=self.close_reason,first_close=self.first_close,watch_error=self.watch_error,
@@ -167,6 +222,10 @@ class AudioPeer:
                 with self.lock:self.operator_control_busy=False
         if path == '/lease':
             with self.lock:
+                if self.lifetime=='lease':lease_authority(body.get('authority'))
+                if self.lifetime=='lease' and (body!={'source_boot':self.boot_id,'authority':owner_binding(self.expected_owner)}
+                        or self.cached_operator is None or not self._owned(self.cached_operator)):
+                    raise RuntimeError('Exact current lease authority required')
                 if (self.closed or self.cached_operator is None or self.clock() >= self.operator_deadline
                         or self.clock() >= self.lease_deadline):
                     raise RuntimeError('Controller lease withdrawn')
@@ -175,7 +234,7 @@ class AudioPeer:
                 if self.last_lease is not None:self.max_lease_gap_ms=max(self.max_lease_gap_ms,(now-self.last_lease)*1000)
                 self.last_lease=now;self.lease_requests+=1
                 self.playback.operator(self.controller,microphone_enabled=True,valid_until=min(self.operator_deadline,self.lease_deadline),wait=False)
-            return dict(source_boot=self.boot_id)
+            return dict(source_boot=self.boot_id,**({'authority':owner_binding(self.expected_owner)} if self.lifetime=='lease' else {}))
         if path not in ('/stream-stop','/progress') and not self.permitted():raise RuntimeError('Actual owner/operator unavailable')
         if path == '/observation':
             with self.lock:
@@ -185,6 +244,7 @@ class AudioPeer:
                 value['capture_age_s']=self.clock()-value.pop('captured_end')
                 value['pcm_base64']=base64.b64encode(value.pop('pcm')).decode()
                 return dict(observation=value,source_boot=self.boot_id)
+        if self.lifetime=='lease' and path=='/retire':return self.retire(body)
         stream=body.get('stream_id')
         if not isinstance(stream,str) or not 1<=len(stream)<=128:raise ValueError('Stream identity required')
         with self.lock:
@@ -192,16 +252,27 @@ class AudioPeer:
         if path == '/reserve':
             with self.lock:
                 if self.reserving or stream in self.streams or len(self.streams)>=32:raise RuntimeError('Fresh bounded stream identity required')
+                if self.lifetime=='lease':
+                    sequence=body.get('stream_sequence')
+                    if (body.get('source_boot')!=self.boot_id or stream!=stream_identity(self.boot_id,sequence)
+                            or sequence!=self.stream_high_water+1 or self.stream_records):
+                        raise RuntimeError('Next sequenced reservation requires terminal retirement')
+                    self.stream_high_water=sequence # spent BEFORE potentially unknown backend operation
+                    self.stream_records[stream]=dict(actual=None,generation=None,refs=0,retiring=False)
                 self.reserving=True
             try:
                 actual=self.playback.begin(self.controller,stream,deadline=self.clock()+30)
                 with self.lock:self.streams[stream]=actual;self.last_output=actual
+                if self.lifetime=='lease':
+                    with self.lock,self.playback.lock:
+                        self.stream_records[stream].update(actual=actual,generation=self.playback.generation)
                 if not self.permitted():
                     self.playback.interrupt('late_reservation',preserve=False,wait=False)
                     raise RuntimeError('Reservation withdrawn')
             finally:
                 with self.lock:self.reserving=False
-            return dict(reserved=True,device_stream_id=actual)
+            return dict(reserved=True,device_stream_id=actual,**(
+                {'generation':self.stream_records[stream]['generation']} if self.lifetime=='lease' else {}))
         if not actual:raise RuntimeError('Unknown owned stream')
         if path == '/start':
             if body.get('rate')!=16000:raise ValueError('Mono16k peer required')
@@ -233,13 +304,38 @@ class AudioPeer:
             return receipt
         raise ValueError('Typed peer path')
 
+    def retire(self,body):
+        stream=body.get('stream_id');sequence=body.get('stream_sequence');generation=body.get('generation')
+        if (set(body)!={'source_boot','stream_id','stream_sequence','generation','completion'}
+                or body['source_boot']!=self.boot_id or stream!=stream_identity(self.boot_id,sequence)
+                or type(generation) is not int or body['completion'] not in ('complete','cancelled')):
+            raise ValueError('Exact terminal retirement scope')
+        reply=dict(source_boot=self.boot_id,stream_id=stream,stream_sequence=sequence,generation=generation)
+        with self.lock:
+            record=self.stream_records.get(stream)
+            if record is None or record['generation']!=generation or record['actual'] is None:
+                raise RuntimeError('Retirement owner/generation unknown')
+            if record['refs'] or self.reserving or self.reservation_handlers or self.playback.status()['execution_busy']:
+                return dict(reply,retired=False,execution_busy=True)
+            terminal=self.playback.terminal_receipt(record['actual'],generation)
+            if terminal is None:raise RuntimeError('Terminal backend stop/cursor unknown')
+            if body['completion']=='complete' and (not terminal['complete']
+                    or terminal['consumed_frames']!=terminal['submitted_frames']):
+                raise RuntimeError('Normal completion requires measured full consumption')
+            record['retiring']=True
+            if not self.playback.retire_terminal(record['actual'],generation):
+                raise RuntimeError('Terminal references changed during retirement')
+            del self.streams[stream];del self.stream_records[stream]
+            return dict(reply,retired=True,execution_busy=False)
+
     def dispatch_stop(self,path,body):
         """Dedicated listener: exact owned revocation, independent of permission."""
         keys={'controller','source_boot'}|({'stream_id'} if path=='/stream-stop' else set())
+        if self.lifetime=='lease' and path=='/stream-stop':keys.add('stream_sequence')
         if (path not in ('/stop','/stream-stop') or not isinstance(body,dict) or set(body)!=keys
                 or body.get('controller')!=self.controller or body.get('source_boot')!=self.boot_id):
             raise ValueError('Exact current peer stop binding required')
-        return self.dispatch(path,{key:value for key,value in body.items() if key!='source_boot'})
+        return self.dispatch(path,{key:value for key,value in body.items() if self.lifetime=='lease' or key!='source_boot'})
 
     def on_close(self,observer):
         with self.lock:
@@ -340,11 +436,12 @@ def create_server(peer, token, bind='127.0.0.1', port=8780, *, stop_port=None):
                     size=int(self.headers.get('Content-Length','0'))
                     if not 0<size<=(1024 if control_only else 16384):raise ValueError('Peer request cap')
                     body=decode(self.rfile.read(size))
-                    result=peer.dispatch_stop(self.path,body) if control_only else peer.dispatch(self.path,body)
-                    payload=json.dumps(result).encode()
-                    self.send_response(200);self.send_header('Content-Type','application/json')
-                    if control_only:self.send_header('Connection','close')
-                    self.send_header('Content-Length',str(len(payload)));self.end_headers();self.wfile.write(payload)
+                    with peer.stream_reference(self.path,body):
+                        result=peer.dispatch_stop(self.path,body) if control_only else peer.dispatch(self.path,body)
+                        payload=json.dumps(result).encode()
+                        self.send_response(200);self.send_header('Content-Type','application/json')
+                        if control_only:self.send_header('Connection','close')
+                        self.send_header('Content-Length',str(len(payload)));self.end_headers();self.wfile.write(payload)
                 except OSError:self.close_connection=True
                 except Exception:
                     try:self.send_error(409)
@@ -412,10 +509,14 @@ class PersistentPeer:
 
 
 class RemotePCM:
-    def __init__(self,client,*,stop_port=None,source_boot=None,max_streams=None):
+    def __init__(self,client,*,stop_port=None,source_boot=None,max_streams=None,lifetime='finite'):
+        if lifetime not in ('finite','lease') or type(lifetime) is not str:raise ValueError('Explicit remote lifetime')
+        if lifetime=='lease' and (stop_port is None or max_streams is not None):raise ValueError('Lease protocol requires dedicated stop and retirement')
         if max_streams is not None and (type(max_streams) is not int or not 1<=max_streams<=32):
             raise ValueError('Explicit finite remote stream budget1..32 required')
-        self.max_streams=max_streams;self.reservation_attempts=0;self.budget_lock=threading.Lock()
+        if lifetime=='lease':stream_identity(source_boot,1)
+        self.lifetime=lifetime;self.pending_stream=None;self.withdrawn=False
+        self.max_streams=max_streams;self.reservation_attempts=0;self.budget_lock=threading.RLock()
         if stop_port is not None and (not isinstance(source_boot,str) or not 1<=len(source_boot)<=128):
             raise ValueError('Current peer boot required for separate stop transport')
         self.client=client;self.transport=PersistentPeer(client);self.stream_map={}
@@ -423,25 +524,92 @@ class RemotePCM:
         self.source_boot=source_boot
     def reserve(self,stream):
         with self.budget_lock:
+            if self.lifetime=='lease' and (self.withdrawn or self.pending_stream is not None):
+                raise RuntimeError('Prior terminal retirement or unknown reservation blocks admission')
             if self.max_streams is not None and self.reservation_attempts>=self.max_streams:
                 raise RuntimeError('Finite remote stream budget exhausted before reservation')
+            if self.lifetime=='lease' and self.reservation_attempts>=2**63-1:
+                self.withdrawn=True;raise ValueError('Sequenced reservation exhausted without wrap')
             self.reservation_attempts+=1 # spent BEFORE transport, including unknown completion
+            if self.lifetime=='lease':
+                wire=stream_identity(self.source_boot,self.reservation_attempts)
+                self.pending_stream=dict(local=stream,wire=wire,sequence=self.reservation_attempts,generation=None,phase='RESERVING')
         self.transport.close()
-        result=self.transport.call('/reserve',stream_id=stream)
+        if self.lifetime=='lease':
+            try:result=self.transport.call('/reserve',**self._scope(stream,reserving=True))
+            except BaseException:
+                with self.budget_lock:self.withdrawn=True
+                raise
+        else:result=self.transport.call('/reserve',stream_id=stream)
         actual=result.get('device_stream_id')
         if result.get('reserved') is not True or not isinstance(actual,str) or not 1<=len(actual)<=128:
             raise ValueError('Device reservation lineage')
-        self.stream_map[stream]=actual
-    def start(self,stream,rate):self.transport.call('/start',stream_id=stream,rate=rate)
-    def write(self,stream,pcm):return self.transport.call('/write',stream_id=stream,pcm_base64=base64.b64encode(pcm).decode())
-    def progress(self,stream):return self.transport.call('/progress',stream_id=stream)
-    def finish(self,stream):return self.transport.call('/finish',stream_id=stream)
+        with self.budget_lock:
+            self.stream_map[stream]=actual
+            if self.lifetime=='lease':
+                generation=result.get('generation')
+                if type(generation) is not int or generation<1:self.withdrawn=True;raise ValueError('Device stream generation')
+                self.pending_stream.update(generation=generation,phase='LIVE')
+    def admission_ready(self):
+        with self.budget_lock:return self.lifetime=='finite' or not self.withdrawn and self.pending_stream is None
+    def _scope(self,stream,reserving=False):
+        if self.lifetime=='finite':return dict(stream_id=stream)
+        with self.budget_lock:
+            value=self.pending_stream
+            if (self.withdrawn or value is None or value['local']!=stream
+                    or value['phase']!=('RESERVING' if reserving else 'LIVE')):raise RuntimeError('Exact current wire stream required')
+            return dict(source_boot=self.source_boot,stream_id=value['wire'],stream_sequence=value['sequence'])
+    def _receipt(self,stream,result):
+        if self.lifetime=='lease':
+            expected=self._scope(stream)['stream_id']
+            if result.get('stream_id')!=expected:raise ValueError('Wire cursor stream mismatch')
+            return dict(result,stream_id=stream)
+        return result
+    def start(self,stream,rate):self.transport.call('/start',**self._scope(stream),rate=rate)
+    def write(self,stream,pcm):return self.transport.call('/write',**self._scope(stream),pcm_base64=base64.b64encode(pcm).decode())
+    def progress(self,stream):return self._receipt(stream,self.transport.call('/progress',**self._scope(stream)))
+    def finish(self,stream):return self.transport.call('/finish',**self._scope(stream))
     def stop(self,stream):
         if self.stop_client is not None:
             # Never acquire/close the media lock, or retry on the media listener.
-            return self.stop_client.call('/stream-stop',source_boot=self.source_boot,stream_id=stream)
+            scope=self._scope(stream)
+            scope['source_boot']=self.source_boot
+            return self._receipt(stream,self.stop_client.call('/stream-stop',**scope))
         try:return self.client.call('/stream-stop',stream_id=stream)
         finally:self.transport.close()
+
+    def retire(self,terminal):
+        stream=terminal['stream_id']
+        with self.budget_lock:
+            scope=self._scope(stream);value=self.pending_stream
+            scope.update(generation=value['generation'],completion='complete' if terminal['complete'] else 'cancelled')
+            value['phase']='RETIRING'
+        try:
+            result=self.client.call('/retire',**scope)
+            expected={key:scope[key] for key in ('source_boot','stream_id','stream_sequence','generation')}
+            if result==dict(expected,retired=False,execution_busy=True):
+                with self.budget_lock:value['phase']='LIVE'
+                return False
+            if result!=dict(expected,retired=True,execution_busy=False):raise ValueError('Exact terminal retirement acknowledgement')
+            self.transport.close() # retirement worker, after all stream callers returned
+            with self.budget_lock:value['phase']='ACK'
+            return True
+        except BaseException:
+            with self.budget_lock:self.withdrawn=True
+            raise
+
+    def commit_retirement(self,stream):
+        if self.lifetime=='finite':return
+        with self.budget_lock:
+            value=self.pending_stream
+            if self.withdrawn or value is None or value['local']!=stream or value['phase']!='ACK':
+                raise RuntimeError('Retirement acknowledgement is not committed')
+            self.stream_map.pop(stream);self.pending_stream=None
+
+    def close_transport(self):
+        with self.budget_lock:
+            if self.lifetime=='lease':self.withdrawn=True
+        self.transport.close() # lifecycle worker only; never the independent stop handler
 
 
 class AudioPolling:
@@ -496,7 +664,11 @@ class AudioPolling:
 
 class PeerLease:
     """Independent renewal slot, gated by actual scheduler progress, not HTTP reads."""
-    def __init__(self,client,*,datagram=None):
+    def __init__(self,client,*,datagram=None,source_boot=None,authority=None):
+        if source_boot is not None:stream_identity(source_boot,1)
+        if (source_boot is None)!=(authority is None):raise ValueError('Lease source and authority must be paired')
+        self.source_boot=source_boot;self.authority=lease_authority(authority) if authority is not None else None
+        self.armed=source_boot is None;self.withdrawal_reason=None
         self.client=client;self.lock=threading.Lock();self.closed=False
         self.datagram=datagram
         self.last_tick=time.monotonic();self.calls=self.errors=0;self.busy=False
@@ -509,13 +681,24 @@ class PeerLease:
         # whole 300 ms device lease. Other peer operations retain their limits.
         self.connection=http.client.HTTPConnection(endpoint.hostname,endpoint.port,timeout=min(client.timeout,.05))
         self.worker=threading.Thread(target=self._run,daemon=True);self.worker.start()
-    def tick(self):
+    def tick(self,authority=None):
         with self.lock:
-            now=time.monotonic();self.max_tick_gap_ms=max(self.max_tick_gap_ms,(now-self.last_tick)*1000);self.last_tick=now
+            now=time.monotonic()
+            if self.source_boot is not None:
+                if self.closed:return False
+                try:valid=lease_authority(authority)==self.authority
+                except ValueError:valid=False
+                if not valid or self.armed and now-self.last_tick>=.1:
+                    self._withdraw('authority_changed' if not valid else 'reducer_expired');return False
+                self.armed=True
+            self.max_tick_gap_ms=max(self.max_tick_gap_ms,(now-self.last_tick)*1000);self.last_tick=now
+            return True
     def _run(self):
         try:self._run_loop()
         except BaseException as exc:
-            with self.lock:self.worker_exception=type(exc).__name__
+            with self.lock:
+                self.worker_exception=type(exc).__name__
+                if self.source_boot is not None:self._withdraw('renewal_worker_failed')
         finally:
             self.connection.close()
             if self.datagram:self.datagram.close()
@@ -528,15 +711,31 @@ class PeerLease:
                 if self.last_worker_tick is not None:self.max_worker_gap_ms=max(self.max_worker_gap_ms,(now-self.last_worker_tick)*1000)
                 self.last_worker_tick=now
                 if self.closed:return
-                valid=time.monotonic()-self.last_tick<.1
+                if self.source_boot is not None:
+                    if not self.armed:
+                        if now-self.last_tick>=2:self._withdraw('initial_authority_timeout');return
+                        self.busy=False
+                        continue_wait=True
+                    else:
+                        continue_wait=False
+                        if now-self.last_tick>=.1:self._withdraw('reducer_expired');return
+                else:continue_wait=False
+                valid=not continue_wait and time.monotonic()-self.last_tick<.1
                 self.busy=valid
+            if continue_wait:time.sleep(.005);continue
             if valid:
                 started=time.monotonic()
+                with self.lock:
+                    if self.source_boot is not None:self.calls+=1
                 try:
                     if self.datagram:
                         self.datagram.renew()
                         with self.lock:
-                            self.calls+=1;self.busy=False;self.last_accepted=time.monotonic()
+                            if self.source_boot is None:self.calls+=1
+                            self.busy=False
+                            if self.source_boot is not None and (self.closed or time.monotonic()-self.last_tick>=.1):
+                                self._withdraw('late_renewal_ack');return
+                            self.last_accepted=time.monotonic()
                             self.max_call_ms=max(self.max_call_ms,(time.monotonic()-started)*1000)
                         time.sleep(.02)
                         continue
@@ -544,25 +743,36 @@ class PeerLease:
                         self.connection.connect()
                         self.connection.sock.setsockopt(socket.IPPROTO_TCP,socket.TCP_NODELAY,1)
                     with self.lock:self.last_send=time.monotonic()
-                    self.connection.request('POST','/lease',json.dumps(dict(controller=self.client.controller)),
+                    body=dict(controller=self.client.controller)
+                    if self.source_boot is not None:body.update(source_boot=self.source_boot,authority=self.authority)
+                    self.connection.request('POST','/lease',json.dumps(body),
                         headers={'Authorization':'Bearer '+self.client.token,'Content-Type':'application/json'})
                     response=self.connection.getresponse();raw=response.read(8193)
                     if response.status!=200 or len(raw)>8192:raise RuntimeError('Lease response rejected')
-                    decode(raw)
-                    with self.lock:self.last_accepted=time.monotonic()
+                    answer=decode(raw)
+                    with self.lock:
+                        if self.source_boot is not None:
+                            if answer!=dict(source_boot=self.source_boot,authority=self.authority):raise ValueError('Lease acknowledgement scope')
+                            if self.closed or time.monotonic()-self.last_tick>=.1:self._withdraw('late_renewal_ack');return
+                        self.last_accepted=time.monotonic()
                 except Exception as exc:
                     self.connection.close()
                     with self.lock:
                         self.errors+=1;kind=type(exc).__name__
                         self.error_types[kind]=self.error_types.get(kind,0)+1
+                        if self.source_boot is not None:self._withdraw('renewal_unknown');return
                 with self.lock:
-                    self.calls+=1;self.busy=False
+                    if self.source_boot is None:self.calls+=1
+                    self.busy=False
                     self.max_call_ms=max(self.max_call_ms,(time.monotonic()-started)*1000)
             time.sleep(.02)
+    def _withdraw(self,reason):
+        if self.withdrawal_reason is None:self.withdrawal_reason=reason
+        if self.first_close is None:self.first_close=self._timing(time.monotonic())
+        self.closed=True
     def close(self):
         with self.lock:
-            if self.first_close is None:self.first_close=self._timing(time.monotonic())
-            self.closed=True
+            self._withdraw('controller_stop')
     def _timing(self,now):
         sent=self.datagram.last_send if self.datagram else self.last_send
         return dict(last_send_age_ms=None if sent is None else max(0,(now-sent)*1000),
@@ -571,6 +781,7 @@ class PeerLease:
             worker_scheduling_age_ms=None if self.last_worker_tick is None else max(0,(now-self.last_worker_tick)*1000))
     def status(self):
         with self.lock:return dict(execution_busy=self.worker.is_alive() if self.closed else self.busy,
+            withdrawn=self.closed,withdrawal_reason=self.withdrawal_reason,
             calls=self.calls,errors=self.errors,max_call_ms=self.max_call_ms,
             max_tick_gap_ms=self.max_tick_gap_ms,error_types=dict(self.error_types),
             progress_age_ms=(time.monotonic()-self.last_tick)*1000,

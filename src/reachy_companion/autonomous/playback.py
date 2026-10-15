@@ -22,7 +22,7 @@ class Playback:
         self.generation=0;self.authority=None;self.policy_deadline=0;self.permitted=False;self.active=None;self.paused=None
         self.audio_stops={};self.motion_stop_job=None;self.motion_stop_result={}
         self.motion_stop_known=True;self.worker=None;self.stop_jobs=[];self.timeline=deque(maxlen=64);self.stop_known=True
-        self.reservation_busy=False;self.joint_job=None
+        self.reservation_busy=False;self.joint_job=None;self.terminal=None
 
     def record(self,kind,**fields):
         self.timeline.append(dict(kind=kind,at=self.clock(),**fields))
@@ -42,11 +42,12 @@ class Playback:
                     or type(deadline) not in (int,float) or not math.isfinite(deadline) or self.clock()>=deadline
                     or self.clock()>=self.policy_deadline or self.reservation_busy
                     or not isinstance(request_id,str) or not 1<=len(request_id)<=128 or self.active or self.worker and self.worker.is_alive()
-                    or any(j.is_alive() for j in self.stop_jobs)):
+                    or any(j.is_alive() for j in self.stop_jobs)
+                    or hasattr(self.backend,'admission_ready') and not self.backend.admission_ready()):
                 raise RuntimeError('Playback owner/admission unavailable')
             self.generation+=1;stream=uid()
             self.active=dict(stream_id=stream,generation=self.generation,authority=authority,request_id=request_id,
-                pcm=bytearray(),written=0,consumed=0,done=False,deadline=deadline,started=False)
+                pcm=bytearray(),written=0,consumed=0,queued_frames=0,done=False,deadline=deadline,started=False)
             self.stop_known=False
             s=self.active;self.reservation_busy=True
         try:
@@ -76,7 +77,7 @@ class Playback:
             if not s or s['stream_id']!=stream or s['generation']!=self.generation or s['done']:
                 return False
             if len(s['pcm'])+len(pcm)>self.cap:raise ValueError('PCM duration cap')
-            s['pcm'].extend(pcm);self.wake.set();return True
+            s['pcm'].extend(pcm);s['queued_frames']+=len(pcm)//2;self.wake.set();return True
 
     def finish(self,stream):
         with self.lock:
@@ -133,7 +134,38 @@ class Playback:
                 self.stop_known=known and self.motion_stop_known
                 if not known:self.quarantined=True;self.paused=None
                 if self.active is s:self.active=None
+                self.terminal=dict(stream_id=s['stream_id'],generation=s['generation'],input_finished=s['done'],
+                    submitted_frames=s['queued_frames'],written_frames=s['written'],consumed_frames=s['consumed'],
+                    stop_known=known,complete=s['done'] and s['queued_frames']==s['written']==s['consumed'])
                 self.record('speech_stopped',stream_id=s['stream_id'],stop_known=known)
+
+    def terminal_receipt(self,stream=None,generation=None):
+        """One retained terminal; a finally block is not a returned worker."""
+        with self.lock:
+            value=self.terminal
+            if (value is None or stream is not None and value['stream_id']!=stream
+                    or generation is not None and value['generation']!=generation
+                    or self.active is not None or self.paused is not None or self.reservation_busy
+                    or self.worker and self.worker.is_alive() or any(job.is_alive() for job in self.stop_jobs)):
+                return None
+            operation=self.audio_stops.get(value['stream_id'])
+            receipt=operation[1].get('receipt',{}) if operation else {}
+            if (not operation or operation[0].is_alive() or value['stop_known'] is not True
+                    or receipt.get('stream_id')!=value['stream_id'] or receipt.get('verified_stopped') is not True
+                    or receipt.get('verified') is not True or type(receipt.get('consumed_frames')) is not int
+                    or not value['consumed_frames']<=receipt['consumed_frames']<=value['written_frames']<=value['submitted_frames']
+                    or receipt.get('provenance') not in ('device_consumed_pcm','simulated_consumed_pcm')
+                    or receipt.get('provenance')=='simulated_consumed_pcm' and not self.allow_simulated):
+                return None
+            return dict(value,consumed_frames=receipt['consumed_frames'],stop_receipt=dict(receipt))
+
+    def retire_terminal(self,stream,generation):
+        with self.lock:
+            if self.terminal_receipt(stream,generation) is None:return False
+            if hasattr(self.backend,'commit_retirement'):self.backend.commit_retirement(stream)
+            self.audio_stops.pop(stream,None);self.stop_jobs=[job for job in self.stop_jobs if job.is_alive()]
+            self.terminal=None;self.worker=None
+            return True
 
     def request_stop(self,stream):
         with self.lock:
@@ -235,7 +267,7 @@ class Playback:
         stream=self.begin(p['authority'],p['request_id'],deadline=self.clock()+60)
         with self.lock:
             if not self.active or self.active['stream_id']!=stream:return None
-            self.active['pcm'].extend(pcm);self.active['done']=True;self.wake.set()
+            self.active['pcm'].extend(pcm);self.active['queued_frames']=len(pcm)//2;self.active['done']=True;self.wake.set()
             self.record('speech_resumed',stream_id=stream,from_consumed_frames=p['cursor'])
             return stream
 
@@ -244,8 +276,12 @@ class Playback:
     def status(self):
         with self.lock:
             self.stop_jobs=[j for j in self.stop_jobs if j.is_alive()]
+            busy=self.reservation_busy or bool(self.worker and self.worker.is_alive()) or any(j.is_alive() for j in self.stop_jobs)
             return dict(execution_busy=self.reservation_busy or bool(self.worker and self.worker.is_alive()) or any(j.is_alive() for j in self.stop_jobs),
+                terminal_unknown=self.terminal is not None and not busy and self.active is None
+                    and self.paused is None and self.terminal_receipt() is None,
                 stop_known=self.stop_known,quarantined=self.quarantined,closed=self.closed,
+                admission_blocked=hasattr(self.backend,'admission_ready') and not self.backend.admission_ready(),
                 resumable=self.paused is not None,timeline=list(self.timeline))
 
     def close(self):
