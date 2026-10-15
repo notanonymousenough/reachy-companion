@@ -202,14 +202,24 @@ One finite reviewable sequence, with no production memory or personal facts:
    `readback` report and its raw-file SHA256. Add
    `--memory-readback <frozen-readback.json> --memory-readback-sha256 <reviewed-SHA256>`
    to the existing voice-runtime invocation. Its opt-in guard rejects a changed,
-   legacy or unconfirmed artifact, checks the exact whitelist descriptor BEFORE
-   every fast call, and checks the store/revision/full projection and absence of
+   legacy or unconfirmed artifact, checks the exact whitelist descriptor and
+   requires an explicit empty `sensors` list with no extra `observations` BEFORE
+   every fast transport/model call, and checks the store/revision/full projection and absence of
    extra observations BEFORE every main call. Thus a wrong DB/namespace cannot
    first send private memory to a model and merely fail the final receipt check.
    An empty/not-ready context also rejects inference until the exact projection
    arrives; no fallback context or model call is substituted. These guards use
-   existing gateway slots and add no memory/model API.
-   Run the existing finite voice runtime with context
+   existing gateway slots and add no memory/model API. The ordinary profile's
+   camera path is unchanged. A regression uses actual State/FastView,
+   AuditedGateway and RemoteGateway with a counting local ModelBackend stub:
+   an extra camera sensor or observation causes zero transports/model calls;
+   the clean whitelist view passes.
+   **Current integration gate:** generic `ContextProvider.snapshot` always emits
+   a `camera.pixel_quality` placeholder, even without a video URL. This strict
+   profile rejects that placeholder too. The generic provider cannot yet run
+   this sequence as-is: a separately reviewed memory-only provider path returning
+   `sensors=[]` is required. Do not silently strip sensors or weaken the guard.
+   Only after that source gate passes, run the finite voice runtime with context
    enabled in a NEW Hub/control session and a newly granted microphone epoch.
    Both admitted real STT turns must produce completed real main requests whose
    exact memory projection is the current confirmed fixture v1/v2, and consumed

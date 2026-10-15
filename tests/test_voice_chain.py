@@ -2,6 +2,7 @@
 import copy
 import importlib.util
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 import tempfile
@@ -10,10 +11,11 @@ import sys
 import threading
 import time
 import unittest
+from unittest.mock import patch
 from reachy_companion.autonomous import voice_chain as chain
 from reachy_companion.autonomous import voice_memory_fixture as memory
 from reachy_companion.autonomous.state import State
-from reachy_companion.autonomous.runtime import ReplayGateway,Scheduler
+from reachy_companion.autonomous.runtime import ReplayGateway,Scheduler,RemoteGateway
 from reachy_companion.autonomous.gateway import ModelBackend
 from reachy_companion.autonomous.config import load
 from reachy_companion.autonomous.playback import Playback,ReplayPCM
@@ -47,6 +49,45 @@ def receipts(items=None,*,store_id=None,revision=-1):
 
 
 class ChainTests(unittest.TestCase):
+    def test_actual_audited_gateway_rejects_extra_fast_sensor_before_transport_or_model(self):
+        state=State();meta=dict(item_id='fixture-note',namespace='fixture-space',created_at='2020-01-01T00:00:00Z',
+            voice=dict(lineage_id='fixture-source'),operator_root='fixture-owner')
+        item=memory.item(meta,2)
+        state.update_context(dict(memory=dict(store_id='store',revision=3,items=[item]),sensors=[]),0)
+        clean=state.snapshot(0)
+        report=dict(action='readback',accepted=True,live_source_chain_validated=True,model_inference=False,
+            state_projection_verified=True,content_whitelist_verified=True,versions=[2],store_id='store',revision=3,
+            memory_projection_sha256=chain.digest([item]),memory_descriptor_sha256=chain.digest(clean['memory']))
+        binding=chain.context_binding(report);cfg=load(ROOT/'config.autonomous.example.json')
+        cfg['gateway'].update(client_url='http://127.0.0.1:1',token_env='CHAIN_FIXTURE_TOKEN')
+        cfg['models']['fast'].update(completion_backend='llama_native',base_url='http://127.0.0.1:1',id='fixture-fast',decision_format='object')
+        backend=ModelBackend(cfg);backend.count=lambda *args:1;transport_calls=[];model_calls=[]
+        def model(url,payload,*args):
+            model_calls.append(payload)
+            return dict(content=json.dumps(dict(a='wait',why='fixture')),stop_type='word',tokens_predicted=3)
+        backend.post=model
+        def transport(owner,path,payload=None):
+            if path=='/health':return dict(compute_boot_id='fixture-compute')
+            transport_calls.append(path)
+            return {**backend.generate_loaded('fast',payload['data']), 'request_id':payload['request_id']}
+        with patch.dict(os.environ,CHAIN_FIXTURE_TOKEN='fixture-token'*4),patch.object(RemoteGateway,'call',transport):
+            gateway=fixture.runtime.AuditedGateway(cfg,memory_scope=binding)
+            gateway.fast('clean',clean);self.assertEqual(len(transport_calls),1);self.assertEqual(len(model_calls),1)
+            transport_calls.clear();model_calls.clear()
+            state.ingest(dict(type='sensor',id='camera.extra',summary='Unexpected camera fixture summary',availability='available'),0)
+            injected=state.snapshot(0) # real schema-validated State/FastView
+            self.assertEqual(injected['memory'],clean['memory']);self.assertTrue(injected['sensors'])
+            with self.assertRaises(ValueError):gateway.fast('extra-camera',injected)
+            extra=copy.deepcopy(clean);extra['observations']=[dict(summary='Unexpected observation fixture')]
+            with self.assertRaises(ValueError):gateway.fast('extra-observation',extra)
+            unknown=copy.deepcopy(clean);unknown.pop('sensors')
+            with self.assertRaises(ValueError):gateway.fast('unknown-sensors',unknown)
+            self.assertFalse(transport_calls);self.assertFalse(model_calls)
+            # Ordinary profile keeps its existing sensor path; no global camera disable.
+            ordinary=fixture.runtime.AuditedGateway(cfg)
+            ordinary.fast('ordinary-camera',injected)
+            self.assertEqual(len(transport_calls),1);self.assertEqual(len(model_calls),1)
+
     def test_legacy_working_one_is_not_strict_live_source_and_mutated_chain_is_rejected(self):
         hub,device=fixture.receipts();binding=dict(controller='controller',session_boot='session',source_boot='source')
         memory.voice_provenance(hub,device,binding) # existing neutral workflow remains supported
@@ -211,7 +252,7 @@ class ChainTests(unittest.TestCase):
         binding=chain.context_binding(report);calls=[]
         task=SimpleNamespace(kind='main',memory_store_id='store',memory_revision=3,
             prompt=dict(schema_version='context-1',utterance='Neutral query',memory=items,observations=[]))
-        chain.check_context_view(dict(memory=descriptors),binding);chain.check_context_task(task,binding)
+        chain.check_context_view(dict(memory=descriptors,sensors=[]),binding);chain.check_context_task(task,binding)
         for change in ({'memory_store_id':'foreign'},{'memory_revision':2},{'memory_revision':True},
                 {'prompt':{**task.prompt,'memory':[dict(content='Unexpected fixture content')]}},
                 {'prompt':{**task.prompt,'observations':[dict(summary='Unexpected observation')]}}):
@@ -221,7 +262,7 @@ class ChainTests(unittest.TestCase):
                 chain.check_context_task(bad,binding);calls.append('main transport')
         for memory_value in ([],[dict(summary='Unexpected fixture content')]):
             with self.assertRaises(ValueError):
-                chain.check_context_view(dict(memory=memory_value),binding);calls.append('fast transport')
+                chain.check_context_view(dict(memory=memory_value,sensors=[]),binding);calls.append('fast transport')
         self.assertFalse(calls)
         report['live_source_chain_validated']=False
         with self.assertRaises(ValueError):chain.context_binding(report) # old neutral14 cannot bootstrap live gate

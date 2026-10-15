@@ -91,6 +91,28 @@ def admit_working_audio(ingest,state,event,now=None):
         stt_provenance=audio.get('stt_provenance'),ttl_ms=audio.get('ttl_ms'),stt_text_sha256=digest(event['text']))
 
 
+class AuditedGateway(RemoteGateway):
+    """Existing transport facade, importable for pre-transport guard regressions."""
+    def __init__(self,config,*,memory_scope=None,main_calls=None,fast_calls=None,receipt_overflow=None):
+        super().__init__(config)
+        self.memory_scope=memory_scope
+        self.main_calls=[] if main_calls is None else main_calls
+        self.fast_calls=[] if fast_calls is None else fast_calls
+        self.receipt_overflow=dict(turns=False,main=False) if receipt_overflow is None else receipt_overflow
+    def fast(self,request_id,view):
+        if self.memory_scope is not None:check_context_view(view,self.memory_scope)
+        started=time.monotonic();result=super().fast(request_id,view)
+        self.fast_calls.append(dict(elapsed_s=time.monotonic()-started,activity=result['output']['a'],usage=result.get('usage'),
+            microphone_enabled=view['op']['microphone_enabled'],candidates=len(view['candidates']),ready=len(view['ready'])))
+        del self.fast_calls[:-256];return result
+    def main(self,task):
+        if self.memory_scope is not None:check_context_task(task,self.memory_scope)
+        started=time.monotonic();result=super().main(task)
+        overflow=retain_main_audit(self.main_calls,dict(elapsed_s=time.monotonic()-started,task_id=task.task_id,attempt_id=task.attempt_id,
+            input_ref=task.input_ref,final=result.get('completion_provenance'),usage=result.get('usage')))
+        if overflow:self.receipt_overflow['main']=True
+        return result
+
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     for name in ('config','companion-config','token-file','output'):p.add_argument('--'+name,type=Path,required=True)
@@ -133,20 +155,6 @@ def main():
     audio=AudioAdapter(HttpSTT(companion['network']['compute_url'],companion.token))
     poller=AudioPolling(client,audio,source);stop=threading.Event();turns=[];main_calls=[];fast_calls=[]
     receipt_overflow=dict(turns=False,main=False)
-    class AuditedGateway(RemoteGateway):
-        def fast(self,request_id,view):
-            if memory_scope is not None:check_context_view(view,memory_scope)
-            started=time.monotonic();result=super().fast(request_id,view)
-            fast_calls.append(dict(elapsed_s=time.monotonic()-started,activity=result['output']['a'],usage=result.get('usage'),
-                microphone_enabled=view['op']['microphone_enabled'],candidates=len(view['candidates']),ready=len(view['ready'])))
-            del fast_calls[:-256];return result
-        def main(self,task):
-            if memory_scope is not None:check_context_task(task,memory_scope)
-            started=time.monotonic();result=super().main(task)
-            overflow=retain_main_audit(main_calls,dict(elapsed_s=time.monotonic()-started,task_id=task.task_id,attempt_id=task.attempt_id,
-                input_ref=task.input_ref,final=result.get('completion_provenance'),usage=result.get('usage')))
-            if overflow:receipt_overflow['main']=True
-            return result
     class AudioScheduler(Scheduler):
         def ingest(self,event,now=None):
             if event.get('audio'):
@@ -175,7 +183,7 @@ def main():
                     echo_reference_matched=reference is not None and reference==event['audio']['echo_reference']))
                 return
             return super().ingest(event,now)
-    scheduler=AudioScheduler(config,AuditedGateway(config),speech_adapter=speech,audio_adapter=audio)
+    scheduler=AudioScheduler(config,AuditedGateway(config,memory_scope=memory_scope,main_calls=main_calls,fast_calls=fast_calls,receipt_overflow=receipt_overflow),speech_adapter=speech,audio_adapter=audio)
     lease=create_lease(client,source,a.lease_datagram_port)
     stage='startup';started=time.monotonic();latencies=[];cancel_job=None;cancel_at=None;cancel_stop_s=None;no_response_since=None
     latest={};status_lock=threading.Lock();stopped_streams=set();progress_frames={};first_consumed={};cursor_provenance={}

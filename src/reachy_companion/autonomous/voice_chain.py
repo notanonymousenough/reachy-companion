@@ -63,6 +63,8 @@ def context_binding(report):
 
 
 def check_context_view(view,binding):
+    if type(view.get('sensors')) is not list or view['sensors'] or view.get('observations',[])!=[]:
+        raise ValueError('Fast request refused before inference: whitelist-only profile forbids sensors/observations')
     if digest(view.get('memory'))!=binding['memory_descriptor_sha256']:
         raise ValueError('Fast request refused before inference: memory whitelist changed/not ready')
 
