@@ -277,18 +277,29 @@ class NativeWindowsCleanupTests(CleanupScenarios,unittest.TestCase):
         api=WindowsKernel();source=self.root/'source.bin';source.write_bytes(b'OWNED_SOURCE')
         target=self.root/'quarantine';target.mkdir();sentinel=target/'occupied.bin';sentinel.write_bytes(b'FOREIGN_SENTINEL')
         parent=api.open(self.root,directory=True);root=api.open(target,directory=True,traverse=True)
-        handle=api.open(source,delete=True);foreign=api.open(sentinel)
+        source_pin=api.open(source);foreign=api.open(sentinel);handle=api.open(source,delete=True)
         try:
-            source_id=api.identity(handle);foreign_id=api.identity(foreign);root_id=api.identity(root)
+            source_id=api.identity(source_pin);foreign_id=api.identity(foreign);root_id=api.identity(root);parent_id=api.identity(parent)
+            self.assertEqual(api.identity(handle),source_id)
             with self.assertRaises(OSError) as error:api.rename(handle,root,'occupied.bin',directory_path=target)
             self.assertIn(error.exception.winerror,(80,183))
-            for path,expected in ((source,source_id),(sentinel,foreign_id)):
-                observed=api.open(path)
-                try:self.assertEqual(api.identity(observed),expected)
-                finally:api.close(observed)
+            def verify():
+                for path,pin,expected in ((source,source_pin,source_id),(sentinel,foreign,foreign_id),
+                        (target,root,root_id),(self.root,parent,parent_id)):
+                    self.assertEqual(api.identity(pin),expected)
+                    observed=api.open(path,directory=path in (target,self.root))
+                    try:self.assertEqual(api.identity(observed),expected)
+                    finally:api.close(observed)
+            verify() # negative API outcome AND both pathname IDs are already known
+            # CRT read_bytes does not share DELETE. Keep original attribute pins,
+            # close only the DELETE handle exactly once, then observe bytes.
+            delete_handle=handle;handle=None;api.close(delete_handle)
+            verify()
             self.assertEqual(source.read_bytes(),b'OWNED_SOURCE');self.assertEqual(sentinel.read_bytes(),b'FOREIGN_SENTINEL')
-            self.assertEqual(api.identity(root),root_id)
-        finally:api.close(foreign);api.close(handle);api.close(root);api.close(parent)
+            verify()
+        finally:
+            if handle is not None:api.close(handle)
+            api.close(source_pin);api.close(foreign);api.close(root);api.close(parent)
 
     def test_noncleanup_mutex_blocks_other_process_and_namespace_rename_until_owned_close(self):
         store=self.make_fixture();meta,db,fd,owner=fixture.open_fixture(self.directory,store)
@@ -320,6 +331,54 @@ class NativeWindowsCleanupTests(CleanupScenarios,unittest.TestCase):
         with self.assertRaises(OSError):fixture.operate('readback',self.directory,store,-1)
         self.assertEqual(marker.read_bytes(),before)
         self.assertTrue((self.directory/'memory.sqlite').exists())
+
+
+@unittest.skipUnless(os.name=='posix','POSIX sharing-causality model only; not native proof')
+class SentinelObserverTests(unittest.TestCase):
+    def test_old_crt_observer_denied_while_delete_held_new_observer_retains_all_attribute_ids(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            parent=Path(temporary).resolve();case_root=parent/'fixed';case_root.mkdir()
+            events=[];case=self
+            class SharingModel(PosixHandleEmulator):
+                def __init__(self):super().__init__();self.delete_handles=set()
+                def open(self,path,**kwargs):
+                    handle=super().open(path,**kwargs)
+                    if kwargs.get('delete'):self.delete_handles.add(handle)
+                    return handle
+                def identity(self,handle):
+                    value=super().identity(handle);events.append(('identity',value));return value
+                def close(self,handle):
+                    if handle in self.delete_handles:
+                        events.append(('close_delete',self.identity(handle)));self.delete_handles.remove(handle)
+                    super().close(handle)
+                def rename(self,*args,**kwargs):
+                    with case.assertRaises(FileExistsError):super().rename(*args,**kwargs)
+                    error=FileExistsError('occupied sentinel');error.winerror=183;raise error
+            api=SharingModel();read_bytes=Path.read_bytes
+            def crt_read(path):
+                if any(api.handles[h]==path for h in api.delete_handles):
+                    raise PermissionError('Modeled CRT read cannot share existing DELETE access')
+                if path.parent in (case_root,case_root/'quarantine'):
+                    required={case_root,case_root/'quarantine',case_root/'source.bin',case_root/'quarantine/occupied.bin'}
+                    self.assertTrue(required<=set(api.handles.values()),'Original source/sentinel and directory attribute pins must remain held')
+                events.append(('read',path));return read_bytes(path)
+            # Reproduce the former observer ordering on a neutral real POSIX fd.
+            old=parent/'old.bin';old.write_bytes(b'OLD_OBSERVER');held=api.open(old,delete=True)
+            with patch.object(Path,'read_bytes',crt_read):
+                with self.assertRaisesRegex(PermissionError,'existing DELETE'):old.read_bytes()
+            api.close(held);events.clear()
+            # Run the exact revised native test body through the sharing model.
+            native=NativeWindowsCleanupTests('test_native_occupied_sentinel_is_never_replaced_and_both_files_keep_ids_and_bytes')
+            native.root=case_root
+            with patch(__name__+'.WindowsKernel',return_value=api),patch.object(Path,'read_bytes',crt_read):
+                native.test_native_occupied_sentinel_is_never_replaced_and_both_files_keep_ids_and_bytes()
+            self.assertFalse(api.handles);self.assertFalse(api.delete_handles)
+            closes=[i for i,event in enumerate(events) if event[0]=='close_delete']
+            reads=[i for i,event in enumerate(events) if event[0]=='read']
+            self.assertEqual(len(closes),1);self.assertEqual(len(reads),2);self.assertLess(closes[0],reads[0])
+            self.assertTrue(any(event[0]=='identity' for event in events[reads[-1]+1:]))
+            self.assertEqual((case_root/'source.bin').read_bytes(),b'OWNED_SOURCE')
+            self.assertEqual((case_root/'quarantine/occupied.bin').read_bytes(),b'FOREIGN_SENTINEL')
 
 
 class Win32AdapterTests(unittest.TestCase):
