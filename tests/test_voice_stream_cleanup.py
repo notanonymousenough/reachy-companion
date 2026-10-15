@@ -8,11 +8,15 @@ from unittest.mock import patch
 
 
 class StreamCleanupTests(unittest.TestCase):
-    def pipeline(self):
+    def pipeline_class(self):
         piper=types.ModuleType('piper');piper.PiperVoice=piper.SynthesisConfig=object
         vosk=types.ModuleType('vosk');vosk.Model=vosk.KaldiRecognizer=vosk.SetLogLevel=object
         with patch.dict(sys.modules,{'piper':piper,'vosk':vosk}):
             from reachy_companion.voice import Pipeline
+        return Pipeline
+
+    def pipeline(self):
+        Pipeline=self.pipeline_class()
         p=Pipeline.__new__(Pipeline);p.lock=threading.Lock();p.phase='idle'
         p.config={'conversation':{'interaction':{}}}
         p.prepare=lambda *args:({'reply':'fixture'},'fixture',None)
