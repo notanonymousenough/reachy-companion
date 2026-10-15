@@ -95,3 +95,7 @@ class Task:
     expires: float = 0
     kind: str = "main"
     memory_dependencies: tuple = ()
+    completed_at: float | None = None
+    completion_provenance: dict | None = None
+    memory_store_id: str | None = None
+    memory_revision: int = -1

@@ -92,7 +92,7 @@ PYTHONPATH=src <validation-python> -m unittest discover -s tests -p test_audio_m
 
 ## Prepared finite voice-to-memory owner acceptance
 
-`deploy/autonomous/voice_memory_acceptance.py` reuses the existing PC `MemoryStore` and canonical `State`; it adds no service, model tool or HTTP write endpoint. The input is a **finished owned voice session**, not an STT string or a speaker's request to remember. Run the reviewed [finite voice profile](realtime-audio.md) first at the same pin, with actual Agent cancellation, accepted network gate and complete device/Hub cleanup. Existing receipts without `working_memory_receipt_schema=voice-working-1` are insufficient: do not add missing fields by hand or reuse readiness from an older run.
+`deploy/autonomous/voice_memory_acceptance.py` reuses the existing PC `MemoryStore` and canonical `State`; it adds no service, model tool or HTTP write endpoint. The input is a **finished owned voice session**, not an STT string or a speaker's request to remember. Run the reviewed [finite voice profile](realtime-audio.md) first at the same pin, with actual Agent cancellation, accepted network gate and complete device/Hub cleanup. Legacy `voice-working-1` receipts remain supported only by the original trusted-owner fixture actions. They cannot establish the strict live-chain/next-main gate below. Fresh runtime now emits `voice-working-2`; never add fields to old receipts or reuse readiness from an older run.
 
 The actual audio admission exports only source/sequence, PCM SHA256, lineage, the canonical candidate ID/authority and the validated public Agent boot/microphone/policy binding. The runtime records a practice turn only after its canonical `State` accepts the utterance; muted/blocked input cannot become a working-memory receipt. It exports no transcript or microphone owner nonce. The PC acceptance checks exactly two matched unknown turns, increasing sequence/interaction epochs, capture admission age under2s, the final microphone epoch and policy binding, actual-Agent cancellation within500ms, matching session owners, both accepted receipts and drained cleanup. Hashes identify the runner's immutable input files; they are not cryptographic hardware attestations. A forged JSON file cannot independently prove real voice. Runner verification of the pinned processes and authentic finished files remains required.
 
@@ -136,3 +136,111 @@ Windows noncleanup commands use `WindowsOperationLock`, separate from the explic
 The causal regression models the former normal `forget` finally failure (unlink while CRT fd open), separately from injected initialization errors. Local descriptor/handle models are not native Windows sharing proof. Native tests in `test_windows_fixture_cleanup.py` additionally require actual cross-process exclusion, blocked directory/lock rename while held, known release followed by successful reacquisition, preserved later foreign marker, failed-disposition fd close, and the existing quarantine identity tests. Run them only in the independently verified operator-only test parent; no ACL mutation or automatic retry of preserved failed fixtures is part of this source change.
 
 CLI `accepted` means this bounded owner-memory action passed. `live_voice_verified=false`, `speaker_identity_confirmed=false` and `input_assurance=trusted_runner_files_not_signed_hardware_attestation` are deliberately retained in all reports. Actual combined acceptance requires the runner's genuine finished voice receipts plus successful separate PC steps and owned cleanup. Local tests use explicitly synthetic voice receipts with real subprocess SQLite persistence and cannot establish that actual acceptance. Automatic memory consolidation, identity inference, traits/policy writes, spoken private recall and export remain outside this stage.
+
+
+## Finite strict voice chain and next-main context gate
+
+This source endpoint closes a specific missing link: the original `voice-working-1`
+metadata did not correlate an admitted STT input to its particular completed main
+attempt and consumed reply. The existing neutral fourteen-process CLI workflow
+proves SQLite/owner-CAS/cleanup only. It cannot be promoted into live evidence.
+No new service, memory-write API, inference executor or driver is added here.
+
+`ModelBackend` emits `model-final-1` metadata only after a successful terminal
+model generation. It hashes the logical input, utterance, exact memory projection
+and returned output; the configured model ID is exported only as a digest,
+not as a model-weight/instance attestation. Scheduler/State check those hashes against the canonical
+Task before readiness; the task/attempt/input-ref, immutable authority and original
+task/proposal times, store UUID and revision survive the speech commit into the owned speech receipt.
+ReplayGateway supplies no such provenance. The realtime harness correlates by
+identity, not by speech receipt position, and requires actual HttpSTT admission,
+source capture TTL under2s, matching STT/utterance digest, actual main FINAL before
+its original deadline, unchanged epochs, valid proposal/producer deadlines,
+matching reply output hash and complete `device_consumed_pcm` cursor with known
+stop. A simulated cursor, missing/partial/scripted/replay FINAL, stale authority,
+reused attempt/stream or ambiguous join rejects the chain. Audit retention is
+bounded to two turns and eight main receipts; overflow fails acceptance rather
+than silently evicting required evidence. Actual futures remain occupied until
+completion; metadata expiry never releases an inference slot.
+
+These are **receipt consistency checks**, not cryptographic hardware/model
+attestations. Every CLI report still says `live_voice_verified=false`, unknown
+speaker, no model inference by the CLI and
+`input_assurance=trusted_runner_files_not_signed_hardware_attestation`. The runtime
+HTTP/provider tag cannot prove that a remotely configured endpoint is an actual
+model or live capture source. Runner review of fresh pinned runtime/config,
+immutable model instance/weights/tokenizer/template, occupied task slots, capture
+owner, device output and the authentic finished receipt files remains mandatory.
+Synthetic tests construct DTO shapes only and never establish actual acceptance.
+Do not relabel a replay/scripted/synthetic receipt, manually add `model-final-1`,
+or take `accepted=true` from a fixture action as the runner's live verdict.
+
+One finite reviewable sequence, with no production memory or personal facts:
+
+1. Run a freshly reviewed real two-turn finite voice session at this source pin,
+   with context disabled, actual PC STT/main FINAL, consumed device playback,
+   actual-Agent cancellation and complete drained cleanup. Existing
+   `realtime_audio_session.py` exports `voice-working-2`; source/config transfers,
+   microphone/capture and output require the separately approved runner window.
+   Old sessions and the neutral synthetic input files are not eligible.
+2. On the PC, use the existing CLI and a fresh exclusively owned disposable store.
+   Add `--require-live-source` to the existing `prepare` command with the genuine
+   finished Hub/device files and exact controller/session/source binding. This
+   validates the new chain **before creating** the store and records its input
+   hashes, both source lineages and final microphone epoch. Require
+   `live_source_chain_validated=true`; the item is still proposed/hidden.
+3. Obtain explicit trusted local user confirmation, then use existing `confirm`
+   v0→v1 and optional separately confirmed `correct` v1→v2. Nothing said by Alice,
+   unknown STT, a model or a receipt grants confirmation. Only the existing public
+   neutral four/six fixture content is writable. Reopen with `readback` in a new
+   process; compare UUID/revision/version, whitelist and State projection.
+4. Prepare/review an isolated test gateway context config bound to exactly this
+   fixture's `memory.sqlite` and namespace, no video, production/private memory or
+   extra items. Do not change production configuration. Independently audit the
+   real fast/main runtime and resource ownership again; a JSON audit flag or this
+   endpoint is not that audit. Freeze the successful confirmed-version CLI
+   `readback` report and its raw-file SHA256. Add
+   `--memory-readback <frozen-readback.json> --memory-readback-sha256 <reviewed-SHA256>`
+   to the existing voice-runtime invocation. Its opt-in guard rejects a changed,
+   legacy or unconfirmed artifact, checks the exact whitelist descriptor BEFORE
+   every fast call, and checks the store/revision/full projection and absence of
+   extra observations BEFORE every main call. Thus a wrong DB/namespace cannot
+   first send private memory to a model and merely fail the final receipt check.
+   An empty/not-ready context also rejects inference until the exact projection
+   arrives; no fallback context or model call is substituted. These guards use
+   existing gateway slots and add no memory/model API.
+   Run the existing finite voice runtime with context
+   enabled in a NEW Hub/control session and a newly granted microphone epoch.
+   Both admitted real STT turns must produce completed real main requests whose
+   exact memory projection is the current confirmed fixture v1/v2, and consumed
+   owned replies. This measures request-context continuity, not semantic proof
+   that a model reasoned from memory, speaker identity or personal-fact recall.
+5. Validate the finished next session through the existing CLI action below.
+   It opens the same fixture with UUID/version CAS, checks the current whitelist,
+   both new request store/revision/projection bindings, the pre-inference frozen
+   readback binding, new Hub/control session, source lineage
+   non-replay, microphone renewal after prior cleanup and all strict chains.
+   It performs no new model request, speech or memory promotion.
+6. After that validation, explicitly forget/reopen empty as above. Revoke/drain
+   the owned test context, close/reap its test gateway/SQLite connections before
+   file cleanup, and stop only owned finite processes. Never stop the shared model
+   server to make cleanup pass. Unknown jobs/owners keep acceptance closed and
+   preserve artifacts. Remove only the exact disposable store through existing
+   owned cleanup; keep reports outside it. No automatic retry/recovery is added.
+
+```text
+voice_memory_acceptance.py prepare --require-live-source --allow-disposable-voice-fixture --directory <fresh-fixture> --output <fresh-prepare.json> --hub-receipt <actual-first-hub.json> --device-receipt <actual-first-device.json> --controller <first-controller> --session-boot <first-session> --source-boot <first-source>
+voice_memory_acceptance.py verify-live-context --allow-disposable-voice-fixture --directory <same-fixture> --output <fresh-next-context.json> --expected-store-id <same-UUID> --expected-version <confirmed-1-or-2> --hub-receipt <actual-next-hub.json> --device-receipt <actual-next-device.json> --controller <next-controller> --session-boot <new-session> --source-boot <next-source>
+```
+
+Use the same staged interpreter/PYTHONPATH prefix and finite command bound from
+the preceding section. `next_main_context_validated=true` is the endpoint result;
+`live_voice_verified` deliberately remains false. Required independent review
+packet: source/config and runtime/model audit bindings; both genuine finished
+voice-working-2 Hub/device receipt pairs and hashes; explicit owner confirmations;
+UUID/version/revision/whitelist readback receipts from separate processes; the
+next-context check; fresh stop/mute/occupied-slot/terminal-context receipts; final
+forget/replay-rejection/known owned cleanup. No raw PCM, transcripts, private
+configuration values or actual device identifiers belong in published runbooks.
+Until those fresh actual gates pass, real two-turn voice-to-memory continuity
+acceptance remains CLOSED even when all local tests or receipt checks pass.

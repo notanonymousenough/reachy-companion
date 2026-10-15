@@ -99,6 +99,7 @@ class AudioAdapter:
                                 echo_reference=observation['echo_reference'],
                                 capture_age_ms=int((now-observation['captured_end'])*1000),
                                 ttl_ms=2000, confirmed=False))
+                            event['audio']['stt_provenance']='pc_http_stt' if type(self.stt) is HttpSTT else 'fixture_or_unverified_stt'
                     else:
                         self.counts['stale'] += 1
             if self.pending and not self.job:

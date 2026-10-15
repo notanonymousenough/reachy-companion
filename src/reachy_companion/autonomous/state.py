@@ -6,6 +6,7 @@ import hashlib
 import json
 import time
 from .contracts import Authority, Binding, Sensor, Task, uid, validate
+from .voice_chain import checked_final,speech_main
 
 
 def utc():
@@ -344,7 +345,8 @@ class State:
             task.status = 'committed'
             if self.speech_attached:
                 if isinstance(task.result,str) and 0<len(task.result)<=1024:
-                    self.speech_proposals.append(dict(text=task.result,request_id=binding.request_id,authority=self.authority,deadline=min(task.expires,now+30)))
+                    self.speech_proposals.append(dict(text=task.result,request_id=binding.request_id,authority=self.authority,
+                        deadline=min(task.expires,now+30),main_receipt=speech_main(task,now)))
                     self.record('speech_proposed',task_id=task.task_id)
                 else:self.record('speech_text_rejected',task_id=task.task_id)
             else:self.record('simulated_speech', task_id=task.task_id, text=task.result)
@@ -355,6 +357,7 @@ class State:
                 self.record('task_admission_rejected'); return None
             task = Task(uid(), uid(), ref, self.candidates.pop(ref), self.authority, now,
                         now+self.config['task_timeout_s'], kind=self.candidate_kinds.pop(ref))
+            task.memory_store_id=self.memory_store_id;task.memory_revision=self.memory_revision
             if task.kind=='main' and (self.memory_items or self.context_sensors):
                 active_memory={alias:item for alias,item in self.memory_items.items() if self.memory_valid(item)}
                 observations=[sensor for sensor in self.context_view(now) if sensor['state']=='fresh'
@@ -366,7 +369,7 @@ class State:
             return task
         return None
 
-    def complete(self, task_id, attempt_id, authority, result, now, error=None):
+    def complete(self, task_id, attempt_id, authority, result, now, error=None,provenance=None):
         task = self.tasks.get(task_id)
         if not task or task.attempt_id != attempt_id or task.authority != authority or authority != self.authority or now > task.deadline or task.status != 'running' or not self.memory_current(task):
             if task and task.attempt_id == attempt_id and task.authority == authority and task.status == 'running':
@@ -374,6 +377,11 @@ class State:
             self.record('task_result_stale', task_id=task_id); return
         if error or not isinstance(result, str) or not result.strip() or len(result) > 8192:
             task.status = 'failed'; self.record('task_failed', task_id=task_id); return
+        if provenance is not None:
+            try:task.completion_provenance=checked_final(task,result,provenance)
+            except ValueError:
+                task.status='failed';self.record('task_final_provenance_rejected',task_id=task_id);return
+        task.completed_at=now
         task.status, task.result = 'ready', result
         task.expires = now + self.config['proposal_ttl_s']
         self.record('proposal_ready', task_id=task_id)

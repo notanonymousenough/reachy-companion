@@ -9,6 +9,7 @@ from urllib.error import URLError
 from urllib.parse import urlsplit
 from urllib.request import Request, build_opener, ProxyHandler
 from .contracts import decode, uid, validate
+from .voice_chain import model_final
 
 FAST_SYSTEM = '''Return one JSON action and a brief why.
 Muted blocks speech, not independently granted motion. Otherwise muted: {"a":"wait","why":"muted"}.
@@ -208,8 +209,11 @@ class ModelBackend:
                 output['start'] = {**output['start'], 'input_ref': aliases[ref]}
         if role == 'main' and not 1 <= len(text) <= 8192:
             raise ValueError('Invalid main output')
-        return dict(output=output, usage=dict(input_tokens=input_tokens, text_tokens=text_tokens,
+        result=dict(output=output, usage=dict(input_tokens=input_tokens, text_tokens=text_tokens,
                     template_tokens=template_tokens, output_reserved=model['output_tokens'], **stats), model=model['id'])
+        if role=='main':result['completion_provenance']=model_final(json.loads(data) if context_input else data,output,
+            'lmstudio_sdk' if handle else 'llama_native' if native else 'completion_http',model['id'])
+        return result
 
 
 def fast_schema(view):

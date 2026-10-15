@@ -15,6 +15,7 @@ from .audio_session_control import cleanup_receipts
 from .contracts import Authority,decode,uid
 from .memory import MemoryStore,MemoryConflict
 from .state import State
+from .voice_chain import validate_turn,digest
 
 CONTENTS=('Disposable arithmetic fixture marker: four.','Disposable arithmetic fixture marker: six.')
 FILES={'memory.sqlite','memory.sqlite-wal','memory.sqlite-shm','binding.json','operator.lock'}
@@ -172,7 +173,8 @@ def private_json(path,value):
         json.dump(value,handle,ensure_ascii=False,allow_nan=False);handle.flush();os.fsync(handle.fileno())
 
 
-def voice_provenance(hub,device,binding):
+def voice_provenance(hub,device,binding,*,require_live=False):
+    if type(require_live) is not bool:raise ValueError('Explicit typed live-source opt-in required')
     if (hub.get('mode')!='actual_distributed_realtime_audio_session' or hub.get('stage')!='complete'
             or hub.get('cancel_kind')!='actual_agent' or hub.get('raw_audio_retained') is not False
             or device.get('raw_audio_retained') is not False or device.get('accepted') is not True):
@@ -181,10 +183,15 @@ def voice_provenance(hub,device,binding):
     if not audit['receipt_cleanup_verified'] or not audit['voice_acceptance']:raise ValueError('Voice cleanup/acceptance missing')
     turns=hub.get('turns')
     elapsed=hub.get('cancel_to_verified_s')
-    if (hub.get('working_memory_receipt_schema')!='voice-working-1' or not isinstance(hub.get('hub_boot_id'),str)
+    if (hub.get('working_memory_receipt_schema') not in ('voice-working-1','voice-working-2') or not isinstance(hub.get('hub_boot_id'),str)
             or not 1<=len(hub['hub_boot_id'])<=128 or type(elapsed) not in (int,float)
             or not math.isfinite(elapsed) or not 0<=elapsed<=.5 or not isinstance(turns,list) or len(turns)!=2):
         raise ValueError('Finished bounded practice receipt required')
+    if require_live and hub.get('working_memory_receipt_schema')!='voice-working-2':raise ValueError('Live FINAL/playback chain missing')
+    if require_live:
+        overflow=hub.get('receipt_overflow')
+        if (type(overflow) is not dict or set(overflow)!={'turns','main'} or any(v is not False for v in overflow.values())
+                or hub.get('transcripts_retained') is not False):raise ValueError('Live receipt capacity/privacy unknown')
     last_sequence=-1;last_interaction=-1
     for turn,expected in zip(turns,('4','6')):
         if not isinstance(turn,dict):raise ValueError('Typed voice turn')
@@ -211,6 +218,10 @@ def voice_provenance(hub,device,binding):
                 or authority['interaction_epoch']<=last_interaction or len(turn['lineage_id'])>128):
             raise ValueError('Admitted unknown voice provenance required')
         last_sequence=turn['sequence'];last_interaction=authority['interaction_epoch']
+        if require_live:validate_turn(turn)
+    if require_live:
+        if (len({t['main_final']['attempt_id'] for t in turns})!=2 or len({t['reply_playback']['stream_id'] for t in turns})!=2):
+            raise ValueError('Distinct live attempts/streams required')
     first=turns[0]
     return {name:first[name] for name in ('source_boot','sequence','lineage_id','pcm_sha256','working_input_ref','working_authority','working_operator_binding')}
 
@@ -261,18 +272,24 @@ def projection(store,meta,expected_version):
     descriptors=[dict(alias=x['id']+':'+str(x['version']),type=x['epistemic_type'],summary=x['content']) for x in expected]
     if state.snapshot(0)['memory']!=descriptors:raise MemoryConflict('State projection mismatch')
     return dict(store_id=value['store_id'],revision=value['revision'],versions=[x['version'] for x in items],
-        namespace=meta['namespace'],state_projection_verified=True,content_whitelist_verified=True)
+        namespace=meta['namespace'],state_projection_verified=True,content_whitelist_verified=True,
+        memory_projection_sha256=digest(expected),memory_descriptor_sha256=digest(descriptors),
+        live_source_chain_validated=meta.get('live_source_chain_validated') is True)
 
 
-def prepare(directory,hub_path,device_path,binding):
+def prepare(directory,hub_path,device_path,binding,*,require_live=False):
     hub,hub_digest=read_json(hub_path,1048576);device,device_digest=read_json(device_path,1048576)
-    voice=voice_provenance(hub,device,binding)
+    voice=voice_provenance(hub,device,binding,require_live=require_live)
+    if require_live and hub.get('context_enabled') is not False:raise ValueError('Initial live source must have context disabled')
     directory=Path(directory);directory.mkdir(mode=0o700) # exclusive; never adopt an existing store
     identity=uid();store=None
     meta=dict(schema='voice-fixture-1',directory=str(directory.resolve()),namespace='fixture-voice-'+identity,
         item_id='voice-fixture-'+identity,operator_root=identity+'-operator',voice=voice,
-        binding=binding,hub_receipt_sha256=hub_digest,device_receipt_sha256=device_digest,
+        binding=binding,hub_receipt_sha256=hub_digest,device_receipt_sha256=device_digest,live_source_chain_validated=require_live,
         created_at=datetime.now(timezone.utc).isoformat().replace('+00:00','Z'))
+    if require_live:
+        meta['voice_turn_lineages']=[turn['lineage_id'] for turn in hub['turns']]
+        meta['voice_closed_operator']={key:device['operator_after'][key] for key in ('agent_boot_id','microphone_epoch')}
     try:
         store=MemoryStore(directory/'memory.sqlite',[meta['namespace']]);meta['store_id']=store.meta('store_id')
         store.evidence(meta['item_id']+'-voice',voice['pcm_sha256'],voice['lineage_id'],meta['namespace'],'sensor')
@@ -283,7 +300,7 @@ def prepare(directory,hub_path,device_path,binding):
         if store:store.close()
 
 
-def operate(action,directory,expected_store_id,expected_version,operator_confirmation=False,*,exclusive_filesystem_cleanup=False):
+def operate(action,directory,expected_store_id,expected_version,operator_confirmation=False,*,exclusive_filesystem_cleanup=False,live_receipts=None):
     if type(expected_version) is not int or expected_version not in (-1,0,1,2):raise ValueError('Explicit fixture CAS version required')
     if action=='cleanup' and exclusive_filesystem_cleanup is not True:raise ValueError('Exclusive private cleanup authority required')
     if action=='cleanup':cleanup_class().platform_check()
@@ -305,6 +322,37 @@ def operate(action,directory,expected_store_id,expected_version,operator_confirm
             store.commit(item(meta,required+1),required,confirmed=True)
             return projection(store,meta,required+1)
         if action=='readback':return projection(store,meta,expected_version)
+        if action=='verify-live-context':
+            if expected_version not in (1,2) or meta.get('live_source_chain_validated') is not True:
+                raise MemoryConflict('Confirmed live-source fixture required')
+            hub_path,device_path,binding=live_receipts
+            hub,hub_sha=read_json(hub_path,1048576);device,device_sha=read_json(device_path,1048576)
+            voice_provenance(hub,device,binding,require_live=True)
+            if hub.get('context_enabled') is not True:raise ValueError('Actual next context-enabled session required')
+            if hub['hub_boot_id']==meta['voice']['working_authority']['hub_boot_id']:raise ValueError('New process/Hub session required')
+            if binding['session_boot']==meta['binding']['session_boot']:raise ValueError('New control session required')
+            expected=digest([item(meta,expected_version)])
+            current=projection(store,meta,expected_version)
+            frozen=hub.get('memory_context_binding',{})
+            if type(hub.get('memory_readback_sha256')) is not str or not re.fullmatch('[0-9a-f]{64}',hub['memory_readback_sha256']):
+                raise ValueError('Next session readback artifact binding missing')
+            required=dict(store_id=expected_store_id,revision=current['revision'],
+                    version=expected_version,memory_projection_sha256=expected,
+                    memory_descriptor_sha256=current['memory_descriptor_sha256'])
+            if type(frozen) is not dict or digest(frozen)!=digest(required):
+                raise ValueError('Next session lacked the pre-inference whitelist binding')
+            if any(t['main_final']['final']['memory_projection_sha256']!=expected for t in hub['turns']):
+                raise ValueError('Next real main did not receive exact whitelisted memory')
+            if any(t['main_final']['memory_store_id']!=expected_store_id or type(t['main_final']['memory_revision']) is not int
+                    or t['main_final']['memory_revision']!=current['revision'] for t in hub['turns']):
+                raise ValueError('Next task used another store or revision')
+            if any(t['lineage_id'] in meta['voice_turn_lineages'] for t in hub['turns']):raise ValueError('Original audio replay rejected')
+            closed=meta['voice_closed_operator']
+            if any(t['working_operator_binding'][0]==closed['agent_boot_id']
+                    and t['working_operator_binding'][1]<=closed['microphone_epoch'] for t in hub['turns']):
+                raise ValueError('Microphone epoch was not renewed after source cleanup')
+            return dict(**current,next_main_context_validated=True,
+                next_hub_receipt_sha256=hub_sha,next_device_receipt_sha256=device_sha)
         if action in ('forget','cleanup'):
             if action=='cleanup' and expected_version!=-1:raise MemoryConflict('Forget before file cleanup')
             if action=='forget':

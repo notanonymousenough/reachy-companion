@@ -5,8 +5,9 @@ import math
 import threading
 import time
 from urllib.request import Request,build_opener,ProxyHandler
-from .contracts import decode
+from .contracts import decode,Authority
 from .pcm_controls import PcmGain
+from .voice_chain import digest
 
 
 class HttpTTS:
@@ -153,6 +154,9 @@ class SpeechAdapter:
             started=time.monotonic()
             report=dict(request_id=proposal['request_id'],tts_complete=False,tts_frames=0,producer_started_at=started)
             try:
+                report.update(main_receipt=proposal.get('main_receipt'),
+                    authority=proposal['authority'].wire() if isinstance(proposal['authority'],Authority) else None,
+                    operator_binding=list(authority[1]),output_sha256=digest(proposal['text']),deadline=proposal['deadline'])
                 if cancel.is_set():return
                 stream=self.playback.begin(authority,proposal['request_id'],deadline=min(proposal['deadline'],time.monotonic()+60))
                 report['stream_id']=stream

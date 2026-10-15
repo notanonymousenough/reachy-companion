@@ -204,7 +204,8 @@ class Scheduler:
                 if result['compute_boot_id'] != task.authority.compute_boot_id or result['request_id'] != task.attempt_id:
                     self.state.complete(task.task_id, task.attempt_id, task.authority, None, now, error=True)
                 else:
-                    self.state.complete(task.task_id, task.attempt_id, task.authority, result['output'], now)
+                    self.state.complete(task.task_id, task.attempt_id, task.authority, result['output'], now,
+                        provenance=result.get('completion_provenance'))
             except Exception:
                 self.state.complete(task.task_id, task.attempt_id, task.authority, None, now, error=True)
             self.main_job = self.main_task = None

@@ -20,6 +20,7 @@ from reachy_companion.autonomous.audio_session_control import create_server as c
 from reachy_companion.autonomous.playback import Playback
 from reachy_companion.autonomous.speech_adapter import SpeechAdapter,HttpTTS
 from reachy_companion.autonomous.runtime import RemoteGateway,Scheduler,Job
+from reachy_companion.autonomous.voice_chain import digest,attach_turns,retain_main_audit,context_binding,check_context_task,check_context_view
 
 
 def normalized(text):
@@ -86,7 +87,8 @@ def admit_working_audio(ingest,state,event,now=None):
     audio=event['audio']
     return dict(source_boot=audio['source_boot'],sequence=audio['sequence'],pcm_sha256=audio['pcm_sha256'],
         working_operator_binding=list(audio['operator_binding']),
-        working_memory_admitted=True,working_input_ref=refs[0],working_authority=state.authority.wire())
+        working_memory_admitted=True,working_input_ref=refs[0],working_authority=state.authority.wire(),
+        stt_provenance=audio.get('stt_provenance'),ttl_ms=audio.get('ttl_ms'),stt_text_sha256=digest(event['text']))
 
 
 def main():
@@ -99,6 +101,7 @@ def main():
     p.add_argument('--actual-agent-cancel',action='store_true')
     p.add_argument('--lease-datagram-port',type=int)
     p.add_argument('--tts-gain',type=float)
+    p.add_argument('--memory-readback',type=Path);p.add_argument('--memory-readback-sha256')
     p.add_argument('--trusted-private-lan',action='store_true');a=p.parse_args()
     if not a.allow_capture_output or a.output.exists() or not 20<=a.duration<=120:raise ValueError('Fresh finite realtime opt-in required')
     from reachy_companion.autonomous.pcm_controls import PcmGain
@@ -107,6 +110,14 @@ def main():
         raise ValueError('Explicit valid datagram port required')
     if a.peer_stop_port is not None and not 1<=a.peer_stop_port<=65535:raise ValueError('Bound peer stop port required')
     config=load(a.config);companion=Config(a.companion_config);hub=Hub(companion)
+    memory_scope=None
+    if a.memory_readback is not None or a.memory_readback_sha256 is not None:
+        from reachy_companion.autonomous.voice_memory_fixture import read_json
+        if a.memory_readback is None or not a.memory_readback_sha256 or config.get('context',{}).get('enabled') is not True:
+            raise ValueError('Frozen readback and context-enabled isolated profile required')
+        readback,readback_sha=read_json(a.memory_readback,65536)
+        if readback_sha!=a.memory_readback_sha256:raise ValueError('Readback artifact changed')
+        memory_scope=context_binding(readback)
     if config.get('motion',{}).get('enabled'):raise ValueError('This first audio session requires a separately accepted joint motion profile')
     os.environ[config['gateway']['token_env']]=a.token_file.read_text().strip()
     client=PeerClient(a.peer_url,companion.token,a.controller,trusted_private_lan=a.trusted_private_lan)
@@ -121,15 +132,20 @@ def main():
     speech=SpeechAdapter(playback,tts,lambda:hub.agent('/operator'))
     audio=AudioAdapter(HttpSTT(companion['network']['compute_url'],companion.token))
     poller=AudioPolling(client,audio,source);stop=threading.Event();turns=[];main_calls=[];fast_calls=[]
+    receipt_overflow=dict(turns=False,main=False)
     class AuditedGateway(RemoteGateway):
         def fast(self,request_id,view):
+            if memory_scope is not None:check_context_view(view,memory_scope)
             started=time.monotonic();result=super().fast(request_id,view)
             fast_calls.append(dict(elapsed_s=time.monotonic()-started,activity=result['output']['a'],usage=result.get('usage'),
                 microphone_enabled=view['op']['microphone_enabled'],candidates=len(view['candidates']),ready=len(view['ready'])))
             del fast_calls[:-256];return result
         def main(self,task):
+            if memory_scope is not None:check_context_task(task,memory_scope)
             started=time.monotonic();result=super().main(task)
-            main_calls.append(dict(elapsed_s=time.monotonic()-started,task_id=task.task_id,usage=result.get('usage')))
+            overflow=retain_main_audit(main_calls,dict(elapsed_s=time.monotonic()-started,task_id=task.task_id,attempt_id=task.attempt_id,
+                input_ref=task.input_ref,final=result.get('completion_provenance'),usage=result.get('usage')))
+            if overflow:receipt_overflow['main']=True
             return result
     class AudioScheduler(Scheduler):
         def ingest(self,event,now=None):
@@ -150,6 +166,7 @@ def main():
                 received_at=time.monotonic()
                 working=admit_working_audio(super().ingest,self.state,event,now)
                 if working is None:return
+                if len(turns)>=2:receipt_overflow['turns']=True;return
                 turns.append(dict(received_at=received_at,capture_age_ms=event['audio']['capture_age_ms'],
                     **working,
                     lineage_id=event['audio']['lineage_id'],speaker_identity='unknown',confirmed=False,
@@ -161,14 +178,16 @@ def main():
     scheduler=AudioScheduler(config,AuditedGateway(config),speech_adapter=speech,audio_adapter=audio)
     lease=create_lease(client,source,a.lease_datagram_port)
     stage='startup';started=time.monotonic();latencies=[];cancel_job=None;cancel_at=None;cancel_stop_s=None;no_response_since=None
-    latest={};status_lock=threading.Lock();stopped_streams=set();progress_frames={};first_consumed={}
+    latest={};status_lock=threading.Lock();stopped_streams=set();progress_frames={};first_consumed={};cursor_provenance={}
     def control_status():
         with status_lock:return dict(latest)
     server=create_control_server(companion.token,a.controller,source,stop,control_status,port=a.status_port)
     threading.Thread(target=server.serve_forever,daemon=True).start()
     report=dict(mode='actual_distributed_realtime_audio_session',accepted=False,**server.session_binding,
-        working_memory_receipt_schema='voice-working-1',
-        private_cloud_inputs=0,raw_audio_retained=False,resume_attempts=0,motor_commands=0,
+        working_memory_receipt_schema='voice-working-2',
+        memory_context_binding=memory_scope,
+        memory_readback_sha256=readback_sha if memory_scope is not None else None,
+        private_cloud_inputs=0,raw_audio_retained=False,transcripts_retained=False,resume_attempts=0,motor_commands=0,
         hub_inference=False,questions_limit=2,hub_boot_id=scheduler.state.authority.hub_boot_id,
         context_enabled=config.get('context',{}).get('enabled',False),cancel_kind='actual_agent' if a.actual_agent_cancel else 'local_harness',lease_transport='udp' if a.lease_datagram_port is not None else 'tcp')
     try:
@@ -185,6 +204,7 @@ def main():
                 stream=event.get('stream_id')
                 if event['kind']=='speech_stopped' and event['stop_known']:stopped_streams.add(stream)
                 if event['kind']=='speech_progress':
+                    cursor_provenance[stream]=event.get('provenance')
                     progress_frames[stream]=max(progress_frames.get(stream,0),event['consumed_frames'])
                     if event['consumed_frames']>0:first_consumed.setdefault(stream,event['at'])
             completed=sum(receipt.get('tts_complete') is True and not receipt.get('cancelled')
@@ -236,7 +256,9 @@ def main():
             audio=audio.status(),peer_poll=poller.status(),lease=lease.status())
         report['consumption']=[dict(stream_id=receipt.get('stream_id'),tts_frames=receipt.get('tts_frames'),
             max_measured_consumed=progress_frames.get(receipt.get('stream_id'),0),
+            first_consumed_at=first_consumed.get(receipt.get('stream_id')),provenance=cursor_provenance.get(receipt.get('stream_id')),
             verified_stopped=receipt.get('stream_id') in stopped_streams) for receipt in speech.status()['receipts']]
+        attach_turns(turns,main_calls,speech.status()['receipts'],report['consumption'])
         for index,turn in enumerate(turns[:2]):
             receipts=speech.status()['receipts'];reply_index=index*2+1
             if len(receipts)>reply_index:
@@ -245,7 +267,8 @@ def main():
                 if consumed is not None:turn['endpoint_to_first_consumed_upper_bound_s']=consumed-endpoint
                 if 'tts_first_pcm_s' in receipt:
                     turn['endpoint_to_first_tts_pcm_upper_bound_s']=receipt['producer_started_at']+receipt['tts_first_pcm_s']-endpoint
-        report['accepted']=(stage=='complete' and len(turns)==2 and len(main_calls)>=5
+        report['receipt_overflow']=dict(receipt_overflow)
+        report['accepted']=(stage=='complete' and not any(receipt_overflow.values()) and len(turns)==2 and len(main_calls)>=5
             and [turn['expected_answer'] for turn in turns]==['4','6']
             and all(turn['expected_answer_matched'] and turn['echo_reference_matched'] for turn in turns)
             and cancel_stop_s is not None and cancel_stop_s<=.5
