@@ -724,6 +724,7 @@
     "max_session_chars": 80
   },
   "logging": {
+    "latency_diagnostics": false,
     "level": "INFO",
     "max_bytes": 2000000,
     "backup_count": 3,

@@ -159,6 +159,14 @@ class ConfigurationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.config.validate()
 
+    def test_latency_diagnostics_is_optional_and_strictly_boolean(self):
+        self.config.data['logging'].pop('latency_diagnostics',None);self.config.validate()
+        for value in (True,False):
+            self.config.data['logging']['latency_diagnostics']=value;self.config.validate()
+        for value in (None,1,'yes',[],{}):
+            self.config.data['logging']['latency_diagnostics']=value
+            with self.assertRaisesRegex(ValueError,'Boolean latency'):self.config.validate()
+
     def test_failed_answer_does_not_update_history(self):
         piper = types.ModuleType('piper')
         piper.PiperVoice = piper.SynthesisConfig = object

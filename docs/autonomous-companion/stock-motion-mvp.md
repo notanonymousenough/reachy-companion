@@ -311,6 +311,74 @@ threshold, endpoint, STT, model, echo or Alice timing settings are changed by th
 checkpoint. Do not treat wall-time phase polls as proof of exact first-sample
 timing, audible speech, consumed PCM or the historical failure cause.
 
+## Optional per-turn voice latency diagnostics
+
+For a finite diagnostic run, explicitly set `logging.latency_diagnostics=true`
+in the Agent's copied local configuration; the optional boolean defaults to
+false. Restore that configuration after the run. This flag does not enable the
+microphone, grant motion permission, start a model or issue another request.
+The existing authenticated voice request carries `latency_diagnostics=true`
+and a fresh `latency_request_id` of exactly 32 lowercase hex characters. A
+direct authenticated worker caller can opt in with the same two fields.
+Invalid types/identities reject before robot checks, STT, LLM or TTS. Caller
+payloads/configuration are not mutated; the ID is independent of session/text.
+
+Unary responses and the existing stream `done` event optionally include
+`latency`. Agent returns a joined `{request_id, agent, worker}` record and exposes
+one latest record as `last_voice_latency` in its authenticated `/status`.
+Its 300-second TTL is checked on access; an expired/disabled record is removed,
+and no history or durable diagnostic log is created. Worker diagnostics are
+response-only, excluded from existing `last_turn` retention and cached replay
+results. The fixed schema includes only enums, counts, bounded numeric values
+and the random request ID; no transcript, reply, prompt, reasoning, session,
+raw audio, config values or error text. Counts and offsets are bounded; there
+is no per-chunk event list. Reports with unknown keys/types, invalid ranges,
+inconsistent stages/PCM counts or another request ID do not enter Agent status.
+Replay gets a new Agent ID and `source="replay"`, with no fresh worker report.
+
+Each host uses its own monotonic clock, with offsets from that host's turn
+entry. Join by the identical request ID only; never subtract Worker and Agent
+timestamps. `elapsed_seconds` is an envelope, while each stage has first start,
+last end, sum of active call durations, and a bounded call count:
+
+| Record | Measurement | Interpretation |
+| --- | --- | --- |
+| Worker | `stt`, `classification`, `answer_call` | Existing calls only. `answer_call` spans `Pipeline.answer`, including backend queue/HTTP/SDK/local work; it is not isolated GPU inference. Classification can invoke its existing backend. |
+| Worker | `tts` | Active `synthesize_wav` call, or each streaming generator `next()` including terminal iteration. Consumer backpressure between chunks is excluded from the active sum, but can lie inside the first-start/last-end envelope. |
+| Worker | `audio_convert` | Existing SoX calls, separate from TTS advancement. |
+| Worker | `first_raw_pcm`, `first_output_pcm` | First actual Piper chunk bytes and first converted PCM. Acknowledgement and final speech share the same record. Unary WAV uses `wav_ready`; unavailable first-PCM marks remain null. |
+| Agent | `first_write`, `stream_done` | First successful positive `os.write` to the owned aplay pipe, and received valid stream completion. Neither proves audible output or DAC consumption. |
+| Agent | `aplay_wait`, `aplay_cancel` | Existing explicit owned-process drain wait or terminate/kill/wait cleanup; no new process operations or longer deadlines. |
+| Agent | `aplay_communicate` | Unary blocking communication/write/wait envelope. First successful write is unavailable in that API and remains null. |
+| Agent | `worker_request` | Unary full HTTP request; for streaming, opening the response headers only. Body receive/feed time is inside the Agent total, not this stage. |
+
+`main_first_token_seconds` remains null: the current non-streaming model
+boundaries expose no actual first-token observation. Streaming `pcm_frames`
+and `pcm_seconds` count generated (Worker) or validated received (Agent) mono
+16 kHz frames; Agent also counts frames actually accepted by pipe writes.
+Unary frame counts remain unavailable. An early close before TTS produces no
+invented PCM mark or TTS call. Worker failure/cancel before `done` yields no
+completed Worker report; Agent can still retain its own typed error/cancel
+record, without exception text. Existing epochs, mute/quiet/privacy checks,
+stream cleanup, barge-in, replay TTL and playback deadlines remain in force.
+
+These measurements start at `Agent.voice`/Worker request entry: capture time,
+earlier listening/queue time, implicit OS/audio buffering and first-audible time
+are not measured. Use Agent-local first-write/stream-done/drain intervals and
+PCM duration alongside Worker-local active stage sums to investigate playback
+versus compute. Do not turn an unexplained remainder into an inference claim,
+subtract overlapping stage sums, infer P95 from one turn, or replace/truncate
+the real model reply. This is source instrumentation; real timing acceptance
+requires a new authorized physical run with the matched effective code closure.
+
+The runtime source closure is Worker `voice.py` + `logging_utils.py`, Agent
+`agent.py` + `logging_utils.py`, and `config.py` for strict validation of the
+optional boolean. `config.example.json` documents the false default; older
+private configs need no new key. Prove effective import origins/hashes, not
+dormant mounted source. New manifest-guarded images require a reviewed rebuild
+with matching expected source; never disable the guard or regenerate expectations
+from observed overlays to make diagnostics pass. No dependency or endpoint is added.
+
 ## Explicit Alice conversation address
 
 For an intentional conversation with the Alice speaker, merge this option into

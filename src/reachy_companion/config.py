@@ -73,6 +73,8 @@ class Config:
         return value
 
     def validate(self):
+        if type(self.data['logging'].get('latency_diagnostics', False)) is not bool:
+            raise ValueError('Boolean latency diagnostics setting required')
         guarded = self.data['guarded_motion']
         if (not isinstance(guarded, dict) or set(guarded) != {'enabled','transport','socket_path','policy_path'} or type(guarded['enabled']) is not bool
                 or type(guarded['transport']) is not str or guarded['transport'] not in ('native','stock')

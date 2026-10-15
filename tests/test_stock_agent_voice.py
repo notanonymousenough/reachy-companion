@@ -362,4 +362,49 @@ class StockAgentVoiceTests(unittest.TestCase):
             self.assertEqual(json.loads(opened.call_args.args[0].data)['speech_address_prefix'],prefix)
 
 
+    def test_opt_in_latency_first_real_pipe_write_owned_drain_and_epoch_cancel_cleanup(self):
+        from reachy_companion.logging_utils import TurnLatency
+        self.config.data['logging']['latency_diagnostics']=True
+        self.config.data['conversation']['expressions']['enabled']=False
+        real_popen=subprocess.Popen
+        for cancel in (False,True):
+            processes=[]
+            def opened(item,**kwargs):
+                request=json.loads(item.data)
+                worker=TurnLatency(request['latency_request_id'],'worker').report('complete')
+                events=[dict(type='reply',reply='PRIVATE'),dict(type='audio',format='S16_LE',sample_rate=16000,
+                    channels=1,pcm_base64=base64.b64encode(b'\0\0'*160).decode()),dict(type='done',ok=True,latency=worker)]
+                fixture=self
+                class Response(io.BytesIO):
+                    reads=0
+                    def readline(self,*args):
+                        self.reads+=1
+                        if cancel and self.reads==3:fixture.agent.microphone_epoch+=1
+                        return super().readline(*args)
+                response=Response(b''.join(json.dumps(event).encode()+b'\n' for event in events))
+                response.headers=Message();response.headers['Content-Type']='application/x-ndjson'
+                return response
+            def popen(command,*args,**kwargs):
+                self.assertEqual(command[0],'aplay')
+                process=real_popen([sys.executable,'-c','import sys,time;sys.stdin.buffer.read();time.sleep(.02)'],*args,**kwargs)
+                processes.append(process);return process
+            with patch.object(self.agent.http,'open',side_effect=opened),patch('reachy_companion.agent.subprocess.Popen',side_effect=popen):
+                result=self.agent.voice('/turn',{})
+            report=result['latency'];own=report['agent']
+            self.assertIsNotNone(own['marks']['first_write'])
+            self.assertEqual(own['written_frames'],160);self.assertEqual(own['pcm_seconds'],.01)
+            self.assertTrue(all(process.poll() is not None for process in processes))
+            self.assertIsNone(self.agent.voice_response);self.assertIsNone(self.agent.playback_process)
+            if cancel:
+                self.assertTrue(result['cancelled']);self.assertIsNotNone(own['marks']['cancel_observed'])
+                self.assertEqual(own['stages']['aplay_cancel']['calls'],1)
+                self.assertEqual(own['stages']['aplay_wait']['calls'],0)
+                self.assertIsNone(report['worker'])
+            else:
+                self.assertEqual(own['stages']['aplay_wait']['calls'],1)
+                self.assertLessEqual(own['marks']['first_write'],own['stages']['aplay_wait']['start_seconds'])
+                self.assertEqual(report['worker']['request_id'],report['request_id'])
+            self.assertNotIn('PRIVATE',json.dumps(self.agent.status()['last_voice_latency']))
+
+
 if __name__=='__main__':unittest.main()

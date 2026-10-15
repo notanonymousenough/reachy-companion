@@ -19,6 +19,7 @@ from urllib.error import HTTPError
 
 from piper import PiperVoice, SynthesisConfig
 from vosk import Model, KaldiRecognizer, SetLogLevel
+from .logging_utils import measured, measured_chunks, worker_latency
 
 LOG = logging.getLogger('reachy-voice')
 DEFAULT_SPEECH_ADDRESS = object()
@@ -117,7 +118,7 @@ class Pipeline:
                         self.config['conversation']['pause_phrases'], self.config['conversation']['reset_phrases'])
         return classify_with_model(self.config, text, decision)
 
-    def synthesize(self, text, *, speech_address_prefix=DEFAULT_SPEECH_ADDRESS):
+    def synthesize(self, text, *, speech_address_prefix=DEFAULT_SPEECH_ADDRESS, latency=None):
         text = re.sub(r'<think>.*?</think>', '', text, flags=re.S)
         text = re.sub(r'[*#`]', '', text).strip()
         text = self.address_speech(text,speech_address_prefix)
@@ -125,11 +126,11 @@ class Pipeline:
             raise ValueError('Expected 1–5000 characters for speech')
         buffer = io.BytesIO()
         with wave.open(buffer, 'wb') as wav:
-            self.tts.synthesize_wav(text, wav, syn_config=self.tts_settings)
+            measured(latency,'tts',self.tts.synthesize_wav,text,wav,syn_config=self.tts_settings)
         audio = buffer.getvalue()
         pitch = self.config['tts']['pitch_cents']
         if pitch:
-            result = subprocess.run(['sox', '-t', 'wav', '-', '-t', 'wav', '-',
+            result = measured(latency,'audio_convert',subprocess.run,['sox', '-t', 'wav', '-', '-t', 'wav', '-',
                                      'pitch', str(pitch)], input=audio,
                                     capture_output=True, timeout=self.config['timeouts']['pitch'], check=True)
             # Rebuild the WAV header: SoX's non-seekable stdout uses an unknown
@@ -143,6 +144,7 @@ class Pipeline:
                     target.setframerate(source.getframerate())
                     target.writeframes(frames)
             audio = fixed.getvalue()
+        if latency is not None:latency.mark('wav_ready')
         return base64.b64encode(audio).decode()
 
     def speech_address(self,value=DEFAULT_SPEECH_ADDRESS):
@@ -187,7 +189,7 @@ class Pipeline:
         self.sessions.pop(session, None)
         self.agent_sessions.pop(session, None)
 
-    def prepare(self, payload, path, recognized_text=None, answer_result=None):
+    def prepare(self, payload, path, recognized_text=None, answer_result=None, *, latency=None):
         prefix=self.speech_address(payload.get('speech_address_prefix',DEFAULT_SPEECH_ADDRESS))
         reply_constraints=None
         if 'reply_constraints' in payload:
@@ -203,14 +205,14 @@ class Pipeline:
         if path == '/turn':
             self.phase = 'recognizing'
             text = (recognized_text if recognized_text is not None else
-                    self.transcribe(base64.b64decode(payload['pcm_base64'], validate=True)))
+                    measured(latency,'stt',self.transcribe,base64.b64decode(payload['pcm_base64'], validate=True)))
         else:
             text = payload['text'].strip()
             if not text or len(text) > self.config['limits']['max_text_chars']:
                 raise ValueError('Invalid text length')
         pending = None
         command = None
-        decision = self.classify(text)
+        decision = measured(latency,'classification',self.classify,text)
         if reply_constraints is not None and (not text or decision['action']!='answer'):
             raise ValueError('Constrained reply cannot use a preset/control path')
         if not text:
@@ -229,8 +231,8 @@ class Pipeline:
         else:
             self.phase = 'thinking'
             reply, pending = (answer_result if answer_result is not None else
-                              (self.answer(text,session,payload.get('previous_reply_interrupted',False),reply_constraints=reply_constraints)
-                               if reply_constraints is not None else self.answer(text,session,payload.get('previous_reply_interrupted',False))))
+                              (measured(latency,'answer_call',self.answer,text,session,payload.get('previous_reply_interrupted',False),reply_constraints=reply_constraints)
+                               if reply_constraints is not None else measured(latency,'answer_call',self.answer,text,session,payload.get('previous_reply_interrupted',False))))
         if reply_constraints is not None:
             from .spoken_reply import validate_text
             validate_text(reply,reply_constraints)
@@ -261,20 +263,24 @@ class Pipeline:
 
     def turn(self, payload, path):
         prefix=self.speech_address(payload.get('speech_address_prefix',DEFAULT_SPEECH_ADDRESS))
+        latency=worker_latency(payload)
+        diagnostic_kwargs={} if latency is None else dict(latency=latency)
         payload=dict(payload,speech_address_prefix=prefix)
         if not self.lock.acquire(blocking=False):
             raise RuntimeError('Conversation pipeline is busy')
         started = time.monotonic()
         try:
-            result, session, pending = self.prepare(payload, path)
+            result, session, pending = self.prepare(payload, path,**diagnostic_kwargs)
             self.phase = 'speaking'
-            audio = self.synthesize(result['reply'],speech_address_prefix=prefix) if result['reply'] else ''
-            return {'ok': True, **self.completed(result, session, pending, started), 'audio_base64': audio}
+            audio = self.synthesize(result['reply'],speech_address_prefix=prefix,**diagnostic_kwargs) if result['reply'] else ''
+            value={'ok': True, **self.completed(result, session, pending, started), 'audio_base64': audio}
+            if latency is not None:value['latency']=latency.report('complete')
+            return value
         finally:
             self.phase = 'idle'
             self.lock.release()
 
-    def audio_events(self, segments, initial_bytes=0, *, speech_address_prefix=DEFAULT_SPEECH_ADDRESS):
+    def audio_events(self, segments, initial_bytes=0, *, speech_address_prefix=DEFAULT_SPEECH_ADDRESS, latency=None):
         prefix=self.speech_address(speech_address_prefix)
         rate = self.config['streaming']['sample_rate']
         maximum = rate * 2 * self.config['streaming']['max_output_seconds']
@@ -290,18 +296,23 @@ class Pipeline:
         if sum(len(text) for _,text in spoken)+max(0,len(spoken)-1)>self.config['limits']['max_speech_chars']:
             raise ValueError('Speech exceeds character limit including address')
         for segment,text in spoken:
-            for chunk in self.tts.synthesize(text, syn_config=self.tts_settings,
-                                             include_alignments=self.config['conversation']['expressions'].get('speech_sync', {}).get('phoneme_alignments', False)):
+            for chunk in measured_chunks(latency,self.tts.synthesize(text, syn_config=self.tts_settings,
+                                             include_alignments=self.config['conversation']['expressions'].get('speech_sync', {}).get('phoneme_alignments', False))):
+                raw=chunk.audio_int16_bytes
+                if latency is not None and raw:latency.mark('first_raw_pcm')
                 command = ['sox', '-t', 'raw', '-e', 'signed-integer', '-b', '16',
                            '-L', '-c', str(chunk.sample_channels), '-r', str(chunk.sample_rate), '-',
                            '-t', 'raw', '-e', 'signed-integer', '-b', '16', '-L', '-c', '1', '-r', str(rate), '-']
                 if self.config['tts']['pitch_cents']:
                     command += ['pitch', str(self.config['tts']['pitch_cents'])]
                 command += speaker_eq_effects(self.config)
-                pcm = subprocess.run(command, input=chunk.audio_int16_bytes, capture_output=True,
+                pcm = measured(latency,'audio_convert',subprocess.run,command, input=raw, capture_output=True,
                                      timeout=self.config['timeouts']['pitch'], check=True).stdout
                 if total + len(pcm) > maximum:
                     raise RuntimeError('Streaming answer exceeds duration limit')
+                if latency is not None:
+                    latency.pcm(len(pcm))
+                    if pcm:latency.mark('first_output_pcm')
                 motion = cues(self.config['conversation']['expressions'], chunk, segment,
                               total / (rate * 2), rate, len(pcm), beat_offset)
                 motion = motion[:max(0, self.config['conversation']['expressions']['speech_sync']['max_cues'] - beat_offset)]
@@ -316,6 +327,8 @@ class Pipeline:
 
     def stream(self, payload, path):
         prefix=self.speech_address(payload.get('speech_address_prefix',DEFAULT_SPEECH_ADDRESS))
+        latency=worker_latency(payload)
+        diagnostic_kwargs={} if latency is None else dict(latency=latency)
         payload=dict(payload,speech_address_prefix=prefix)
         if not self.lock.acquire(blocking=False):
             raise RuntimeError('Conversation pipeline is busy')
@@ -327,11 +340,11 @@ class Pipeline:
             acknowledgements = self.config['conversation'].get('interaction', {}).get('acknowledgements', {})
             if path != '/say' and acknowledgements.get('enabled', False) and 'reply_constraints' not in payload:
                 self.check_robot()
-                recognized = (self.transcribe(base64.b64decode(payload['pcm_base64'], validate=True))
+                recognized = (measured(latency,'stt',self.transcribe,base64.b64decode(payload['pcm_base64'], validate=True))
                               if path == '/turn' else payload['text'].strip())
                 if not isinstance(recognized, str) or len(recognized) > self.config['limits']['max_text_chars']:
                     raise ValueError('Invalid text length')
-                decision = self.classify(recognized)
+                decision = measured(latency,'classification',self.classify,recognized)
                 if decision['action'] == 'answer':
                     import concurrent.futures
                     executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
@@ -339,24 +352,24 @@ class Pipeline:
                     if not isinstance(session, str) or not 1 <= len(session) <= self.config['limits']['max_session_chars']:
                         raise ValueError('Invalid session')
                     self.phase = 'thinking'
-                    future = executor.submit(self.answer, recognized, session, payload.get('previous_reply_interrupted', False))
+                    future = executor.submit(measured,latency,'answer_call',self.answer,recognized,session,payload.get('previous_reply_interrupted', False))
                     try:
                         answer_result = future.result(timeout=acknowledgements['delay_seconds'])
                     except concurrent.futures.TimeoutError:
                         intro = acknowledgements['phrases'][decision['intent']]
                         yield {'type': 'reply', 'transcript': recognized, 'reply': intro, 'emotion': decision['emotion'],
                                'command': None, 'acknowledgement': True, **self.speech_address_metadata(intro,prefix)}
-                        for event in self.audio_events([{'text': intro, 'emotion': decision['emotion'], 'gesture': 'auto'}],speech_address_prefix=prefix):
+                        for event in self.audio_events([{'text': intro, 'emotion': decision['emotion'], 'gesture': 'auto'}],speech_address_prefix=prefix,**diagnostic_kwargs):
                             if event['type'] == 'audio':
                                 intro_bytes += len(base64.b64decode(event['pcm_base64']))
                             yield event
                         answer_result = future.result()
-            result, session, pending = (self.prepare(payload, path, recognized, answer_result)
-                                        if recognized is not None else self.prepare(payload, path))
+            result, session, pending = (self.prepare(payload, path, recognized, answer_result,**diagnostic_kwargs)
+                                        if recognized is not None else self.prepare(payload, path,**diagnostic_kwargs))
             yield {'type': 'reply', **result}
             self.phase = 'speaking'
             segments = result.get('segments') or [{'text': result['reply'], 'emotion': result.get('emotion', 'neutral'), 'gesture': 'auto'}]
-            yield from self.audio_events(segments, intro_bytes,speech_address_prefix=prefix)
+            yield from self.audio_events(segments, intro_bytes,speech_address_prefix=prefix,**diagnostic_kwargs)
             terminal = {'type': 'done', 'ok': True, **self.completed(result, session, pending, started)}
         finally:
             try:
@@ -367,6 +380,7 @@ class Pipeline:
                 self.lock.release()
         # A received successful terminal event must follow producer cleanup.
         # Exceptions and generator.close() leave through finally without done.
+        if latency is not None:terminal['latency']=latency.report('complete')
         yield terminal
 
 

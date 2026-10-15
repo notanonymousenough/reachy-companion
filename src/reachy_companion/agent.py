@@ -21,6 +21,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.request import Request, build_opener, ProxyHandler
 from urllib.error import HTTPError
 import webrtcvad
+from .logging_utils import TurnLatency, measured, checked_latency
 
 LOG = logging.getLogger('reachy-voice-agent')
 
@@ -160,6 +161,7 @@ class Agent:
 
     def status(self):
         motion_status = self.motion_actor_status()
+        latency=self.latency_status()
         with self.microphone_lock:
             return {'listening': self.listening.is_set(), 'phase': self.phase,
                              'agent_boot_id': self.agent_boot_id, 'microphone_epoch': self.microphone_epoch,
@@ -176,7 +178,16 @@ class Agent:
                              'sound_mode': 'music' if self.sounds.music else 'conversation', 'sound_error': self.sounds.last_error,
                              'microphone_state_error': self.microphone.error,
                              'expression': self.expressions.last_expression,
-                             'expression_error': self.expressions.last_error}
+                             'expression_error': self.expressions.last_error,
+                             **({'last_voice_latency':latency} if latency is not None else {})}
+
+    def latency_status(self):
+        if (self.config['logging'].get('latency_diagnostics',False) is not True
+                or time.monotonic() >= getattr(self,'last_voice_latency_expires',0)):
+            self.last_voice_latency=None
+            return None
+        value=getattr(self,'last_voice_latency',None)
+        return json.loads(json.dumps(value)) if value is not None else None
 
     def motion_actor_status(self):
         if self.config['guarded_motion'].get('transport','native')=='stock':
@@ -337,7 +348,7 @@ class Agent:
                     process.wait()
                 self.capture_active = False
 
-    def play(self, encoded, epoch=None):
+    def play(self, encoded, epoch=None, *, latency=None):
         policy=self.motion_policy.snapshot()
         policy_epoch=policy['epoch']
         if policy['quiet'] or policy['privacy_all']:return
@@ -353,19 +364,40 @@ class Agent:
             try:
                 if (not self.microphone.enabled or (epoch is not None and epoch != self.microphone_epoch)
                         or self.motion_policy.snapshot()['epoch']!=policy_epoch):
-                    process.terminate()
+                    if latency is not None:latency.mark('cancel_observed')
+                    measured(latency,'aplay_cancel',process.terminate)
                     return
-                _, error = process.communicate(wav, timeout=seconds + self.config['timeouts']['playback_margin'])
+                _, error = measured(latency,'aplay_communicate',process.communicate,wav,timeout=seconds + self.config['timeouts']['playback_margin'])
                 if process.returncode and (epoch is None or epoch == self.microphone_epoch):
                     raise RuntimeError('Playback failed: ' + error.decode()[:500])
             finally:
                 self.playback_process = None
                 if process.poll() is None:
-                    process.kill()
-                    process.wait()
+                    def cancel_play():
+                        process.kill()
+                        process.wait()
+                    measured(latency,'aplay_cancel',cancel_play)
         time.sleep(self.audio['echo_tail_seconds'])
 
     def voice(self, path, payload, expected_epoch=None, allow_barge_in=True, replay=None):
+        if self.config['logging'].get('latency_diagnostics',False) is not True:
+            return self._voice(path,payload,expected_epoch,allow_barge_in,replay)
+        latency=TurnLatency(uuid4().hex,'agent','replay' if replay is not None else 'live')
+        request=dict(payload,latency_diagnostics=True,latency_request_id=latency.request_id)
+        response=None;worker=None;outcome='error'
+        try:
+            response=dict(self._voice(path,request,expected_epoch,allow_barge_in,replay,latency=latency))
+            upstream=response.pop('latency',None)
+            if replay is None:worker=checked_latency(upstream,latency.request_id)
+            outcome='interrupted' if response.get('interrupted') else 'cancelled' if response.get('cancelled') else 'complete'
+            return response
+        finally:
+            report=dict(request_id=latency.request_id,agent=latency.report(outcome),worker=worker)
+            if response is not None:response['latency']=report
+            self.last_voice_latency=json.loads(json.dumps(report))
+            self.last_voice_latency_expires=time.monotonic()+300
+
+    def _voice(self, path, payload, expected_epoch=None, allow_barge_in=True, replay=None, *, latency=None):
         epoch = self.microphone_epoch if expected_epoch is None else expected_epoch
         motor_policy_epoch=self.motion_policy.snapshot()['epoch']
         monitor = None
@@ -377,6 +409,7 @@ class Agent:
         def interrupted():
             return bool(monitor and monitor.interrupted.is_set())
         def cancelled_result():
+            if latency is not None:latency.mark('cancel_observed')
             return {'ok': True, 'cancelled': True, 'interrupted': bool(monitor and monitor.interrupted.is_set())}
         if cancelled():
             return cancelled_result()
@@ -391,12 +424,12 @@ class Agent:
         if path in ('/text', '/turn'):
             self.expressions.set('processing')
         if not self.config['streaming']['enabled']:
-            response = self.request(self.config['network']['voice_url'], path, payload)
+            response = measured(latency,'worker_request',self.request,self.config['network']['voice_url'],path,payload)
             if cancelled():
                 return cancelled_result()
             self.expressions.set('speaking', response.get('emotion', 'neutral'))
             try:
-                self.play(response.get('audio_base64', ''), epoch)
+                self.play(response.get('audio_base64', ''),epoch,**({} if latency is None else dict(latency=latency)))
             finally:
                 self.expressions.hold()
                 if not cancelled():self.expressions.set('neutral')
@@ -419,7 +452,7 @@ class Agent:
         all_cues = []
         cursor = None
         from .replay import ReplayResponse
-        response_context = self.http.open(item, timeout=self.config['timeouts']['client']) if replay is None else ReplayResponse(replay, settings)
+        response_context = measured(latency,'worker_request',self.http.open,item,timeout=self.config['timeouts']['client']) if replay is None else ReplayResponse(replay, settings)
         try:
             with response_context as response:
                 self.voice_response = response
@@ -456,6 +489,7 @@ class Agent:
                         total += len(pcm)
                         if len(pcm) % 2 or total > maximum:
                             raise ValueError('Invalid stream audio length')
+                        if latency is not None:latency.pcm(len(pcm))
                         full_pcm.extend(pcm)
                         if interrupted():
                             if cursor is None:
@@ -498,6 +532,8 @@ class Agent:
                             if selector.select(timeout=0.2):
                                 try:
                                     written = os.write(process.stdin.fileno(), remaining)
+                                    if latency is not None and written>0:
+                                        latency.mark('first_write');latency.pcm(written,written=True)
                                     clock.feed(written)
                                     remaining = remaining[written:]
                                 except BrokenPipeError:
@@ -510,6 +546,7 @@ class Agent:
                             raise RuntimeError('Invalid stream completion')
                         result = event
                         complete = True
+                        if latency is not None:latency.mark('stream_done')
                         break
                     elif event['type'] == 'error':
                         raise RuntimeError('Compute worker failed during audio stream')
@@ -519,7 +556,7 @@ class Agent:
                     raise RuntimeError('Audio stream ended without completion')
             if process is not None:
                 process.stdin.close()
-                process.wait(timeout=max(1, deadline - time.monotonic()))
+                measured(latency,'aplay_wait',process.wait,timeout=max(1, deadline - time.monotonic()))
                 if cancelled():
                     return cancelled_result()
                 if process.returncode and not interrupted():
@@ -536,7 +573,7 @@ class Agent:
                             **cancelled_result(),'resume_blocked_reason':self.resume_blocked_reason}
                 self.resume_audio = {'pcm': bytes(full_pcm), 'cursor': min(cursor, len(full_pcm)),
                                      'cursor_verified': True,
-                                     'result': {key: value for key, value in result.items() if key != 'type'},
+                                     'result': {key: value for key, value in result.items() if key not in ('type','latency')},
                                      'cues': all_cues, 'epoch': epoch, 'spoken_text': self.current_reply_text,
                                      'deadline': (self.last_voice_at or time.monotonic()) + self.config['conversation']['interaction']['resume_after_empty_seconds']}
                 return {**self.resume_audio['result'], **cancelled_result()}
@@ -552,12 +589,14 @@ class Agent:
             if selector is not None:
                 selector.close()
             if process is not None and process.poll() is None:
-                process.terminate()
-                try:
-                    process.wait(timeout=self.config['timeouts']['process_stop'])
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait()
+                def cancel_play():
+                    process.terminate()
+                    try:
+                        process.wait(timeout=self.config['timeouts']['process_stop'])
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait()
+                measured(latency,'aplay_cancel',cancel_play)
             if process is not None:
                 if not process.stdin.closed:
                     process.stdin.close()
