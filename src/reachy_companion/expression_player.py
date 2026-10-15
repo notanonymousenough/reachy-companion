@@ -7,9 +7,12 @@ LOG = logging.getLogger('reachy-expressions')
 
 
 class ExpressionPlayer:
-    def __init__(self, config, request, stopping, permitted=None):
+    def __init__(self, config, request, stopping, permitted=None, binding=None):
         self.config, self.request, self.stopping = config, request, stopping
         self.permitted=permitted or (lambda:True)
+        self.binding=binding
+        self.stock=getattr(config,'data',config).get('guarded_motion',{}).get('transport','native')=='stock'
+        self.state_binding=None
         self.settings = config['conversation'].get('expressions', {})
         self.condition = threading.Condition()
         self.state = None
@@ -26,13 +29,17 @@ class ExpressionPlayer:
             self.thread.start()
 
     def set(self, phase, emotion='neutral', wait=False, force=False):
+        observed_version=self.version
         if not self.settings.get('enabled', False) or not self.permitted():
             return
+        binding=self.capture_binding()
         with self.condition:
+            if self.stock and self.version!=observed_version:return
             if force or self.state != (phase, emotion):
                 self.cues = []
                 self.clock = None
                 self.state = (phase, emotion)
+                self.state_binding=binding
                 self.version += 1
                 self.condition.notify_all()
             version = self.version
@@ -47,6 +54,7 @@ class ExpressionPlayer:
             self.stopping.wait(self.settings['settle_seconds'])
 
     def timeline(self, cues, clock):
+        observed_version=self.version
         if not self.settings.get('enabled', False) or not self.permitted():
             return
         from .motion_limits import validate_steps
@@ -57,12 +65,15 @@ class ExpressionPlayer:
                 raise ValueError('Invalid motion timestamp')
             validate_steps(cue['steps'], self.settings)
             valid.append(cue)
+        binding=self.capture_binding()
         with self.condition:
+            if self.stock and self.version!=observed_version:return
             if self.state != ('timeline', 'neutral') or self.clock is not clock:
                 self.state = ('timeline', 'neutral')
                 self.version += 1
                 self.cues = []
                 self.clock = clock
+                self.state_binding=binding
             self.cues = sorted((self.cues + valid)[:maximum], key=lambda cue: cue['at'])
             self.condition.notify_all()
 
@@ -76,6 +87,7 @@ class ExpressionPlayer:
                 self.condition.wait(.05)
 
     def dance(self, result, captured_at):
+        observed_version=self.version
         if not self.settings.get('enabled', False) or not self.permitted(): return
         from .motion_limits import validate_steps
         for step in result['steps']:validate_steps([step],self.settings)
@@ -86,10 +98,13 @@ class ExpressionPlayer:
         at=captured_at+result['next_beat_seconds']
         now=time.monotonic()
         at += math.ceil(max(0,now-at)/period)*period
+        binding=self.capture_binding()
         with self.condition:
+            if self.stock and self.version!=observed_version:return
             if self.state != ('dance','playful'):
                 self.state=('dance','playful');self.version+=1;self.cues=[];self.clock=None
                 self.dance_at=at
+                self.state_binding=binding
             self.dance_program=(result['steps'],period)
             self.condition.notify_all()
 
@@ -100,6 +115,13 @@ class ExpressionPlayer:
             self.clock = None
             self.version += 1
             self.condition.notify_all()
+
+    def capture_binding(self):
+        # Call outside condition: microphone withdrawal holds its own lock while
+        # calling hold(). The enqueue version check fences an intervening hold.
+        if not self.stock:return None
+        if self.binding is None:raise RuntimeError('Stock expression operator binding required')
+        return self.binding()
 
     def run(self):
         handled = 0
@@ -134,7 +156,7 @@ class ExpressionPlayer:
                         self.condition.wait(.5)
                 if self.stopping.is_set():
                     break
-                state, version = self.state, self.version
+                state, version, binding = self.state, self.version, self.state_binding
             if state is None:
                 with self.condition:
                     handled = version
@@ -147,9 +169,11 @@ class ExpressionPlayer:
                                      {'phase': state[0], 'emotion': state[1], 'variant': variant % 10000}, timeout=self.config['timeouts']['http']))
                 with self.condition:
                     stale = self.version != version
-                if not stale and self.permitted() and plan.get('steps'):
+                if not stale and self.permitted() and plan.get('steps') and (not self.stock or binding==self.capture_binding()):
+                    payload={'steps':plan['steps']}
+                    if self.stock:payload['operator_binding']=dict(binding,expression_version=version)
                     self.request(self.config['network']['hub_url'], '/actions/expression',
-                                 {'steps': plan['steps']}, timeout=self.config['timeouts']['http'])
+                                 payload, timeout=self.config['timeouts']['http'])
                     self.last_expression = ({'phase': cue.get('phase','speaking'), 'emotion': cue.get('emotion', 'neutral'),
                                              'gesture': cue.get('gesture', 'auto'), 'phoneme': cue.get('phoneme', '')}
                                             if cue is not None else {'phase': state[0], 'emotion': state[1]})

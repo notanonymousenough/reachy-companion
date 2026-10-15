@@ -35,19 +35,32 @@ class Hub:
                 or 'microphone_state_error' not in value or value['microphone_state_error'] is not None
                 or policy.get('motor_enabled') is not True or policy.get('quiet') is not False or policy.get('privacy_all') is not False):
             raise RuntimeError('Current typed operator motor permission required')
+        expression_version=getattr(self.stock_scope,'expression_version',None)
+        if expression_version is not None and (type(value.get('expression_version')) is not int
+                or value['expression_version']!=expression_version):
+            raise RuntimeError('Stock command binding changed: expression_version')
         return value['agent_boot_id'],value['microphone_epoch'],policy['epoch'],value['microphone_enabled']
 
     def stock_begin(self):
         if self.stock_selected():
+            self.stock_scope.expression_version=None
             self.stock_scope.binding=self.stock_operator()
             self.stock_scope.observed=0
 
     def stock_end(self):
         self.stock_scope.binding=None
+        self.stock_scope.expression_version=None
 
     def stock_check(self):
         binding=getattr(self.stock_scope,'binding',None)
-        if binding is None or self.stock_operator()!=binding:raise RuntimeError('Stock command operator boot/epoch changed')
+        if binding is None:raise RuntimeError('Stock command binding changed: missing_binding')
+        self.stock_compare(binding,self.stock_operator())
+
+    @staticmethod
+    def stock_compare(expected,current):
+        fields=('boot','mic_epoch','policy_epoch','mic_enabled')
+        changed=[name for name,old,new in zip(fields,expected,current) if old!=new]
+        if changed:raise RuntimeError('Stock command binding changed: '+','.join(changed))
 
     @staticmethod
     def move_uuid(value):
@@ -191,6 +204,19 @@ class Hub:
             raise RuntimeError('Hub is busy')
         try:
             self.stock_begin()
+            if self.stock_selected() and 'operator_binding' in payload:
+                binding=payload['operator_binding']
+                if (type(binding) is not dict or set(binding)!={'agent_boot_id','microphone_epoch',
+                        'microphone_enabled','policy_epoch','expression_version'}
+                        or type(binding.get('microphone_epoch')) is not int
+                        or type(binding.get('policy_epoch')) is not int
+                        or type(binding.get('microphone_enabled')) is not bool
+                        or type(binding.get('expression_version')) is not int or not 0<=binding['expression_version']<2**63):
+                    raise RuntimeError('Stock command binding changed: missing_binding')
+                self.stock_compare((binding.get('agent_boot_id'),binding['microphone_epoch'],binding['policy_epoch'],
+                    binding['microphone_enabled']),self.stock_scope.binding)
+                self.stock_scope.expression_version=binding['expression_version']
+                self.stock_check()
             for step in steps:
                 state = self.status()
                 daemon = state['daemon']

@@ -97,13 +97,14 @@ class StockMotionTests(unittest.TestCase):
         self.assertIsNone(self.hub.stock_owned)
 
     def test_boot_mic_policy_change_stops_only_owned_without_return_or_sleep(self):
-        for change in ('boot', 'mic', 'policy', 'deny', 'offline'):
+        for change in ('boot', 'mic', 'mic_enabled', 'policy', 'deny', 'offline'):
             with self.subTest(change=change):
                 self.setUp()
                 self.on_poll = lambda: None
                 def withdraw():
                     if change == 'boot': self.operator['agent_boot_id'] = 'new'
                     if change == 'mic': self.operator['microphone_epoch'] += 1
+                    if change == 'mic_enabled': self.operator['microphone_enabled'] = True
                     if change == 'policy': self.operator['motion_policy']['epoch'] += 1
                     if change == 'deny': self.operator['motion_policy']['motor_enabled'] = False
                     if change == 'offline': self.hub.agent.side_effect = TimeoutError('operator offline')

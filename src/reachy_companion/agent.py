@@ -68,7 +68,8 @@ class Agent:
         self.volume_lock = threading.Lock()
         self.vad = webrtcvad.Vad(self.audio['vad_mode'])
         from .expression_player import ExpressionPlayer
-        self.expressions = ExpressionPlayer(config, self.request, self.stopping, permitted=self.motor_permitted)
+        self.expressions = ExpressionPlayer(config, self.request, self.stopping,
+            permitted=self.motor_permitted,binding=self.expression_binding)
         self.chunk_bytes = self.audio['sample_rate'] * 2 * self.audio['chunk_ms'] // 1000
         from .sound_monitor import SoundMonitor
         self.sounds = SoundMonitor(self)
@@ -94,6 +95,11 @@ class Agent:
         policy=self.motion_policy.snapshot()
         return (self.config['guarded_motion']['enabled'] is True and policy['motor_enabled'] is True
                 and policy['quiet'] is False and policy['privacy_all'] is False)
+
+    def expression_binding(self):
+        with self.microphone_lock:
+            return dict(agent_boot_id=self.agent_boot_id,microphone_epoch=self.microphone_epoch,
+                microphone_enabled=self.microphone.enabled,policy_epoch=self.motion_policy.snapshot()['epoch'])
 
     def set_motion_policy(self,value):
         if not isinstance(value,dict):raise ValueError('Policy object required')
@@ -187,7 +193,8 @@ class Agent:
                         microphone_owner_id=self.microphone_owner_id,
                         microphone_enabled=self.microphone.enabled,capture_active=self.capture_active,
                         phase=self.phase,listening=self.listening.is_set(),microphone_state_error=self.microphone.error,
-                        motion_policy=policy,motion_policy_owner_id=policy_owner)
+                        motion_policy=policy,motion_policy_owner_id=policy_owner,
+                        expression_version=self.expressions.version)
 
     def set_volume(self, percent):
         from .volume import validate_percent
@@ -556,7 +563,7 @@ class Agent:
                         self.resume_audio['deadline'] = (self.last_voice_at or time.monotonic()) + self.config['conversation']['interaction']['resume_after_empty_seconds']
             finally:
                 self.expressions.hold()
-                if self.microphone.enabled and epoch == self.microphone_epoch:
+                if not cancelled() and not interrupted():
                     self.expressions.set('neutral')
 
     def run(self):
