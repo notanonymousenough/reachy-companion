@@ -25,6 +25,7 @@ with patch.object(sys,'path',[str(DEPLOY),*sys.path]):
     spec=importlib.util.spec_from_file_location('live_smoke_fixture',DEPLOY/'live_smoke.py')
     smoke=importlib.util.module_from_spec(spec);spec.loader.exec_module(smoke)
     import smoke_contract as contract
+    import smoke_execution as execution
 
 
 def fixture(root):
@@ -46,7 +47,8 @@ def fixture(root):
         model['audit']=dict(verified=True,device='cpu_pc' if role=='fast' else 'gpu_pc',
             runtime_build='a'*64 if role=='fast' else 'independent-runtime-build',weight_sha256=weight,
             tokenizer_sha256=weight,template_sha256=contract.template_hash(model),runtime_context_tokens=model['context_tokens'])
-    main=dict(id=cfg['models']['main']['id'],instance_reference='fixture-existing',context_tokens=32768,load_config='frozen-load')
+    main=dict(id=cfg['models']['main']['id'],model_key='fixture-main-key',instance_reference='fixture-existing',
+        context_tokens=32768,load_config='frozen-load')
     gpu=dict(uuid='GPU-fixture',total_mib=12000,used_mib=10000,free_mib=2000)
     artifacts=dict(fast_server_sha256='a'*64,fast_weights_sha256=contract.FAST_WEIGHT_SHA256,
         main_weights_sha256='b'*64,runtime_components={},main_runtime_files={'/fixture/mapped-runtime.dll':'c'*64})
@@ -54,6 +56,7 @@ def fixture(root):
         collected_at_utc='2026-10-15T10:00:00Z',expires_at_utc='2026-10-15T10:30:00Z',
         config_sha256=contract.fingerprint(cfg),knobs=contract.knobs(args),artifacts=artifacts,
         main_identity=main,main_runtime_build='independent-runtime-build',
+        sdk={'fixture':'explicit synthetic SDK audit; separate exact-source tests'},
         fast_placement=dict(device='cpu_pc',offloaded_layers=0,total_layers=None),
         gpu=dict(uuid='GPU-fixture',total_mib=12000,reserve_mib=512,minimum_start_free_mib=896))
     return args,cfg,hashes,main,gpu,artifacts,audit
@@ -130,7 +133,8 @@ class AuditTests(unittest.TestCase):
 
 
 class HarnessTests(unittest.TestCase):
-    def run_harness(self,root,*,unverified=False,close_error=False,unreaped=False,placement_change=False,main_unknown=False):
+    def run_harness(self,root,*,unverified=False,close_error=False,unreaped=False,placement_change=False,
+            main_unknown=False,guard_directory=None,blocked=False):
         args,cfg,hashes,main,gpu,artifacts,audit=fixture(root)
         if unverified:
             cfg['models']['main']['audit']['verified']=False;audit['config_sha256']=contract.fingerprint(cfg)
@@ -172,12 +176,17 @@ class HarnessTests(unittest.TestCase):
             thread=SimpleNamespace(is_alive=lambda:False))
         with patch.object(smoke.argparse.ArgumentParser,'parse_args',return_value=args),\
                 patch.object(smoke,'load',return_value=cfg),patch.object(smoke,'digest',side_effect=lambda path:hashes[str(path)]),\
-                patch.object(smoke,'main_identity',return_value=main),patch.object(smoke,'gpu_sample',return_value=gpu),\
+                patch.object(smoke,'main_identity',return_value=main) as lookup,patch.object(smoke,'gpu_sample',return_value=gpu),\
+                patch.object(smoke,'verify_sdk'),patch.object(execution,'guard_root',return_value=guard_directory or root/'account-guard'),\
                 patch.object(smoke,'native_environment',return_value={}),patch.object(smoke,'urlopen'),\
                 patch.object(smoke,'placement',return_value=(dict(device='gpu_pc') if placement_change else audit['fast_placement'])),\
                 patch.object(smoke,'ModelBackend',return_value=Backend()),patch.object(smoke,'Scheduler',Scheduler),\
                 patch.object(smoke,'GPUHeadroom',return_value=monitor),patch.object(smoke.subprocess,'Popen',return_value=process) as spawn,\
                 patch.object(contract.time,'time',return_value=NOW),patch('socket.socket'),contextlib.redirect_stdout(io.StringIO()):
+            if blocked:
+                with self.assertRaises(RuntimeError):smoke.main()
+                spawn.assert_not_called();lookup.assert_not_called()
+                self.assertEqual(actual_requests,[]);return None,actual_requests
             if unverified:
                 with self.assertRaises(ValueError):smoke.main()
                 spawn.assert_not_called();return None,actual_requests
@@ -188,6 +197,16 @@ class HarnessTests(unittest.TestCase):
 
     def test_unaudited_config_cannot_spawn_even_with_matching_artifact_hashes(self):
         with tempfile.TemporaryDirectory() as td:self.run_harness(Path(td),unverified=True)
+
+    def test_unknown_run_blocks_new_output_directory_before_popen_or_sdk_post(self):
+        with tempfile.TemporaryDirectory() as td:
+            root=Path(td);first=root/'first';second=root/'second';first.mkdir();second.mkdir()
+            stable=root/'account-guard'
+            report,_=self.run_harness(first,main_unknown=True,guard_directory=stable)
+            self.assertTrue(report['execution_guard']['unknown'])
+            self.assertFalse(report['execution_guard']['released'])
+            self.run_harness(second,guard_directory=stable,blocked=True)
+            self.assertFalse((second/'receipt.json').exists())
 
     def test_identical_actual_backend_prompt_and_budget_then_final_health_and_reap(self):
         with tempfile.TemporaryDirectory() as td:

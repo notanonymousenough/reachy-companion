@@ -6,9 +6,10 @@ import subprocess
 import time
 from urllib.request import urlopen
 from pc_probe import digest
-from compute_probe import native_environment,gpu_sample,placement,GPUHeadroom,main_identity
+from compute_probe import native_environment,gpu_sample,placement,GPUHeadroom
 from reachy_companion.autonomous.config import load
-from reachy_companion.autonomous.gateway import ModelBackend
+from frozen_main import FrozenModelBackend as ModelBackend,main_identity,verify_sdk
+from smoke_execution import ExecutionLease,execution_scopes
 from reachy_companion.autonomous.state import State
 from reachy_companion.autonomous.gateway import Gateway
 from reachy_companion.autonomous.runtime import Scheduler
@@ -44,7 +45,16 @@ def main():
     if (cfg['actuators']!='simulated' or any(cfg.get(key,{}).get('enabled',False)
             for key in ('context','motion','speech','workflows'))):
         raise ValueError('PC-only smoke requires simulated actors and disabled context/physical adapters')
-    main_before=main_identity(cfg['models']['main'])
+    verify_sdk(audit.get('sdk'))
+    lease=ExecutionLease(execution_scopes(cfg,audit['main_identity'])).acquire()
+    try:return run_guarded(args,cfg,audit,lease)
+    finally:
+        if not lease.closed:lease.finish(known=not lease.producer_started)
+
+
+def run_guarded(args,cfg,audit,lease):
+    marker=args.output.parent/'inference-quarantine.local.json'
+    main_before=main_identity(cfg['models']['main'],audit['main_identity'],audit['sdk'])
     gpu_before=gpu_sample(args.gpu_index)
     environment=native_environment(args.server,args.vendor_dir)
     if args.gpu_layers:environment['CUDA_VISIBLE_DEVICES']=gpu_before['uuid']
@@ -76,6 +86,7 @@ def main():
     else:command.extend(['--batch-size','512','--ubatch-size','256','--verbosity','4','--fit','off'])
     if args.output.exists():raise FileExistsError('Fresh output receipt required')
     with log_path.open('x', encoding='utf-8') as log:
+        lease.producer_started=True # Popen failure does not prove that no child was started
         process = subprocess.Popen(command, stdout=log, stderr=log,env=environment)
         report['owned_fast_pid']=process.pid
         monitor=gateway=scheduler=None
@@ -93,7 +104,7 @@ def main():
             if fingerprint(receipt)!=fingerprint(audit['fast_placement']):
                 raise RuntimeError('Fresh placement differs from independent frozen audit')
             report['placement_matched']=True
-            backend = ModelBackend(cfg)
+            backend = ModelBackend(cfg,main_binding=audit['main_identity'],sdk_audit=audit['sdk'])
             gateway = Gateway(backend)
             state = State(config=cfg)
             views = [('idle', state.snapshot(0))]
@@ -179,7 +190,7 @@ def main():
             except Exception as exc:report.setdefault('cleanup_errors',[]).append(type(exc).__name__)
             report['process_returncode']=process.poll();report['process_reaped']=report['process_returncode'] is not None
             try:
-                report['main_after']=main_identity(cfg['models']['main'])
+                report['main_after']=main_identity(cfg['models']['main'],audit['main_identity'],audit['sdk'])
                 report['main_preserved']=report['main_after']==main_before
                 verify_audit(audit,cfg,args,artifacts,report['main_after'],gpu_before)
                 report['gpu_after']=gpu_sample(args.gpu_index)
@@ -195,6 +206,12 @@ def main():
                     with marker.open('x',encoding='utf-8') as handle:
                         json.dump(dict(reason='execution_unknown',health=report.get('gateway_final')),handle)
                 except Exception as exc:report.setdefault('cleanup_errors',[]).append(type(exc).__name__)
+            known=(idle_health(report.get('gateway_final')) and report['process_reaped']
+                and report.get('main_preserved') is True and not any(report.get('jobs_final_busy',{}).values())
+                and not report.get('drain_errors') and not report.get('cleanup_errors'))
+            try:lease.finish(known=known)
+            except Exception as exc:report.setdefault('cleanup_errors',[]).append(type(exc).__name__)
+            report['execution_guard']=lease.status()
             report['accepted']=accepted(report)
             with args.output.open('x',encoding='utf-8') as handle:json.dump(report,handle,ensure_ascii=False,indent=2)
     print(json.dumps({'output':str(args.output),'acceptance_passed':report['acceptance_passed'],

@@ -127,4 +127,6 @@ def accepted(report):
         and all(value is False for value in report['jobs_final_busy'].values())
         and not report.get('error') and not report.get('cleanup_errors')
         and report.get('gpu_monitor',{}).get('thread_busy') is False
-        and report['gpu_monitor'].get('abort_reason') is None)
+        and report['gpu_monitor'].get('abort_reason') is None
+        and report.get('execution_guard',{}).get('released') is True
+        and report['execution_guard'].get('unknown') is False)
