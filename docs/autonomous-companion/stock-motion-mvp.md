@@ -264,12 +264,24 @@ factory/operator checks before starting the new Hub. Record the old latch and
 new boot, with no physical hard-stop claim. This is a deliberate bounded
 reconciliation, not a persistent recovery/reset framework.
 
-`Agent.capture` waits for the requested neutral expression's transport attempt
-to finish before opening arecord. A rejected expression still advances the
-completed version in ExpressionPlayer's `finally`, so a completed 409 alone does
-not block microphone capture. A hanging request can delay that wait or cause its
-finite timeout. Zero turns and an expression error do not establish which of
-those happened: actual capture/last-error/stream diagnostics are needed. Local
-tests specifically verify that a latched Hub's rejected neutral expression does
-not prevent subsequent synthetic capture. The historical device failure cause
-must remain unknown without the corresponding actual diagnostics.
+`Agent.capture` queues the optional neutral expression without waiting for its
+HTTP transport, factory completion or settle delay, then opens arecord under the
+existing microphone/epoch checks. The expression worker retains its original
+binding and owned-stop controls independently. A local regression holds the
+actual ExpressionPlayer-to-Hub HTTP request open and verifies that arecord opens
+and synthetic voiced/silent PCM reaches the capture endpoint before that request
+is released. Rejected movement also does not prevent capture. Muted capture,
+including a stale listening event, is denied; mute/epoch withdrawal after process
+open returns no PCM and reaps the process.
+
+The earlier synchronous neutral wait was an avoidable dependency, not a proven
+cause of the historical device failure. A completed 409 already advanced the
+expression completed version; a hanging request could delay its prior wait.
+The Agent.run voice-health and Hub cooperative-ownership checks before capture
+remain unchanged readiness gates. Actual capture/phase/last-error/stream evidence
+is still needed: `recording` means a loud candidate began, while PCM admission
+also requires the existing minimum voiced chunks and silence/max-duration
+endpoint. A candidate can be discarded without a completed turn. No VAD,
+threshold, endpoint, STT, model, echo or Alice timing settings are changed by this
+checkpoint. Do not treat wall-time phase polls as proof of exact first-sample
+timing, audible speech, consumed PCM or the historical failure cause.

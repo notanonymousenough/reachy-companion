@@ -199,6 +199,61 @@ class StockAgentVoiceTests(unittest.TestCase):
         self.assertTrue(all(process.poll() is not None for process in processes))
         self.assertFalse(self.agent.capture_active)
 
+    def test_capture_opens_and_pcm_completes_while_neutral_http_is_still_blocked(self):
+        self.rpc_release=threading.Event()
+        self.agent.expressions.set('neutral')
+        self.assertTrue(self.rpc_entered.wait(1))
+        self.agent.listening.set()
+        capture=b'\xff\x1f'*(self.agent.chunk_bytes//2)+b'\0'*self.agent.chunk_bytes
+        real_popen=subprocess.Popen;opened=threading.Event();processes=[];result=[];errors=[]
+        def popen(command,*args,**kwargs):
+            self.assertEqual(command[0],'arecord')
+            process=real_popen([sys.executable,'-c',
+                'import sys,time;data=bytes.fromhex(sys.argv[1]);n=int(sys.argv[2]);'
+                'sys.stdout.buffer.write(data[:n]);sys.stdout.flush();time.sleep(.03);'
+                'sys.stdout.buffer.write(data[n:]);sys.stdout.flush();time.sleep(2)',
+                capture.hex(),str(self.agent.chunk_bytes)],*args,**kwargs)
+            processes.append(process);opened.set();return process
+        def capture_once():
+            try:result.append(self.agent.capture())
+            except BaseException as exc:errors.append(exc)
+        with patch('reachy_companion.agent.subprocess.Popen',side_effect=popen):
+            thread=threading.Thread(target=capture_once,daemon=True);thread.start()
+            try:
+                self.assertTrue(opened.wait(.5))
+                thread.join(1)
+                self.assertFalse(thread.is_alive())
+                self.assertFalse(self.rpc_release.is_set())
+                self.assertEqual(result,[capture]);self.assertEqual(errors,[])
+                self.assertEqual(self.writes,[])
+                self.assertTrue(all(process.poll() is not None for process in processes))
+            finally:self.rpc_release.set();thread.join(2)
+
+    def test_muted_capture_and_epoch_change_before_open_deny_audio_process(self):
+        self.agent.microphone.enabled=False
+        self.agent.listening.set() # A stale event cannot grant a muted mic.
+        with patch('reachy_companion.agent.subprocess.Popen') as popen:
+            self.assertIsNone(self.agent.capture());popen.assert_not_called()
+        self.agent.microphone.enabled=True
+        def change_epoch(*args,**kwargs):self.agent.microphone_epoch+=1
+        with patch.object(self.agent.expressions,'set',side_effect=change_epoch),patch(
+                'reachy_companion.agent.subprocess.Popen') as popen:
+            self.assertIsNone(self.agent.capture());popen.assert_not_called()
+
+    def test_mute_or_epoch_change_after_process_open_returns_no_pcm_and_reaps_process(self):
+        real_popen=subprocess.Popen
+        for change in ('mute','epoch'):
+            self.agent.microphone.enabled=True;self.agent.listening.set();processes=[]
+            def popen(command,*args,**kwargs):
+                process=real_popen([sys.executable,'-c','import time;time.sleep(2)'],*args,**kwargs)
+                processes.append(process)
+                if change=='mute':self.agent.microphone.enabled=False
+                else:self.agent.microphone_epoch+=1
+                return process
+            with patch('reachy_companion.agent.subprocess.Popen',side_effect=popen):
+                self.assertIsNone(self.agent.capture())
+            self.assertTrue(all(process.poll() is not None for process in processes))
+            self.assertFalse(self.agent.capture_active)
     def test_actual_capture_run_worker_stream_playback_and_stock_expression(self):
         piper=types.ModuleType('piper');piper.PiperVoice=piper.SynthesisConfig=object
         vosk=types.ModuleType('vosk');vosk.Model=vosk.KaldiRecognizer=vosk.SetLogLevel=object

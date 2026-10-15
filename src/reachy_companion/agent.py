@@ -231,9 +231,13 @@ class Agent:
     def capture(self, during_reply=False, on_speech=None, stop_event=None, idle_deadline=None, skip_expression=False):
         epoch = self.microphone_epoch
         def active():
-            return (self.microphone.enabled if during_reply else self.listening.is_set()) and not self.stopping.is_set() and epoch == self.microphone_epoch and not (stop_event and stop_event.is_set())
+            return self.microphone.enabled and (during_reply or self.listening.is_set()) and not self.stopping.is_set() and epoch == self.microphone_epoch and not (stop_event and stop_event.is_set())
+        if not active():
+            return None
         if not during_reply and not skip_expression:
-            self.expressions.set('neutral', wait=True)
+            # Optional movement is queued independently; factory completion
+            # must not delay microphone readiness.
+            self.expressions.set('neutral')
             self.phase = 'listening'
         if not active():
             return None
