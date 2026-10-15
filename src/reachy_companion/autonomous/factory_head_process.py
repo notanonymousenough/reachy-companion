@@ -13,6 +13,7 @@ from pathlib import Path
 from .factory_head_fence import FactoryReadOnlyASGI,install_backend_read_fence
 from .factory_head_adapter import NATIVE_METHODS
 from .factory_head_kinematics import verify_kinematics,install_bounded_kinematics,reject_existing_instances
+from .factory_head_startup import review_startup,install_startup_fence,startup_fence_intact
 
 STARTUP_METHODS=('finite_prepare_readonly_startup','finite_startup_status')
 
@@ -49,6 +50,7 @@ def prepare_factory_app(main_module,abstract_class,robot_class,daemon_class,comm
         raise ValueError('Actual factory native class/artifact .4 startup ABI binding required')
     verify_source(dict(main=main_module,abstract=abstract_class,robot=robot_class,daemon=daemon_class),native_path,native_sha256)
     verify_kinematics(analytical_class,kinematics_module,kinematics_sha256)
+    startup=review_startup(daemon_class,robot_class,getattr(args,'serialport',None),SOURCE_PINS['daemon'])
     if getattr(robot_class,'_finite_factory_prepared',False):raise ValueError('Fresh factory process required')
     if not issubclass(robot_class,abstract_class):raise ValueError('Pinned factory class inheritance required')
     if not callable(getattr(robot_class,'_update',None)):raise ValueError('Pinned robot update ABI required')
@@ -60,6 +62,7 @@ def prepare_factory_app(main_module,abstract_class,robot_class,daemon_class,comm
     lock=threading.RLock()
     # Validate every preflight above before class/startup patches.
     native_class.finite_prepare_readonly_startup() # irreversible, BEFORE controller/lifespan
+    startup_fence=install_startup_fence(startup) # BEFORE create_app or daemon/backend construction
     kinematics=install_bounded_kinematics(analytical_class,numpy,lock)
     fence=install_backend_read_fence(abstract_class,commands)
     main_module.startup_app_config.get_startup_app=lambda:None # process-local; no saved-config write
@@ -78,6 +81,7 @@ def prepare_factory_app(main_module,abstract_class,robot_class,daemon_class,comm
     return dict(app=app,sealed_app=FactoryReadOnlyASGI(app),kinematics_lock=lock,
         read_only_update=update_read_only,native_class=native_class,backend_class=robot_class,
         source_pinned=True,transport_fence=fence,native_artifact_sha256=native_sha256,
+        **startup_fence,
         **kinematics,kinematics_artifact_sha256=kinematics_sha256,
         all_mutation_paths_fenced=False,head_hardware_acceptance=False,
         remaining=['verify_actual_ready_backend/no_media/no_startup_producers','verify_target_native_ABI_and_all9_disabled',
@@ -87,6 +91,7 @@ def prepare_factory_app(main_module,abstract_class,robot_class,daemon_class,comm
 def ready_factory_backend(preparation):
     """Actual live producer/readiness check; no cached pose/torque attestation."""
     if preparation.get('source_pinned') is not True:return False
+    if not startup_fence_intact(preparation):return False
     app=preparation['app'];sealed=preparation['sealed_app']
     if not isinstance(sealed,FactoryReadOnlyASGI) or sealed.app is not app:return False
     backend=app.state.daemon.backend

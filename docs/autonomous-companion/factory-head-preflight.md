@@ -48,6 +48,32 @@ verify_native_clock(candidate_extension.ReachyMiniPyControlLoop)
 
 This function checks source/class/artifact identities and absence of existing factory/model instances before patching. It irreversibly chooses native readonly startup, installs bounded shared analytical methods, clears only the in-memory PID-config path, and seals HTTP/WS/SDK/RTC/internal producers. No saved configuration or installed file is rewritten. Only the returned sealed ASGI app may enter the factory's normal lifespan, which constructs the one controller and one model. No separate `ReachyMini`, native controller or kinematics object is allowed.
 
+Before `create_app` or lifespan, `prepare_factory_app` now fences the vendor
+pre-controller reflash path through `factory_head_startup`. The original installed
+daemon whole-file pin remains mandatory. Independently pin the exact public
+`Daemon._setup_backend` AST source segment SHA256
+`206f03c2cad77a82faa2be11d3a5b8db0a3fca1d7418bc1ef7404c609bdb370e`,
+verify the runtime function's compiled code/defaults/globals and its exact
+`RobotBackend` alias. The equivalent public method is in the [official daemon
+source](https://raw.githubusercontent.com/pollen-robotics/reachy_mini/main/src/reachy_mini/daemon/daemon.py)
+(whole public file SHA256
+`646ddfc085bb035ff57d251cb9b9e1cfb90142b9491a597db849dd467ec0f98f`).
+Method equality does not assert equality of the whole public and installed files.
+Unknown source/signature/runtime globals reject before native preparation.
+
+Supply an explicit canonical `/dev/...` `args.serialport` bound to the runner's
+frozen UART device; no `auto`, null or port discovery is admitted. The process-local
+setup wrapper validates the readonly real-backend profile, forces
+`reflash_motors_on_start=False` for omitted/positional/keyword flags, and traps
+both daemon and tools-module raw reflash globals before lifespan. It admits one
+setup attempt only; an exception or unknown constructor result cannot authorize
+a retry or a second controller. Readiness checks retain these exact fence bindings.
+No installed source or saved config is modified. This closes one concrete startup
+write path, not all daemon/lifespan paths: `all_mutation_paths_fenced` and hardware
+acceptance remain false. The runner must still independently review the exact
+installed startup/producer/network closure; do not infer new listeners, mDNS
+suppression or whole-lifespan safety from this wrapper.
+
 The constructor performs only its fixed read profile, with no actuator-write instructions or automatic reboot. Its receipt is diagnostic; startup `complete=true` does not supply current sensor or stop evidence. Convert native byte vectors to lists only when writing numeric JSON metadata. The profile is specific to the reviewed wireless motors/voltage/temperature bounds; a mismatch rejects rather than silently changing hardware limits or retrying construction.
 
 ## Unarmed read/FK measurements
