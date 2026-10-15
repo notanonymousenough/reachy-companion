@@ -254,6 +254,20 @@ sleep or automatic retry. Further movement still requires a new current explicit
 motor permission and ordinary command admission. Denied HTTP replies use static
 error enums and do not return exception bodies or credentials.
 
+Denied reconciliation replies additionally report only `phase` and `error_class`.
+Phases are `decode`, `admission`, `operator_before`, `factory_deps`, `state`,
+`operator_after` and `window`. Error classes are `module_missing`, `http_error`,
+`timeout`, `validation` and `state_denied`. These fields identify the failing
+check without messages, module names, remote bodies, boot/owner IDs or secrets.
+Diagnostics are scoped to that request; they do not relax or retry any check.
+The endpoint uses a Hub-local strict stdlib JSON decoder. It requires neither
+the `autonomous` namespace nor jsonschema. This closes the confirmed deployment
+gap where an older production Hub package lacked `reachy_companion.autonomous`:
+the prior dynamic decoder import failed before reconciliation checks ran. The
+minimal production dependency change is only the matched `hub.py` source file;
+no new package or namespace installation is needed. This finding explains that
+endpoint import failure, not the separate unproven factory stop HTTP 500 cause.
+
 This endpoint cannot be injected into an older running Hub process. Installing
 the source requires an orderly restart; restart alone is not reconciliation.
 For a currently latched older process the runner may perform a separately

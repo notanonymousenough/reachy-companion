@@ -3,6 +3,11 @@ import json
 import threading
 import copy
 import time
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.request import Request,build_opener,ProxyHandler
@@ -178,12 +183,113 @@ class StockStopReconciliationTests(unittest.TestCase):
         original=self.hub.factory.side_effect
         self.hub.factory.side_effect=RuntimeError('PRIVATE BODY TOKEN MUST NOT LEAK')
         code,result=call(body)
-        self.assertEqual(code,409);self.assertEqual(result,dict(error='reconciliation_denied'))
+        self.assertEqual(code,409);self.assertEqual(result,dict(error='reconciliation_denied',
+            phase='factory_deps',error_class='state_denied'))
         self.assertTrue(self.hub.stock_unknown)
         self.hub.factory.side_effect=original
+        code,result=call(b'{"owned_uuid":1,"owned_uuid":2}')
+        self.assertEqual(code,400);self.assertEqual(result,dict(error='invalid_reconciliation_request',
+            phase='decode',error_class='validation'))
+        self.hub.lock.acquire()
+        try:code,result=call(body)
+        finally:self.hub.lock.release()
+        self.assertEqual(code,409);self.assertEqual(result['phase'],'admission')
+        self.assertEqual(result['error_class'],'state_denied')
+        self.assertTrue(self.hub.stock_unknown)
         code,result=call(body)
         self.assertEqual(code,200);self.assertTrue(result['reconciled'])
         self.assertFalse(result['hard_stop_certified']);self.assertEqual(self.writes,[])
+
+    def test_diagnostics_cover_operator_factory_state_and_window_without_exception_text(self):
+        from reachy_companion.hub import reconciliation_error_class
+        self.assertEqual(reconciliation_error_class(ModuleNotFoundError('SECRET_MODULE')),'module_missing')
+        for target in ('operator_before','factory_deps','state','operator_after','window'):
+            self.prepare_unknown();diagnostic={};calls=[]
+            original=self.factory
+            def factory(path,payload=None):
+                if target=='factory_deps' and path=='/api/daemon/status':
+                    raise HTTPError('SECRET_URL',500,'SECRET_BODY',None,None)
+                if target=='state' and path=='/api/state/full':raise ValueError('SECRET_STATE')
+                if target=='window' and path=='/api/state/full':time.sleep(.31)
+                return original(path,payload)
+            def operator(path):
+                calls.append(path)
+                if target=='operator_before' or target=='operator_after' and len(calls)==2:
+                    raise TimeoutError('SECRET_OPERATOR')
+                return copy.deepcopy(self.operator)
+            self.hub.factory.side_effect=factory;self.hub.agent.side_effect=operator
+            with self.assertRaises(Exception) as caught:self.hub.stock_reconcile(self.payload(),diagnostic=diagnostic)
+            self.assertEqual(diagnostic,dict(phase=target))
+            self.assertNotIn('SECRET',json.dumps(diagnostic))
+            self.assertEqual(reconciliation_error_class(caught.exception),
+                'timeout' if target.startswith('operator_') else 'http_error' if target=='factory_deps'
+                else 'validation' if target=='state' else 'state_denied')
+            self.assertTrue(self.hub.stock_unknown)
+        self.assertEqual(self.writes,[])
+
+    def test_isolated_production_hub_without_autonomous_namespace_serves_strict_endpoint(self):
+        with tempfile.TemporaryDirectory() as directory:
+            package=Path(directory)/'reachy_companion';package.mkdir()
+            (package/'__init__.py').write_text('')
+            shutil.copy(Path(__file__).resolve().parents[1]/'src/reachy_companion/hub.py',package/'hub.py')
+            script=r'''
+import importlib.util,json,sys,threading
+from http.server import ThreadingHTTPServer
+from urllib.request import Request,urlopen
+from urllib.error import HTTPError
+sys.path.insert(0,sys.argv[1])
+from reachy_companion.hub import Hub,serve
+assert importlib.util.find_spec('reachy_companion.autonomous') is None
+class Config:
+    token='t'*32
+    data={'guarded_motion':{'transport':'stock','enabled':True},'timeouts':{'http':1},
+          'servers':{'hub':{'listen':'127.0.0.1','port':0}}}
+    def __getitem__(self,key):return self.data[key]
+hub=Hub(Config());hub.stock_unknown=True
+hub.stock_owned='00000000-0000-4000-8000-000000000001'
+operator=dict(agent_boot_id='fixture',microphone_epoch=0,microphone_enabled=False,
+    microphone_state_error=None,motion_policy=dict(epoch=0,motor_enabled=False,quiet=False,privacy_all=False))
+hub.agent=lambda path:operator
+reads=[]
+def factory(path,payload=None):
+    assert payload is None
+    reads.append(path)
+    return {'/api/daemon/status':dict(state='running',backend_status=dict(ready=True)),
+        '/api/daemon/robot-app-lock-status':dict(state='free'),'/api/move/running':[],
+        '/api/state/full':dict(control_mode='enabled')}[path]
+hub.factory=factory;hub.monitor=lambda:None
+import reachy_companion.hub as module
+ready=threading.Event();servers=[]
+def server(address,handler):
+    value=ThreadingHTTPServer(address,handler);servers.append(value);ready.set();return value
+module.ThreadingHTTPServer=server
+thread=threading.Thread(target=serve,args=(hub,),daemon=True);thread.start();assert ready.wait(2)
+server=servers[0];url='http://127.0.0.1:'+str(server.server_port)+'/actions/stock-reconcile'
+def call(body,token=Config.token):
+    request=Request(url,data=body,headers={'Authorization':'Bearer '+token})
+    try:
+        with urlopen(request,timeout=2) as response:return response.status,json.load(response)
+    except HTTPError as exc:
+        with exc:return exc.code,json.load(exc)
+try:
+    body=json.dumps(dict(expected_hub_boot_id=hub.boot_id,owned_uuid=hub.stock_owned,
+        operator_binding=dict(agent_boot_id='fixture',microphone_epoch=0,policy_epoch=0,microphone_enabled=False))).encode()
+    assert call(body,'wrong')[0]==401
+    for bad in (b'{}',b'{"x":1,"x":2}',b'{"x":NaN}',b'{"x":Infinity}',b'x'*4097):
+        status,result=call(bad);assert status==400,(status,result);assert hub.stock_unknown
+    operator['motion_policy']['motor_enabled']=True
+    status,result=call(body);assert status==409
+    assert result==dict(error='reconciliation_denied',phase='operator_before',error_class='state_denied')
+    assert hub.stock_unknown
+    operator['motion_policy']['motor_enabled']=False
+    status,result=call(body);assert status==200 and result['reconciled']
+    assert result['hard_stop_certified'] is False and hub.stock_unknown is False
+    assert reads and 'reachy_companion.autonomous' not in sys.modules
+finally:
+    server.shutdown();server.server_close();thread.join(2)
+'''
+            result=subprocess.run([sys.executable,'-I','-c',script,directory],capture_output=True,text=True,timeout=10)
+            self.assertEqual(result.returncode,0,result.stderr)
 
 
 if __name__=='__main__':unittest.main()

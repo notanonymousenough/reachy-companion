@@ -14,6 +14,27 @@ from urllib.error import HTTPError
 LOG = logging.getLogger("reachy-hub")
 
 
+def reconciliation_error_class(exc):
+    """Fixed wire diagnostics; never serialize exception messages or types."""
+    if isinstance(exc,ImportError):return 'module_missing'
+    if isinstance(exc,HTTPError):return 'http_error'
+    if isinstance(exc,TimeoutError):return 'timeout'
+    if isinstance(exc,(ValueError,KeyError,TypeError)):return 'validation'
+    return 'state_denied'
+
+
+def decode_reconciliation_json(data):
+    """Strict stdlib-only JSON for the independently deployed production Hub."""
+    def reject(value):raise ValueError('Non-finite reconciliation JSON')
+    def unique(pairs):
+        result={}
+        for key,value in pairs:
+            if key in result:raise ValueError('Duplicate reconciliation JSON key')
+            result[key]=value
+        return result
+    return json.loads(data,parse_constant=reject,object_pairs_hook=unique)
+
+
 class Hub:
     def __init__(self, config):
         self.config = config
@@ -114,8 +135,11 @@ class Hub:
             if not request_failed or self.stock_stop_observed is not True:self.stock_stop_observed=False
             raise
 
-    def stock_reconcile(self,payload):
+    def stock_reconcile(self,payload,*,diagnostic=None):
         """Explicit read-only reconciliation; never acquires permission or retries output."""
+        def phase(value):
+            if diagnostic is not None:diagnostic['phase']=value
+        phase('admission')
         if (type(payload) is not dict or set(payload)!={'expected_hub_boot_id','owned_uuid','operator_binding'}
                 or type(payload['expected_hub_boot_id']) is not str or payload['expected_hub_boot_id']!=self.boot_id):
             raise ValueError('Current Hub reconciliation binding required')
@@ -144,12 +168,17 @@ class Hub:
                     raise RuntimeError('Fresh operator with motors denied required for reconciliation')
                 return value['agent_boot_id'],value['microphone_epoch'],policy['epoch'],value['microphone_enabled']
             began=time.monotonic()
+            phase('operator_before')
             self.stock_compare(expected_tuple,operator())
+            phase('factory_deps')
             if self.stock_dependencies():raise RuntimeError('Factory movement still active')
+            phase('state')
             state=self.factory('/api/state/full')
             if type(state) is not dict or state.get('control_mode') not in ('enabled','disabled'):
                 raise RuntimeError('Factory actual state unknown')
+            phase('operator_after')
             self.stock_compare(expected_tuple,operator())
+            phase('window')
             if time.monotonic()-began>.3:raise RuntimeError('Reconciliation observation window expired')
             self.stock_owned=None;self.stock_unknown=False;self.stock_stop_observed=True
             return dict(reconciled=True,uuid_absence_observed=True,factory_ready=True,
@@ -443,14 +472,18 @@ def serve(hub):
                 self.reply(401, {'error': 'Bearer token required'})
                 return
             if self.path=='/actions/stock-reconcile':
+                diagnostic=dict(phase='decode')
                 try:
                     size=int(self.headers.get('Content-Length',0))
                     if not 0<size<=4096:raise ValueError('Reconciliation request size')
                     self.connection.settimeout(min(2,hub.config['timeouts']['http']))
-                    from .autonomous.contracts import decode
-                    self.reply(200,hub.stock_reconcile(decode(self.rfile.read(size))))
-                except (ValueError,KeyError,TypeError):self.reply(400,dict(error='invalid_reconciliation_request'))
-                except Exception:self.reply(409,dict(error='reconciliation_denied'))
+                    payload=decode_reconciliation_json(self.rfile.read(size))
+                    self.reply(200,hub.stock_reconcile(payload,diagnostic=diagnostic))
+                except Exception as exc:
+                    invalid=isinstance(exc,(ValueError,KeyError,TypeError))
+                    self.reply(400 if invalid else 409,dict(
+                        error='invalid_reconciliation_request' if invalid else 'reconciliation_denied',
+                        phase=diagnostic['phase'],error_class=reconciliation_error_class(exc)))
                 return
             if self.path in ('/actions/expression', '/control/microphone', '/control/volume', '/control/motion-policy'):
                 try:
