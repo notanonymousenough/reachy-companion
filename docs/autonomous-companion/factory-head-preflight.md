@@ -23,6 +23,8 @@ Call `authorize_takeover(plan, observation, now_ns=..., action='freeze')`, then 
 
 `authorize_candidate` requires exact original exited members, unchanged original config, no current MainPID/new InvocationID, original cgroup empty or gone and UART owner-free. Its only intent is `prepare_factory_app_unarmed`: arm, enable, goals, automatic restart and operator restore are false. A declined or failed decision does not authorize cleanup of foreign state.
 
+The Phase B DTO maps `motion_owner` from the actual Agent top-level `motion_policy_owner_id`, not from a guessed nested policy field. A truthful `null` owner is valid only with the existing capture/listen/motor-off baseline. Freeze that exact null: a new owner, Agent boot or policy/microphone epoch denies subsequent admission. Do not invent an owner or change policy to make planning pass. This nullable no-output binding does not change the movement guard or grant motion.
+
 ## Fresh process preparation
 
 Load the process-local candidate motor-controller package before importing the factory Robot module. The Robot module's `ReachyMiniPyControlLoop` must be exactly the candidate class. A stale already-imported legacy class rejects before lifespan. Never execute the installed console main, which has wireless/audio configuration hooks.

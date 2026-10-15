@@ -95,7 +95,8 @@ def _scope(value):
 
 def _operator(value):
     _keys(value,'agent_boot_id microphone_epoch microphone_owner_id microphone_enabled capture_active listening policy_epoch motion_owner motor_enabled quiet privacy_all')
-    for key in ('agent_boot_id','motion_owner'):_text(value[key])
+    _text(value['agent_boot_id'])
+    if value['motion_owner'] is not None:_text(value['motion_owner'])
     for key in ('microphone_epoch','policy_epoch'):_int(value[key])
     if value['microphone_owner_id'] is not None:_text(value['microphone_owner_id'])
     if any(value[key] is not False for key in ('microphone_enabled','capture_active','listening','motor_enabled')):

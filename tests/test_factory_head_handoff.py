@@ -141,6 +141,31 @@ class PhaseBPlanTests(unittest.TestCase):
             self.assertFalse(accepted[key])
         self.assertEqual(result,before)
 
+    def test_truthful_null_motion_owner_is_frozen_but_never_grants_motion_or_new_owner(self):
+        self.s['operator']['motion_owner']=None
+        plan=h.freeze_plan(self.s,expected_sha256=h.digest(self.s))
+        self.assertIsNone(plan.data()['operator']['motion_owner'])
+        observed=takeover(self.s,True)
+        granted=h.authorize_takeover(plan,observed,now_ns=observed['end_ns'],action='kill')
+        self.assertFalse(granted['physical_stop_proven'])
+        result,current=receipt(self.s,plan)
+        accepted=h.assess_readonly(plan,result,current,now_ns=current['end_ns'])
+        self.assertTrue(accepted['accepted']);self.assertFalse(accepted['movement_admission'])
+        for field,new in (('motion_owner','new-human-owner'),('policy_epoch',6),('microphone_epoch',5),('agent_boot_id','new-agent')):
+            changed=copy.deepcopy(observed);changed['operator'][field]=new
+            with self.subTest(field=field),self.assertRaises(ValueError):
+                h.authorize_takeover(plan,changed,now_ns=changed['end_ns'],action='kill')
+            changed=copy.deepcopy(current);changed['operator'][field]=new
+            self.assertFalse(h.assess_readonly(plan,result,changed,now_ns=changed['end_ns'])['accepted'])
+        for malformed in (0,False,{},[], '',True):
+            changed=copy.deepcopy(self.s);changed['operator']['motion_owner']=malformed
+            with self.subTest(owner=malformed),self.assertRaises(ValueError):
+                h.freeze_plan(changed,expected_sha256=h.digest(changed))
+        for field in ('motor_enabled','microphone_enabled','capture_active','listening'):
+            changed=copy.deepcopy(self.s);changed['operator'][field]=True
+            with self.subTest(field=field),self.assertRaises(ValueError):
+                h.freeze_plan(changed,expected_sha256=h.digest(changed))
+
     def test_fault_and_human_epoch_change_keep_fence_without_replaying_old_state(self):
         changes=[lambda r:r['startup'].update(reads=62),lambda r:r['startup']['torque'].__setitem__(0,0),
             lambda r:r.update(forbidden_counts=list(h.FORBIDDEN)),lambda r:r['startup']['health'].__setitem__(0,True),
