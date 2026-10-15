@@ -288,13 +288,40 @@ class Hub:
         self.robot('/api/move/stop', task)
         raise RuntimeError('Movement timed out; stop requested')
 
-    def agent(self, path, payload=None):
+    def agent(self, path, payload=None, *, timeout=None, max_bytes=None):
         request = Request(self.config['network']['agent_url'] + path,
                           data=None if payload is None else json.dumps(payload).encode(),
                           headers={'Content-Type': 'application/json',
                                    'Authorization': 'Bearer ' + self.config.token})
-        with self.http.open(request, timeout=self.config['timeouts']['http']) as response:
+        with self.http.open(request, timeout=self.config['timeouts']['http'] if timeout is None else timeout) as response:
+            if max_bytes is not None:
+                if response.headers.get_content_type()!='application/json':raise ValueError('Expected Agent JSON')
+                body=response.read(max_bytes+1)
+                if len(body)>max_bytes:raise ValueError('Agent response exceeds bound')
+                return decode_reconciliation_json(body)
             return json.load(response)
+
+    def operator_proxy(self):
+        began=time.monotonic()
+        value=self.agent('/operator',timeout=.3,max_bytes=8192)
+        fields={'agent_boot_id','microphone_epoch','microphone_owner_id','microphone_enabled','capture_active',
+                'phase','listening','microphone_state_error','motion_policy','motion_policy_owner_id','expression_version'}
+        policy=value.get('motion_policy') if type(value) is dict else None
+        if (type(value) is not dict or set(value)!=fields or type(policy) is not dict
+                or set(policy)!={'motor_enabled','quiet','privacy_all','epoch'}
+                or type(value['agent_boot_id']) is not str or not 1<=len(value['agent_boot_id'])<=256
+                or any(type(v) is not int or not 0<=v<2**63 for v in
+                       (value['microphone_epoch'],policy.get('epoch'),value['expression_version']))
+                or any(type(value[k]) is not bool for k in ('microphone_enabled','capture_active','listening'))
+                or any(type(policy[k]) is not bool for k in ('motor_enabled','quiet','privacy_all'))
+                or any(value[k] is not None and (type(value[k]) is not str or not 1<=len(value[k])<=128)
+                       for k in ('microphone_owner_id','motion_policy_owner_id'))
+                or value['microphone_state_error'] is not None
+                or value['phase'] not in ('starting','paused','listening','recording','processing','speaking',
+                                         'waiting_to_resume','music','error','stopped')):
+            raise ValueError('Typed current operator unavailable')
+        if time.monotonic()-began>.3:raise TimeoutError('Operator read expired')
+        return value,began
 
     def expression(self, payload):
         from .motion_limits import validate_steps
@@ -435,15 +462,26 @@ class Hub:
 
 def serve(hub):
     class Handler(BaseHTTPRequestHandler):
-        def reply(self, code, value):
+        def reply(self, code, value, *, operator_begin=None, no_store=False):
             body = json.dumps(value, ensure_ascii=False).encode()
+            if operator_begin is not None and time.monotonic()-operator_begin>.3:
+                self.reply(503,dict(error='operator_unavailable'),no_store=True);return
             self.send_response(code)
             self.send_header('Content-Type', 'application/json; charset=utf-8')
             self.send_header('Content-Length', str(len(body)))
+            if no_store:self.send_header('Cache-Control','no-store')
             self.end_headers()
             self.wfile.write(body)
 
         def do_GET(self):
+            if self.path=='/control/operator':
+                if not hmac.compare_digest(self.headers.get('Authorization','').encode(),('Bearer '+hub.config.token).encode()):
+                    self.reply(401,dict(error='Bearer token required'),no_store=True);return
+                try:
+                    value,began=hub.operator_proxy()
+                    self.reply(200,value,operator_begin=began,no_store=True)
+                except Exception:self.reply(503,dict(error='operator_unavailable'),no_store=True)
+                return
             if self.path == '/control':
                 from .control_page import PAGE
                 body = PAGE.encode()

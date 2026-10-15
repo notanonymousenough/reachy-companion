@@ -358,3 +358,30 @@ without a newer example file. Keep the Agent metadata consumer and worker
 producer matched for the Alice trial. No new package, inference endpoint, model,
 router, hardware controller or service is required. The runner owns the finite
 real-model/Alice/mute/epoch/echo acceptance; local tests use synthetic TTS/PCM.
+
+## Read-only operator preflight through Hub
+
+An authenticated `GET /control/operator` on the existing Hub forwards only the
+fixed Agent `GET /operator` using the current token. It returns the complete
+typed operator object, including Agent boot, microphone and policy epochs,
+microphone/capture/listening state, policy booleans, both owner IDs, error state
+and expression version. Owner `null` remains distinct from an absent field.
+Valid motor/quiet/privacy values are reported unchanged, not granted or altered.
+The proxy does not use `/control/status`, cache a previous receipt, accept a URL
+or path parameter, or fall back to another source.
+
+Authorization is checked before upstream access. The read uses a 300 ms HTTP
+timeout, an 8192-byte JSON response bound and strict duplicate/nonfinite JSON
+decoding. Hub measures elapsed time from immediately before upstream access,
+checks the full typed result within 300 ms, and checks freshness again after
+serialization before sending the response. Malformed, missing, erroneous or
+expired operator state fails closed with sanitized `503 operator_unavailable`;
+no exception messages or upstream bodies are returned. All responses on this
+route carry `Cache-Control: no-store`.
+
+This is a Hub-only source change using stdlib and its existing authenticated
+Agent client. No Agent rollout, bind/firewall/configuration change or new
+namespace/dependency is required. PC preflight must independently measure its
+total request duration from its own BEGIN and compare the exact expected current
+boot/epochs and operator OFF state. A successful proxy read is an observation,
+not permission, ownership acquisition, a state write or a readiness grant.
