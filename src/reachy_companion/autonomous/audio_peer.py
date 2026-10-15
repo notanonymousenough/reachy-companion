@@ -412,13 +412,20 @@ class PersistentPeer:
 
 
 class RemotePCM:
-    def __init__(self,client,*,stop_port=None,source_boot=None):
+    def __init__(self,client,*,stop_port=None,source_boot=None,max_streams=None):
+        if max_streams is not None and (type(max_streams) is not int or not 1<=max_streams<=32):
+            raise ValueError('Explicit finite remote stream budget1..32 required')
+        self.max_streams=max_streams;self.reservation_attempts=0;self.budget_lock=threading.Lock()
         if stop_port is not None and (not isinstance(source_boot,str) or not 1<=len(source_boot)<=128):
             raise ValueError('Current peer boot required for separate stop transport')
         self.client=client;self.transport=PersistentPeer(client);self.stream_map={}
         self.stop_client=client.at_port(stop_port) if stop_port is not None else None
         self.source_boot=source_boot
     def reserve(self,stream):
+        with self.budget_lock:
+            if self.max_streams is not None and self.reservation_attempts>=self.max_streams:
+                raise RuntimeError('Finite remote stream budget exhausted before reservation')
+            self.reservation_attempts+=1 # spent BEFORE transport, including unknown completion
         self.transport.close()
         result=self.transport.call('/reserve',stream_id=stream)
         actual=result.get('device_stream_id')

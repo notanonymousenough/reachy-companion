@@ -12,7 +12,7 @@ def create_server(token,controller,source_boot,stop,read_status,*,port=8790):
     if (len(token)<32 or not isinstance(controller,str) or not 1<=len(controller)<=128
             or not isinstance(source_boot,str) or not 1<=len(source_boot)<=128):
         raise ValueError('Owned session control required')
-    session_boot=uid();slots=threading.BoundedSemaphore(2)
+    session_boot=uid();slots=threading.BoundedSemaphore(2);handlers_lock=threading.Lock();handlers=0
     binding=dict(controller=controller,source_boot=source_boot,session_boot=session_boot)
     class Handler(BaseHTTPRequestHandler):
         def setup(self):
@@ -46,12 +46,21 @@ def create_server(token,controller,source_boot,stop,read_status,*,port=8790):
     class Server(ThreadingHTTPServer):
         daemon_threads=True
         def process_request(self,request,address):
+            nonlocal handlers
             if not slots.acquire(False):request.close();return
+            with handlers_lock:handlers+=1
             try:super().process_request(request,address)
-            except BaseException:slots.release();raise
+            except BaseException:
+                with handlers_lock:handlers-=1
+                slots.release();raise
         def process_request_thread(self,request,address):
+            nonlocal handlers
             try:super().process_request_thread(request,address)
-            finally:slots.release()
+            finally:
+                with handlers_lock:handlers-=1
+                slots.release()
+        def transport_status(self):
+            with handlers_lock:return dict(execution_busy=handlers>0,handlers=handlers)
     server=Server(('127.0.0.1',port),Handler);server.session_binding=binding
     return server
 
@@ -80,6 +89,12 @@ def cleanup_receipts(hub,device,*,controller,session_boot,source_boot):
             or hub.get('session_boot')!=session_boot or hub.get('source_boot')!=source_boot
             or device.get('source_boot')!=source_boot):raise ValueError('Cleanup receipt owner mismatch')
     errors=[]
+    normal=hub.get('mode')=='normal_joined_companion'
+    if normal:
+        control=hub.get('control_transport',{})
+        if (not isinstance(control,dict) or control.get('execution_busy') is not False
+                or type(control.get('handlers')) is not int or control['handlers']!=0
+                or hub.get('control_listener_execution_busy') is not False):errors.append('hub_control_transport_unknown')
     busy=hub.get('execution_busy')
     if (not isinstance(busy,dict) or not {'fast','main','audio','speech','peer_poll','lease','context','context_revoke','context_terminal_revoke'}<=set(busy)
             or any(type(value) is not bool or value for value in busy.values())):errors.append('hub_execution_busy_or_unknown')
@@ -116,6 +131,6 @@ def cleanup_receipts(hub,device,*,controller,session_boot,source_boot):
             or type(operator.get('microphone_epoch')) is not int or not 0<=operator['microphone_epoch']<2**63):
         errors.append('operator_cleanup_unknown')
     return dict(receipt_cleanup_verified=not errors,errors=errors,controller=controller,session_boot=session_boot,
-        source_boot=source_boot,live_readiness_verified=False,voice_acceptance=hub.get('accepted') is True
+        source_boot=source_boot,live_readiness_verified=False,voice_acceptance=not normal and hub.get('accepted') is True
             and (not actual_cancel or device.get('accepted') is True),
         resume_allowed=False)

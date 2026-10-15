@@ -106,7 +106,15 @@ class SpeechAdapter:
                 self.rejected_refreshes+=1;return
             combined=(authority,binding)
             if self.authority is not None and combined!=self.authority:
+                pending=self.pending
+                preserve=(binding==self.binding and actual['microphone_enabled'] is True
+                    and policy['quiet'] is False and policy['privacy_all'] is False and pending is not None
+                    and pending['authority']==authority and time.monotonic()<pending['deadline'])
                 self.interrupt('operator',False)
+                # A new interaction can finish before its operator refresh.
+                # Only the same physical binding may retain that new proposal;
+                # old output and proposals from any other authority stay revoked.
+                if preserve:self.pending=pending
             self.authority=combined;self.binding=binding;self.policy_deadline=started+.3
             self.policy_live=True
             self.operator_receipt=dict(binding=binding,microphone_enabled=actual['microphone_enabled'],

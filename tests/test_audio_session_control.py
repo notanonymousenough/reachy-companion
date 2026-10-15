@@ -11,6 +11,28 @@ from reachy_companion.autonomous.audio_session_control import create_server,Sess
 
 
 class ControlTests(unittest.TestCase):
+    def test_listener_close_does_not_hide_actual_occupied_status_handler(self):
+        entered=threading.Event();release=threading.Event();out=[]
+        def status():entered.set();release.wait(2);return dict(stage='fixture')
+        server=create_server('t'*32,'controller','source',threading.Event(),status,port=0)
+        listener=threading.Thread(target=server.serve_forever,daemon=True);listener.start()
+        client=SessionClient('http://127.0.0.1:'+str(server.server_address[1]),'t'*32,'controller',timeout=2)
+        worker=threading.Thread(target=lambda:out.append(client.status()));worker.start()
+        try:
+            self.assertTrue(entered.wait(1));server.shutdown();server.server_close()
+            self.assertEqual(server.transport_status(),dict(execution_busy=True,handlers=1))
+            release.set();worker.join(1);listener.join(1)
+            self.assertFalse(worker.is_alive());self.assertEqual(server.transport_status(),dict(execution_busy=False,handlers=0))
+        finally:release.set();server.shutdown();server.server_close();worker.join(1)
+
+    def test_normal_receipt_requires_drained_control_and_does_not_upgrade_lifecycle_to_voice_proof(self):
+        hub,device=self.receipts();hub.update(mode='normal_joined_companion',accepted=True)
+        self.assertFalse(self.audit(hub,device)['receipt_cleanup_verified'])
+        hub.update(control_listener_execution_busy=False,control_transport=dict(execution_busy=False,handlers=0))
+        result=self.audit(hub,device);self.assertTrue(result['receipt_cleanup_verified']);self.assertFalse(result['voice_acceptance'])
+        hub['control_transport']['handlers']=1
+        self.assertFalse(self.audit(hub,device)['receipt_cleanup_verified'])
+
     def server(self):
         stop=threading.Event();server=create_server('t'*32,'controller','source',stop,lambda:dict(stage='startup'),port=0)
         worker=threading.Thread(target=server.serve_forever,daemon=True);worker.start()
