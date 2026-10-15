@@ -18,8 +18,11 @@ Run as the same Windows user as the Reachy launchers; another account has a
 different per-user latch and is not an interchangeable stop context.
 Default inventory is `%LOCALAPPDATA%\ReachyCompanion\stop-inventory.local.json`.
 The tracked example is deliberately empty and is **not** an approved inventory.
-The runner must fill and audit the private file from current read-only observations
-before acceptance. No real device IDs, credentials or private inventory belong
+New `start-worker.ps1` enrolls only its just-created stopped worker into this
+canonical file before its first exact-ID start; see the [clean-PC guide](../../docs/windows-clean-pc.md).
+Other existing resources still require audited local enrollment from current
+observations before acceptance. A current custom kit inventory is not silently
+migrated or overwritten. No real device IDs, credentials or private inventory belong
 in Git. Use an operator-controlled local directory/ACL; a manifest is an explicit
 ownership assertion checked against current identities, not cryptographic proof
 against a malicious same-user/admin writer.

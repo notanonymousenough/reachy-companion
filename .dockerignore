@@ -5,6 +5,7 @@ data
 secrets
 config.local.json
 config.*.local.json
+scripts/windows/*.local.json
 .env
 .env.*
 __pycache__

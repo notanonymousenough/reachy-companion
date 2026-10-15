@@ -1,4 +1,4 @@
-param([string]$Configuration = 'config.local.json')
+param([string]$Configuration = 'config.local.json', [string]$PythonExecutable = 'py')
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $startupRepo = Split-Path -Parent $PSScriptRoot
@@ -7,7 +7,7 @@ Set-Location $startupRepo
 Assert-CompanionNotManuallyStopped
 $startupSettings = Read-CompanionSettings $Configuration
 $startupUser = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-$startupArguments = '-NoProfile -ExecutionPolicy Bypass -File "' + "$PSScriptRoot/start.ps1" + '" -Configuration "' + $Configuration + '" -NoPull -InTask'
+$startupArguments = '-NoProfile -ExecutionPolicy Bypass -File "' + "$PSScriptRoot/start.ps1" + '" -Configuration "' + $Configuration + '" -NoPull -InTask -PythonExecutable "' + $PythonExecutable + '"'
 $startupAction = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $startupArguments -WorkingDirectory $startupRepo
 $startupTrigger = New-ScheduledTaskTrigger -AtLogOn -User $startupUser
 $startupPrincipal = New-ScheduledTaskPrincipal -UserId $startupUser -LogonType Interactive -RunLevel Limited

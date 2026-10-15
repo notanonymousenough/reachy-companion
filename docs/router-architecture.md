@@ -1,10 +1,16 @@
 # Следующий этап: hub как маршрутизатор, вычисления на ПК
 
-## Состояние
+## Область готовности
 
-Живая установка переведена на `voice.mode=remote`, `streaming.enabled=true`. Пользователь запустил Docker worker на Windows 11; health и Bearer-аутентификация проверены с хаба. Hub использует отдельную `.venv-router` без Vosk/Piper/ONNX, две службы занимают примерно по 25 MiB RSS. Reachy обновлён до пакета 0.2.0 и проигрывает PCM из одного непрерывного aplay. Полный STT → LM Studio → TTS проверен на настоящем Windows worker через хаб. Автоматического fallback к вычислениям на хабе нет.
+Это описание baseline voice-routing, а не сертификат готовности всех текущих
+устройств или будущего autonomous companion. Исторические проверки отдельной
+Windows-установки подтверждали health/Bearer и STT → LM Studio → TTS, но не
+заменяют acceptance нового ПК. Актуальный воспроизводимый путь без private ZIP:
+[новый Windows-ПК из Git checkout](windows-clean-pc.md). Код и зависимости в Git;
+локальные адреса, общий токен, веса и ownership IDs создаются/проверяются отдельно.
+Автоматического fallback inference на Hub нет. OpenClaw/Hermes и будущие
+интеграции не устанавливаются baseline-скриптом автоматически.
 
-SSH Windows доступен под User. Запуск из SSH теперь идёт через зарегистрированную задачу пользователя, поэтому процессы не завершаются вместе с SSH. Удалённый Docker API не нужен; Docker вызывается локально на ПК. OpenClaw/Hermes пока не установлены: добавлены адаптеры и конфиг для будущего подключения. Теперь добавлен единый scripts/start.ps1: запускает LM Studio через CLI вместе с Docker worker; настройка задачи входа — scripts/install-startup.ps1.
 ## Распределение задач
 
 ```text
@@ -19,23 +25,30 @@ PC worker: STT → выбранный текстовый backend → Piper + SoX
 
 `reachy-voice` на хабе при `voice.mode=remote` запускает `router.py`. Он не импортирует Vosk/Piper/ONNX, не распознаёт речь, не генерирует текст или звук, не меняет высоту голоса и не хранит историю разговора. Dependencies хаба — стандартная библиотека Python. `reachy-hub` оставляет доступ к factory daemon и контроль допустимых hello/wake/sleep: это маршрутизация/проверки, не inference.
 
-Все вычисления worker происходят на ПК. LM Studio остаётся сервером LLM; текущие Vosk/Piper на worker работают на CPU ПК, а не на GPU. Это сохраняет голос и позволяет сначала проверить перенос. RTX 5070 продолжает обслуживать LLM. GPU-STT/TTS можно добавить отдельными реализациями позже.
+Все вычисления worker происходят на ПК. Backend STT/CPU/GPU определяется
+эффективным конфигом (пример использует Faster Whisper; Vosk — совместимый
+вариант). Piper/SoX и выбранная локальная LLM остаются PC-зависимостями.
+Конкретная видеокарта старой установки не является prerequisite нового ПК.
 
 PC не получает прямого доступа к Reachy. Worker проверяет состояние робота через `hub/status`; все команды оператора и поток аудио идут через hub. Действующее ограничение inbound Reachy не меняется.
 
-## Windows 11: запуск одной командой
+## Windows: настроенный baseline из публичного checkout
 
-Подготовлен локальный ZIP-набор для ПК: исходники, зависимости, Dockerfile, текущие LAN-настройки и существующий общий токен. ZIP не входит в Git; это частный набор для данной установки. Перенести его на свой ПК, распаковать и открыть **PowerShell от администратора** в каталоге reachy-companion, чтобы создать правило Windows Firewall для хаба:
+Сначала выполнить prerequisites/config/token шаги из [clean-PC guide](windows-clean-pc.md).
+Нужен Python 3.11+ для preflight/enrollment/stop, хотя inference запускается в
+Docker. После настройки используется `scripts/start.ps1 -NoPull`; низкоуровневый
+`start-worker.ps1` запускает только worker. Первая установка не является одним
+кликом из пустого Windows: нужны Docker Linux engine, LM Studio/model key, общий
+токен и реальные LAN-настройки. Private ZIP не нужен и не является зависимостью.
+Startup регистрирует только свой только что созданный stopped container до
+первого старта; чужая коллизия имени не даёт права на удаление/перезапуск.
+Worker endpoints требуют Bearer, кроме health; firewall проверяется для нужного
+Hub отдельно от широких Docker Desktop rules.
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\start-worker.ps1
-```
-
-Python на Windows для этого не нужен. Скрипт проверяет Linux Docker engine, собирает образ, скачивает модели, запускает контейнер с restart policy, разрешает TCP-порт worker с IPv4 хаба и ждёт health. Ранее существовавшие широкие правила Docker Firewall он не меняет; worker endpoints всё равно требуют Bearer-токен, кроме health.
-
-LM Studio на этом же ПК подключается из контейнера по `container.desktop_llm_base_url` через [host.docker.internal](https://docs.docker.com/desktop/features/networking/networking-how-tos/). Скрипт создаёт отдельный `config.worker.local.json` в UTF-8 без BOM и подставляет этот URL; основной конфиг Mac не меняется. Все ports, image/name, CPU threads, адрес хаба и имя firewall rule читаются из JSON. Этот низкоуровневый скрипт запускает только worker. Для всего стека и pull использовать scripts/start.ps1; OpenClaw/Hermes не запускаются.
-
-При новой установке после строки `Worker ready` проверить доступ с hub и установить службы по разделу ниже. В этой установке проверка и переключение уже выполнены. Для первоначального скачивания моделей пользователю понадобился VPN; после загрузки веса хранятся в каталоге models. При ошибках TLS проверить доступ к download_url из контейнера; проверку сертификатов не отключать.
+После `Worker ready` проверить доступ с Hub и настоящий голосовой smoke нового
+ПК. Строка ready не доказывает полный диалог или освобождение GPU при stop.
+Веса сохраняются локально; при ошибках TLS проверять источники, не отключая
+проверку сертификатов. Автозапуск/службы устанавливать только после acceptance.
 
 ## Запуск worker в Docker на ПК
 
@@ -53,7 +66,7 @@ LM Studio на этом же ПК подключается из контейне
 ./scripts/worker-docker logs
 ```
 
-`prepare` скачивает веса по URL из JSON; `start` публикует порт из `servers.worker.port`, mount каталога repo делает модели/data доступными worker. Image/name/publish_address/cpu_threads задаются в `container`. Корневая FS контейнера read-only; bind-mounted каталог repo доступен для записи моделей и журналов. Для повторного создания контейнера после изменения Docker command сначала stop, затем `docker rm` контейнера с именем из конфига.
+`prepare` скачивает веса по URL из JSON; `start` публикует порт из `servers.worker.port`, mount каталога repo делает модели/data доступными worker. Image/name/publish_address/cpu_threads задаются в `container`. Корневая FS контейнера read-only; bind-mounted каталог repo доступен для записи моделей и журналов. Windows startup повторно использует только exact registered ID с теми же image/config; при изменении нужен review и новое свободное имя, не удаление по одному имени.
 
 PowerShell из каталога repo:
 

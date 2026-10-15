@@ -1,4 +1,4 @@
-param([string]$Configuration = 'config.local.json', [switch]$NoPull, [switch]$InTask, [int]$ContextLength = 0)
+param([string]$Configuration = 'config.local.json', [switch]$NoPull, [switch]$InTask, [int]$ContextLength = 0, [string]$PythonExecutable = 'py')
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $companionRepo = Split-Path -Parent $PSScriptRoot
@@ -16,6 +16,7 @@ if ($ContextLength -ne 0) {
     Move-Item -Force ($contextPath + '.tmp') $contextPath
 }
 $settings = Read-CompanionSettings $Configuration
+& "$PSScriptRoot/windows/check-pc.ps1" -Configuration $Configuration -PythonExecutable $PythonExecutable -ConfigurationOnly
 if (-not $NoPull) {
     $dirty = & git status --porcelain --untracked-files=no
     if ($LASTEXITCODE -ne 0) { throw 'This directory must be a Git checkout.' }
@@ -25,7 +26,7 @@ if (-not $NoPull) {
     if ($LASTEXITCODE -ne 0) { throw 'Git pull failed; existing services were not restarted.' }
     # Run the newly pulled script, including any changes to startup logic itself.
     Assert-CompanionNotManuallyStopped
-    & powershell -NoProfile -ExecutionPolicy Bypass -File "$PSScriptRoot/start.ps1" -Configuration $Configuration -NoPull
+    & powershell -NoProfile -ExecutionPolicy Bypass -File "$PSScriptRoot/start.ps1" -Configuration $Configuration -NoPull -PythonExecutable $PythonExecutable
     if ($LASTEXITCODE -ne 0) { throw 'Startup failed after pull.' }
     exit 0
 }
@@ -33,7 +34,7 @@ if ($env:SSH_CONNECTION -and -not $InTask) {
     # Task Scheduler starts outside the OpenSSH process job, so LM Studio
     # survives when the SSH session disconnects. No password is stored.
     Assert-CompanionNotManuallyStopped
-    & "$PSScriptRoot/install-startup.ps1" -Configuration $Configuration
+    & "$PSScriptRoot/install-startup.ps1" -Configuration $Configuration -PythonExecutable $PythonExecutable
     $taskName = [string]$settings.runtime.windows.startup_task
     $taskStarted = Get-Date
     Assert-CompanionNotManuallyStopped
@@ -89,10 +90,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Cannot query loaded models.' }
 $loaded = $loadedJSON | ConvertFrom-Json
 $configuredModels = @($loaded | Where-Object { $_.identifier -eq $settings.llm.model })
 if ($configuredModels.Count -gt 0 -and [int]$configuredModels[0].contextLength -ne [int]$settings.runtime.windows.context_length) {
-    Assert-CompanionNotManuallyStopped
-    & $lms unload ([string]$settings.llm.model)
-    if ($LASTEXITCODE -ne 0) { throw 'Cannot reload the configured model with the new context.' }
-    $configuredModels = @()
+    throw 'Existing model has a different context. It was preserved; review ownership and choose an appropriate identifier/context explicitly.'
 }
 if ($configuredModels.Count -eq 0) {
     Assert-CompanionNotManuallyStopped
@@ -108,9 +106,9 @@ $probePrompt = $settings.llm.message_template.Replace('{role}','user').Replace('
 $probeBody = @{model=$settings.llm.model; prompt=$probePrompt; max_tokens=8; temperature=0; stream=$false; stop=$settings.llm.stop} | ConvertTo-Json -Depth 8
 Assert-CompanionNotManuallyStopped
 $probe = Invoke-RestMethod -Uri "http://127.0.0.1:$($llmURL.Port)/v1/completions" -Method Post -ContentType 'application/json' -Body ([System.Text.Encoding]::UTF8.GetBytes($probeBody)) -TimeoutSec ([int]$settings.runtime.windows.startup_timeout)
-if (-not $probe.choices) { throw 'LLM did not return a completion.' }
+if (-not $probe.choices -or $probe.model -cne [string]$settings.llm.model) { throw 'LLM did not return a completion with the configured model identity.' }
 Assert-CompanionNotManuallyStopped
-& "$PSScriptRoot/start-worker.ps1" -Configuration $Configuration
+& "$PSScriptRoot/start-worker.ps1" -Configuration $Configuration -PythonExecutable $PythonExecutable
 Assert-CompanionNotManuallyStopped
 Write-Host 'Reachy stack ready: LLM + compute worker.'
 
