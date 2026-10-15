@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "owner": "reachy-companion",
+  "scope_roots": ["C:\\Reachy\\reachy-companion"],
+  "docker": null,
+  "processes": [],
+  "services": [],
+  "tasks": [],
+  "models": []
+}

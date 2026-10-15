@@ -1,4 +1,20 @@
 Set-StrictMode -Version Latest
+function Assert-CompanionNotManuallyStopped {
+    $manualStopFile = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'ReachyCompanion/manual-stop.json'
+    $manualStopAncestor = [IO.Path]::GetDirectoryName($manualStopFile)
+    while ($manualStopAncestor) {
+        try {
+            $manualStopAttributes = [IO.File]::GetAttributes($manualStopAncestor)
+            if ($manualStopAttributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Manual-stop ancestor is a reparse point; startup denied.' }
+        } catch [IO.FileNotFoundException] { } catch [IO.DirectoryNotFoundException] { }
+        $manualStopAncestor = [IO.Path]::GetDirectoryName($manualStopAncestor)
+    }
+    # Only confirmed not-found permits startup. Access/sharing/IO errors throw.
+    try { [void][IO.File]::GetAttributes($manualStopFile) }
+    catch [IO.FileNotFoundException] { return }
+    catch [IO.DirectoryNotFoundException] { return }
+    throw 'Reachy was manually stopped. Review outstanding stops, then explicitly remove the per-user manual-stop.json to resume.'
+}
 function Merge-CompanionSettings {
     param($Target, $Patch)
     foreach ($property in $Patch.PSObject.Properties) {

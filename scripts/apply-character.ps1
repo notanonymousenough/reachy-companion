@@ -4,6 +4,7 @@ $ErrorActionPreference = "Stop"
 $characterRepo = Split-Path -Parent $PSScriptRoot
 Set-Location $characterRepo
 . "$PSScriptRoot/common.ps1"
+Assert-CompanionNotManuallyStopped
 $characterPatch = Get-Content -Raw -Encoding UTF8 $Profile | ConvertFrom-Json
 function Merge-CharacterSettings {
     param($Target, $Patch)
@@ -31,11 +32,14 @@ foreach ($characterPlan in $characterPlans) {
     $characterBackup = $characterPlan.Path -replace '\.json$', '.before-character.local.json'
     if (-not (Test-Path $characterBackup)) { Copy-Item $characterPlan.Path $characterBackup }
     $characterTemporary = $characterPlan.Path + ".tmp"
+    Assert-CompanionNotManuallyStopped
     [System.IO.File]::WriteAllText((Join-Path $characterRepo $characterTemporary), ($characterPlan.Settings | ConvertTo-Json -Depth 32), [System.Text.UTF8Encoding]::new($false))
+    Assert-CompanionNotManuallyStopped
     Move-Item -Force $characterTemporary $characterPlan.Path
 }
 if (Test-Path "config.worker.local.json") {
     $characterWorker = Get-Content -Raw -Encoding UTF8 "config.worker.local.json" | ConvertFrom-Json
+    Assert-CompanionNotManuallyStopped
     & docker restart ([string]$characterWorker.container.name)
     if ($LASTEXITCODE -ne 0) { throw "Configuration saved, but worker restart failed. Start Docker and rerun this script." }
     $characterReady = $false
@@ -47,6 +51,7 @@ if (Test-Path "config.worker.local.json") {
         Start-Sleep -Seconds 1
     }
     if (-not $characterReady) { throw "Worker did not become ready. Check docker logs." }
+    Assert-CompanionNotManuallyStopped
     Write-Host "New character applied. Worker ready."
 } else {
     Write-Host "Profile saved. Run scripts/start-worker.ps1 to create the worker."

@@ -14,6 +14,7 @@ build/
 dist/
 .pytest_cache/
 .DS_Store
+scripts/windows/*.local.json
 
 src.before-*/
 *.tmp

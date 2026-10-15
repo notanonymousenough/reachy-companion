@@ -3,11 +3,14 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $workerRepo = Split-Path -Parent $PSScriptRoot
 Set-Location $workerRepo
+. "$PSScriptRoot/common.ps1"
+Assert-CompanionNotManuallyStopped
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
     throw "Docker Desktop is required. Start it with Linux containers."
 }
 function Invoke-WorkerDocker {
     param([string[]]$DockerArguments)
+    Assert-CompanionNotManuallyStopped
     $previousDockerConfig = $env:DOCKER_CONFIG
     try {
         $env:DOCKER_CONFIG = $workerClientDirectory
@@ -20,7 +23,6 @@ if ($LASTEXITCODE -ne 0 -or $workerDockerOS.Trim() -ne "linux") {
     throw "Start Docker Desktop with Linux containers before running this script."
 }
 $workerConfigSource = Join-Path $workerRepo $Configuration
-. "$PSScriptRoot/common.ps1"
 $workerSettings = Read-CompanionSettings $workerConfigSource
 $workerTokenFile = Join-Path $workerRepo $workerSettings.paths.token_file
 if (-not (Test-Path $workerTokenFile)) { throw "Copy the existing secrets/token from your Mac repository." }
@@ -30,6 +32,7 @@ $workerSettings.streaming.enabled = $true
 $workerConfigFile = "config.worker.local.json"
 $workerConfigPath = Join-Path $workerRepo $workerConfigFile
 $workerJSON = $workerSettings | ConvertTo-Json -Depth 32
+Assert-CompanionNotManuallyStopped
 [System.IO.File]::WriteAllText($workerConfigPath, $workerJSON, [System.Text.UTF8Encoding]::new($false))
 # Public base images do not need the Desktop credential helper, which cannot
 # access the Windows credential vault from an OpenSSH logon session.
@@ -38,7 +41,9 @@ if ($LASTEXITCODE -ne 0) { throw "Cannot read Docker context." }
 $workerDockerEndpoint = & docker context inspect $workerContext --format '{{.Endpoints.docker.Host}}'
 if ($LASTEXITCODE -ne 0 -or -not $workerDockerEndpoint) { throw "Cannot resolve Docker engine endpoint." }
 $workerClientDirectory = Join-Path $workerRepo ([string]$workerSettings.paths.data_dir + "/docker-client")
+Assert-CompanionNotManuallyStopped
 New-Item -ItemType Directory -Force $workerClientDirectory | Out-Null
+Assert-CompanionNotManuallyStopped
 [System.IO.File]::WriteAllText((Join-Path $workerClientDirectory "config.json"), '{"auths":{"https://index.docker.io/v1/":{}}}', [System.Text.UTF8Encoding]::new($false))
 $workerDockerPrefix = @("--config", $workerClientDirectory, "--host", $workerDockerEndpoint.Trim())
 $workerImage = [string]$workerSettings.container.image
@@ -53,6 +58,7 @@ foreach ($workerProvider in @("openclaw", "hermes")) {
     $workerEnv += @("-e", [string]$workerSettings.brains.$workerProvider.api_key_env)
 }
 Invoke-WorkerDocker -DockerArguments @("build", "-f", "worker/Dockerfile", "-t", $workerImage, ".")
+Assert-CompanionNotManuallyStopped
 Invoke-WorkerDocker -DockerArguments (@("run", "--rm", "--mount", $workerMount, "--read-only", "--tmpfs", "/tmp") + $workerGPU + $workerEnv + @($workerImage, "--config", "/config/$workerConfigFile", "worker", "prepare"))
 # Only replace our named container. Model files and configuration stay on disk.
 $workerExisting = & docker ps -a --filter "name=^/$workerName$" --format '{{.Names}}'
@@ -61,11 +67,15 @@ if ($workerExisting -contains $workerName) {
     Invoke-WorkerDocker -DockerArguments @("rm", "-f", $workerName)
 }
 $workerBinding = "$($workerSettings.container.publish_address):${workerPort}:${workerPort}"
+Assert-CompanionNotManuallyStopped
 Invoke-WorkerDocker -DockerArguments (@("run", "-d", "--name", $workerName, "--restart", "unless-stopped", "-p", $workerBinding, "--mount", $workerMount, "--read-only", "--tmpfs", "/tmp") + $workerGPU + $workerEnv + @($workerImage, "--config", "/config/$workerConfigFile", "worker", "serve"))
+Assert-CompanionNotManuallyStopped
 $workerPrincipal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
 $workerRuleName = [string]$workerSettings.container.windows_firewall_rule
 if ($workerPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    Assert-CompanionNotManuallyStopped
     Get-NetFirewallRule -DisplayName $workerRuleName -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+    Assert-CompanionNotManuallyStopped
     New-NetFirewallRule -DisplayName $workerRuleName -Direction Inbound -Action Allow -Protocol TCP -LocalPort $workerPort -RemoteAddress $workerHubAddress -Profile Any | Out-Null
 } else {
     Write-Host "To allow hub access, run PowerShell as Administrator and rerun this script."
@@ -82,4 +92,5 @@ if (-not $workerReady) {
     Invoke-WorkerDocker -DockerArguments @("logs", "--tail", "30", $workerName)
     throw "Worker did not become ready. Check the log above."
 }
+Assert-CompanionNotManuallyStopped
 Write-Host "Worker ready."
