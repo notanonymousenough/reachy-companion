@@ -73,7 +73,7 @@ class Agent:
         from .sound_monitor import SoundMonitor
         self.sounds = SoundMonitor(self)
         from .motion_proxy import MotionProxy
-        self.motion_proxy = MotionProxy(config['guarded_motion']['enabled'],
+        self.motion_proxy = MotionProxy(config['guarded_motion']['enabled'] and config['guarded_motion'].get('transport','native')=='native',
                                         config.path(config['guarded_motion']['socket_path']),self.operator_status)
         self.vad_bytes = self.audio['sample_rate'] * 2 * self.audio['vad_frame_ms'] // 1000
 
@@ -173,6 +173,9 @@ class Agent:
                              'expression_error': self.expressions.last_error}
 
     def motion_actor_status(self):
+        if self.config['guarded_motion'].get('transport','native')=='stock':
+            return dict(enabled=self.config['guarded_motion']['enabled'],ready=False,transport='stock',
+                reason='stock_factory_api_not_native_actor')
         return self.motion_proxy.status()
 
     def operator_status(self):

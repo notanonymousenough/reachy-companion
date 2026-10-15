@@ -2,6 +2,7 @@
   "version": 1,
   "guarded_motion": {
     "enabled": false,
+    "transport": "native",
     "socket_path": "data/native-motion.sock",
     "policy_path": "data/motion-policy.json"
   },

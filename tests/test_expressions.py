@@ -47,6 +47,18 @@ class ExpressionTests(unittest.TestCase):
         with self.assertRaises(ValueError):a.set_microphone(True,listen=1)
         a.set_microphone(False);self.assertFalse(a.microphone.enabled)
 
+    def test_stock_selection_preserves_motor_policy_gate_and_disables_native_ipc(self):
+        self.config.data['guarded_motion'].update(enabled=True,transport='stock')
+        a=self.agent()
+        self.assertFalse(a.motor_permitted())
+        a.set_motion_policy(dict(motor_enabled=True,quiet=False,privacy_all=False))
+        self.assertTrue(a.motor_permitted())
+        self.assertFalse(a.motion_proxy.enabled)
+        self.assertEqual(a.motion_actor_status()['reason'],'stock_factory_api_not_native_actor')
+        with self.assertRaises(RuntimeError):a.motion_proxy.handle({})
+        a.set_motion_policy(dict(motor_enabled=True,quiet=True,privacy_all=False))
+        self.assertFalse(a.motor_permitted())
+
     def test_quiet_operator_withdraws_speech_without_changing_mic_permission(self):
         a=self.agent();a.set_microphone(True,listen=False)
         a.stop_speaker=Mock();a.resume_audio={'fixture':True}

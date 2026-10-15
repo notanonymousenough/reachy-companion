@@ -31,7 +31,7 @@ class Config:
             if section in defaults:
                 fill(self.data, {section: defaults[section]})
         # Safe even when a deployed checkout has no example configuration.
-        fill(self.data, {'guarded_motion': {'enabled': False, 'socket_path':'data/native-motion.sock','policy_path':'data/motion-policy.json'}})
+        fill(self.data, {'guarded_motion': {'enabled': False, 'transport':'native','socket_path':'data/native-motion.sock','policy_path':'data/motion-policy.json'}})
         profile = self.data.get('runtime', {}).get('profile', '')
         if profile:
             profile_path = (self.root / profile).resolve()
@@ -73,7 +73,8 @@ class Config:
 
     def validate(self):
         guarded = self.data['guarded_motion']
-        if (not isinstance(guarded, dict) or set(guarded) != {'enabled','socket_path','policy_path'} or type(guarded['enabled']) is not bool
+        if (not isinstance(guarded, dict) or set(guarded) != {'enabled','transport','socket_path','policy_path'} or type(guarded['enabled']) is not bool
+                or type(guarded['transport']) is not str or guarded['transport'] not in ('native','stock')
                 or not isinstance(guarded['policy_path'],str) or not guarded['policy_path']
                 or not isinstance(guarded['socket_path'],str) or not 1<=len(str(self.path(guarded['socket_path'])).encode())<=100):
             raise ValueError('Invalid guarded motion settings')
