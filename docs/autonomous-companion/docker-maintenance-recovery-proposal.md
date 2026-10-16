@@ -102,6 +102,45 @@ CREATE submitter отсутствовал по предыдущей провер
 охватывает прямые legacy entries/private callers, но не подменяет эти действия.
 Все проверки RO; runtime/task/service/slot/profile/Docker/WSL mutations0.
 
+Конкретный предлагаемый HOLD после согласования обслуживания человеком:
+приостановить **только heartbeat координатора** с сохранением его настроек;
+отключить **только точно совпавшую enrolled startup task**, предварительно
+сохранив XML, fingerprint и прежнее enabled state. Все managed roles и private
+callers продолжают HOLD; старые actors должны отсутствовать, canonical UNKNOWN
+сохраняется. После fresh inventory/spec/profile/port/operator reconciliation
+восстановить исходное enabled state task и прежнее состояние heartbeat только
+при безопасном текущем operator state. Если отключение/возврат имеет неизвестный
+исход, не переходить к следующему шагу; выполнить RO сверку точной сущности.
+Ничего из этого пока не выполнялось. Это конечный список managed admission
+действий, а не требование аудита любого будущего клиента Windows.
+
+Последующее решение архитектора rev21: SAME-pipe WSL2 runtime evidence вместе
+с unique running linked target достаточно для runtime inference границы;
+отсутствующий config boolean не является prerequisite и остаётся неизвестным.
+Описанный конечный HOLD принят в managed scope; внешние клиенты исключаются
+совместным обязательством не запускать команды на время обслуживания.
+Это source decision, не свидетельство уже выполненного HOLD/обслуживания.
+
+Подготовлен отдельный `deploy/autonomous/maintenance_supersession.py`:
+существующий canonical provider удерживает **тот же** mutex весь переход,
+проверяет exact namespace/approval/UNKNOWN bytes. Durable intent содержит
+исходные bytes/hash до HOLD и disruption; затем approved boundary, recheck
+перед fresh start, полный reconcile, durable supersession с outcome UNKNOWN
+и ссылками SHA256 на приватные concrete witness bundles. Только после reread
+обоих records и exact marker/approval — единственный existing `save(None)`.
+Provider и effect adapter должны пройти отдельный composition review: модуль
+не создаёт lock/namespace и не имеет CLI или Docker/FS реализации.
+
+Ошибка **до** final save сохраняет canonical preimage, если его не изменил
+другой actor; чужой marker никогда не перезаписывается. Ошибка **после** atomic
+replace может означать уже заменённый marker: исходные bytes и UNKNOWN остаются
+в durable journal/receipt, HOLD остаётся, task/heartbeat не восстанавливаются,
+retry/новая мутация запрещены до RO reconciliation. Обещать неизменность
+canonical bytes при неизвестном результате final write нельзя. Успешный save
+проверяется как known-idle прежде чем adapter возвращает task/heartbeat.
+Восемь синтетических тестов проверяют порядок и отказы, включая final-write
+до/после rename, marker drift до fresh start и отказ restore. Runtime GO нет.
+
 ### Конечный source audit управляемых путей
 
 Writer проверил публичные исходники перечисленных entry points. Это не
@@ -172,8 +211,9 @@ Robot-native owner/runtime services не являются Windows CREATE submitt
 
 ## Что нужно до исполнения
 
-- Архитектор принимает конкретный Docker-only boundary и witnesses завершения
-  server/request execution, очередей и submitters, включая будущие retries.
+- Source contract Docker-only boundary и managed HOLD принят архитектором rev21;
+  runner должен получить предусмотренные фактические witnesses при исполнении,
+  включая отсутствие server/request execution и deferred replay.
 - Runner подтверждает влияние выбранного метода на другую WSL distro и
   нативную модель; неизвестное влияние явно включается в согласуемый scope.
 - Reviewer принимает ручной переход **того же** slot с сохранением UNKNOWN.
@@ -183,8 +223,8 @@ Robot-native owner/runtime services не являются Windows CREATE submitt
   pending/history и новой supersession должно быть атомарным либо иметь
   однозначное восстановление из journal. Ошибка/неизвестный исход записи
   оставляет слот заблокированным до RO reconciliation; автоматического retry,
-  clear и разрешения следующей мутации нет. Этот документ задаёт требования,
-  но не утверждает существование такого способа в текущем StrictSlot.
+  clear и разрешения следующей мутации нет. Отдельный admin core подготовлен;
+  его concrete canonical provider/effects composition ещё требует review.
 - Координатор предъявляет человеку готовый scope прерывания и получает
   конкретное разрешение на это обслуживание. Постоянное разрешение на передачу
   данных не используется как свидетельство завершения execution domain.
@@ -194,6 +234,9 @@ Robot-native owner/runtime services не являются Windows CREATE submitt
 не менее 90 секунд без тестовых реплик и переключений; результат речи и
 слышимость проверяются отдельно от HTTP/readiness.
 
-Независимый source review: предложение принято для дальнейшей конкретизации,
-**executable GO не выдан**. Открыты конкретный Docker-only boundary с durable
-replay proof и reviewed реализация ручной same-slot supersession.
+Независимый source review rev124: **SOURCE GO только для абстрактного admin
+core** в рамках provider/effects contracts; восемь тестов PASS. SHA256 references
+типизированы, но adapter должен доказать реальную durable-сохранность private
+evidence. Composition, maintenance и execution GO не выданы. Следующий
+reviewable результат — конкретный provider/effects adapter, затем финальный
+scope обслуживания для человека.

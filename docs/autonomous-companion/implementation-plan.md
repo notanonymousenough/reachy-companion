@@ -89,6 +89,14 @@ worker, live-restore=false, Docker Desktop/WSL. Native model continuity и по�
 исключение будущих submitters пока UNKNOWN. Документ не разрешает исполнение:
 нужны reviewed Docker-only boundary, same-slot manual supersession с сохранением
 истории UNKNOWN и конкретное согласование disruptive scope координатором.
+Последующий finite audit уточнил managed scope: одна enabled startup task с3
+retries и heartbeat координатора требуют явного pause/disable с точным restore.
+Архитектор rev21 принял SAME-pipe WSL2/unique target runtime inference и конечный
+HOLD contract. Отдельный `maintenance_supersession.py` получил independent
+SOURCE GO/8tests PASS: same existing mutex/provider, durable original UNKNOWN
+intent и supersession до sole save(None), marker/approval recheck до freshstart,
+никакого autoretry. Это abstract core; concrete provider/effects composition,
+maintenance approval и фактическое восстановление ещё не приняты.
 
 Обновлено 2026-10-17. Владелец плана — координатор Reachy Mini; writer ведёт код,
 проверки и этот документ; единственный runner выполняет изменения и проверки на
