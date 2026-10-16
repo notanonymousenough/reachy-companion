@@ -1,5 +1,33 @@
 # Existing live voice demo
 
+From the Mac with the existing working SSH access and local private configuration:
+
+```sh
+./scripts/companion-demo --turns 3 --seconds 180
+# If the existing pinned robot hosts file is outside ~/.ssh/known_hosts:
+./scripts/companion-demo --robot-known-hosts /path/to/existing-known-hosts --turns 3 --seconds 180
+```
+
+This wrapper reads the existing local `config.local.json` deployment targets.
+It reuses the reviewed foreground SSH mux and documented factory credential
+helper (credential in RAM, never logged), strict host key verification and the
+existing Mac-to-Hub SSH route. It does not enroll keys or hosts. `--config` can
+select an existing private configuration. Hub-to-Robot SSH is not required.
+
+Before launching the Hub child, it arms and verifies a separate device systemd
+watch with the same private owner and current boot/epoch baseline. The watch code
+is retained in `deploy/autonomous/demo_watch.py`, using the existing Agent CAS
+cleanup, process identity and factory observation functions. Each run gets its
+own private source/plan; it never imports an old `/run` trial. The device deadline
+is child seconds plus 20 seconds, with a separate systemd lifetime bound. Child
+exit, failure or Ctrl-C requests owned cleanup immediately. A lost Mac/SSH leaves
+the independent device watch active until its deadline. Cleanup must be verified
+OFF with no playback/factory task and volume 50; unknown remains a nonzero result.
+No new service installation, model, microphone capture process or UART owner is
+created. The existing sudo command on the robot arms the transient watch; the
+user does not manually arm it. Source review and actual runner acceptance of
+this wrapper are required before calling it a working hardware launch path.
+
 Use the already installed local STT, 9B model, Piper, Agent and stock factory
 motion path. No additional models, dependencies, audio owner or memory service
 are required. The existing conversation session supplies bounded short history.
@@ -24,7 +52,10 @@ remaining overall demo deadline, which includes admission. No cached operator
 state is used for a write. POST commands are never retried. Repeated 503, invalid
 authority, malformed responses and other errors end the run and enter cleanup.
 
-With the existing private configuration available locally:
+The lower-level CLI below is for an already supervised run. The Mac wrapper
+above invokes `demo()` directly with its watch owner and baseline; it pins the
+installed Hub client to this checkout's source hash. With an independent watch
+already armed and the existing private configuration available locally:
 
 ```sh
 ./scripts/companion demo --turns 3 --seconds 180
@@ -54,6 +85,12 @@ optional internal argument before I/O and compares it with its own first operato
 read before any claims. A changed baseline denies admission, so the watch's exact
 epoch cleanup cannot silently cover a different run. Subsequent reads and writes
 retain the existing fresh authority and CAS checks.
+Watch cleanup also retires an unused unchanged baseline with OFF-only CAS writes,
+bumping its epochs before exit. Unowned OFF writes omit owner parameters rather
+than sending null. Partial claims are released and any remaining unchanged
+baseline is fenced. A changed boot, newer epoch or foreign owner is preserved;
+an old delayed child then fails its initial binding check instead of starting
+after the watch has ended. This path still needs actual runner acceptance.
 
 Wait for `Microphone capture active` before speaking. An existing startup greeting
 is not a model answer and does not count as a completed turn. Use a harmless
