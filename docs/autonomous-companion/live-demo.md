@@ -107,23 +107,34 @@ answers or count a greeting/acknowledgement as the final reply.
 
 STOP: press Ctrl-C in the launcher, or switch microphone OFF in the existing
 control page. The latter overrides demo ownership and the launcher exits without
-restoring it. Deadline (10–300 seconds) and completed-turn bound (1–3) also end
+restoring it. Deadline (10–300 seconds) and observed-turn threshold (1–3) also end
 the run. Cleanup sends microphone OFF/listen false and motor permission OFF only
 for the launcher's unchanged boot/epoch/owner claims. It never restores old ON
 states or overwrites a newer operator. Mic OFF uses the existing Agent speaker,
 capture and expression cancellation path; factory motion retains its existing
 owned-task stop checks. This is not a certified physical emergency stop.
-Reaching the completed-turn limit enters cleanup immediately, including when
-the next capture is already recording; it does not wait for a listening phase.
+Observing the completed-turn threshold enters cleanup immediately, including
+when the next capture is already recording; it does not wait for a listening
+phase. `--turns N` is a client observation threshold, not an Agent admission
+budget or a guarantee of exactly N real turns. The Agent may already have
+admitted another turn between polls, so an in-flight turn can exceed the
+threshold. The duration and independent device watch remain the finite bounds.
 
-The printed summary contains counts and a stock task observation only, without
+The printed summary contains the last observed counter delta and a stock task
+observation only, without
 transcripts, prompts, audio, tokens or private configuration. A new stock UUID
 is a task receipt, not proof of physical movement. `physical_motion_verified`
 and `context_verified` intentionally remain false: the runner must separately
 record actual visible bounded motion, audible final replies, correct second-turn
 marker recall, STOP during audible speech, microphone/capture OFF afterward,
-policy OFF/released and volume 50. A CLI zero exit means completed-turn count
-and cleanup succeeded; it does not certify those physical acceptance gates.
+policy OFF/released and volume 50. Summary `completed_turns` is the last delta
+observed by the client, not the final post-cleanup Agent delta or proof of an
+exact per-run turn count. A CLI zero exit means the observed threshold was
+reached and cleanup succeeded; it does not certify those physical acceptance
+gates. The legacy worker's `last_turn` snapshot has no attempt identity,
+completion timestamp or cancellation association, so it cannot establish which
+Agent turn it belongs to or end-to-end latency. Counter/text disagreement is
+not resolved by assuming that this snapshot is the final accepted turn.
 Cleanup reads back microphone/capture/listening OFF and released policy/owners.
 Unknown stock-task completion or failed/changed readback produces
 `cleanup_unknown=true` and a nonzero exit. A normally completed retained stock
