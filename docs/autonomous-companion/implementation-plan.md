@@ -1,6 +1,34 @@
 # Живой план реализации companion — v3
 
-Обновлено 2026-10-16. Владелец плана — координатор Reachy Mini; writer ведёт код,
+Текущий steering 2026-10-17: прямое «продолжай достижение MVP» возобновляет работу
+после music incident; OFF не является бессрочной остановкой задачи. Следующий
+минимальный cfg delta — один короткий полезный factual question в автономной
+беседе с Алисой,3–5 content words плюс автоматическое обращение; не генерировать
+музыкальные/media/device/action команды, в том числе в форме вопроса. Explicit
+details exception и max_tokens512 сохраняются. Это intent policy, не доказательство
+семантической безопасности и не установленная причина прежнего incident.
+После exact cfg/source review и fresh guards — один реальный короткий ход,
+длительный короткий диалог, затем true streaming/continuous hearing и camera/IMU.
+Новый STOP/mute/owner всегда приоритетен; historical OFF/ON receipts ниже не
+заменяют свежего чтения. Existing sound classifier проверяется на уже разрешённом
+живом input; fallback kind=speech/scores0 не является verified speech.
+
+Factual intent profile уже реально установлен и effective/readiness проверены;
+сохранён max512, PC source/image прежние, новая history epoch отражена явно.
+Обнаружена отдельная admission race: в installed cf50 pause/resume игнорировали
+body, поэтому predispatch guard не являлся server-side binding. Подготовлен
+exact cf50→4e2dcafd overlay одного Agent файла: existing operator_binding с boot,
+двумя epochs, paired owner и TTL проверяется под microphone/policy locks прямо
+перед изменением listening Event. Epochs не меняются, legacy empty manual payload
+сохранён. Explicit expected owner null соответствует только двум actual owners
+None в штатном ручном режиме; missing owner/TTL недопустимы, grant API не меняются.
+Bound say использует тот же locked guard перед очисткой listening и не восстанавливает
+старое listening. Независимый source GO и13 focused tests PASS, включая actual HTTP
+handler, mixed owners, новый grant перед Event mutation и TTL при ожидании lock;
+16 вместе с прежними pause/voice regressions PASS.
+Это source acceptance; установка/новый boot и actual bound turn ещё не приняты.
+
+Обновлено 2026-10-17. Владелец плана — координатор Reachy Mini; writer ведёт код,
 проверки и этот документ; единственный runner выполняет изменения и проверки на
 Reachy, Hub, PC и VPS. Независимый reviewer проверяет исходники и доказательства.
 Это план доведения продукта до конечной цели, а не отчёт о завершённом demo.
