@@ -91,6 +91,11 @@ than sending null. Partial claims are released and any remaining unchanged
 baseline is fenced. A changed boot, newer epoch or foreign owner is preserved;
 an old delayed child then fails its initial binding check instead of starting
 after the watch has ended. This path still needs actual runner acceptance.
+Each target is retired independently: a lost microphone ACK never prevents an
+OFF-only policy CAS against its own unchanged baseline, and neither target's
+newer owner is overwritten. Mutation ACK loss remains explicitly unknown; there
+is no POST retry or guessed success. The wrapper additionally requires verified
+`admission_retired=true` for both old epochs before treating cleanup as healthy.
 
 Wait for `Microphone capture active` before speaking. An existing startup greeting
 is not a model answer and does not count as a completed turn. Use a harmless

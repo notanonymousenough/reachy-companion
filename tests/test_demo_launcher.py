@@ -32,7 +32,7 @@ class LauncherTests(unittest.TestCase):
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
         self.hosts=Path(self.tmp.name)/'known_hosts';self.hosts.write_text('fixture public key')
         self.binding=dict(agent_boot_id='boot',microphone_epoch=130,policy_epoch=41)
-        self.cleaned=dict(final_OFF=True,factory_running_empty=True,aplay_absent=True,volume_percent=50,stock_unknown=False)
+        self.cleaned=dict(final_OFF=True,admission_retired=True,factory_running_empty=True,aplay_absent=True,volume_percent=50,stock_unknown=False)
 
     def robot(self,config,hosts,payload):
         self.events.append(payload['action'])
@@ -81,6 +81,8 @@ class LauncherTests(unittest.TestCase):
             if args[-1]['action']=='finish':raise TimeoutError
             return self.robot(*args)
         self.assertEqual(self.run_launch(robot=lost),1)
+        self.cleaned['stock_unknown']=False;self.cleaned['admission_retired']=False
+        self.assertEqual(self.run_launch(),1)
 
     def test_owned_mux_255_requires_validated_transfer_explicit_close_and_natural_reap(self):
         cfg=dict(deployment=dict(robot=dict(user='pollen',host='robot',root='/home/pollen/reachy-companion'),
@@ -162,7 +164,7 @@ class WatchTests(unittest.TestCase):
         self.assertFalse(result['mic_OFF_POST']);self.assertFalse(result['policy_OFF_POST'])
         self.assertTrue(all(len(call.args)==2 for call in self.io.req.call_args_list))
 
-    def cleanup_state(self):
+    def cleanup_state(self,lose_mic_ack=False):
         self.posts=[]
         def request(where,path,payload=None,expected=None,timeout=2):
             if payload is not None:
@@ -175,6 +177,9 @@ class WatchTests(unittest.TestCase):
                 self.posts.append((path,copy.deepcopy(payload)));state[epoch]+=1
                 if mic:self.value.update(microphone_enabled=False,capture_active=False,listening=False,microphone_owner_id=None)
                 else:self.value['motion_policy']['motor_enabled']=False;self.value['motion_policy_owner_id']=None
+                if mic and lose_mic_ack:
+                    error=TimeoutError('ACK lost')
+                    raise error
                 return {}
             return [] if path=='/api/move/running' else dict(stock_motion=dict(unknown=False))
         self.io.req.side_effect=request
@@ -212,7 +217,32 @@ class WatchTests(unittest.TestCase):
     def test_newer_unowned_epoch_is_preserved_without_fence_post(self):
         self.value['microphone_epoch']+=1
         self.cleanup_state()
-        self.assertEqual(self.posts,[])
+        self.assertEqual([path for path,_ in self.posts],['/motion-policy'])
+        self.assertEqual(self.value['microphone_epoch'],131)
+
+    def test_policy_fence_preserves_other_target_newer_live_owner(self):
+        self.value.update(microphone_epoch=133,microphone_owner_id='human',microphone_enabled=True,
+            capture_active=True,listening=True)
+        with patch.object(watch.time,'monotonic',side_effect=[0,0,5]),patch.object(watch.time,'sleep'):
+            result=self.cleanup_state()
+        self.assertEqual([path for path,_ in self.posts],['/motion-policy'])
+        self.assertEqual(self.value['microphone_epoch'],133);self.assertEqual(self.value['microphone_owner_id'],'human')
+        self.assertTrue(self.value['microphone_enabled']);self.assertTrue(result['newer_owner_preserved'])
+        self.assertTrue(result['admission_retired']);self.assertFalse(result['final_OFF'])
+
+    def test_lost_ack_after_exact_unused_mic_fence_still_retires_policy_from_safe_readback(self):
+        result=self.cleanup_state(lose_mic_ack=True)
+        self.assertFalse(result['mic_OFF_POST']);self.assertTrue(result['mic_POST_unknown'])
+        self.assertTrue(result['policy_baseline_fenced']);self.assertEqual(len(self.posts),2)
+        self.assertEqual(self.value['microphone_epoch'],131);self.assertEqual(self.value['motion_policy']['epoch'],42)
+        self.assertTrue(result['final_OFF']);self.assertTrue(result['admission_retired'])
+        from reachy_companion.motion_policy import MotionPolicy
+        path=self.base/'policy.json'
+        path.write_text(json.dumps(dict(epoch=42,motor_enabled=False,quiet=False,privacy_all=False)))
+        policy=MotionPolicy(path)
+        with self.assertRaises(RuntimeError):
+            policy.save(dict(motor_enabled=True,quiet=False,privacy_all=False),expected_epoch=41,owner_id=self.owner)
+        self.assertFalse(policy.snapshot()['motor_enabled'])
 
     def test_watch_partial_socket_send_rechecks_freshness_before_continuing(self):
         import threading

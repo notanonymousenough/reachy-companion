@@ -142,6 +142,7 @@ def launch(config, known_hosts, *, turns, seconds):
             except Exception:
                 print('Watch cleanup UNKNOWN; independent device deadline remains active.', file=sys.stderr, flush=True)
     verified = (type(cleanup) is dict and cleanup.get('final_OFF') is True
+        and cleanup.get('admission_retired') is True
         and cleanup.get('factory_running_empty') is True and cleanup.get('aplay_absent') is True
         and cleanup.get('volume_percent') == 50 and cleanup.get('stock_unknown') is False)
     print(json.dumps(dict(kind='companion-demo-terminal', child_returncode=code,

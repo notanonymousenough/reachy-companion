@@ -108,20 +108,17 @@ def cleanup(io,p):
  out={'mic_OFF_POST':False,'policy_OFF_POST':False}
  # Retire an unused admission too: a child delayed past watch exit must not
  # acquire the unchanged baseline later. These are OFF-only CAS operations.
- mic_expected=(p['mic_epoch'],False,None)
  for kind in ('mic','policy'):
   v=io.op()
   claim=owned(v,p,kind);policy=v['motion_policy']
   mic_current=(v['microphone_epoch'],v['microphone_enabled'],v['microphone_owner_id'])
-  baseline=(v['agent_boot_id']==p['boot'] and not v['capture_active'] and not v['listening']
-    and policy['quiet'] is False and policy['privacy_all'] is False)
+  baseline=v['agent_boot_id']==p['boot']
   if kind=='mic':
-   fence=baseline and mic_current==(p['mic_epoch'],False,None) and (
-    (policy['epoch']==p['policy_epoch'] and policy['motor_enabled'] is False and v['motion_policy_owner_id'] is None)
-    or owned(v,p,'policy'))
+   fence=(baseline and mic_current==(p['mic_epoch'],False,None)
+    and not v['capture_active'] and not v['listening'])
   else:
    fence=(baseline and policy['epoch']==p['policy_epoch'] and policy['motor_enabled'] is False
-    and v['motion_policy_owner_id'] is None and mic_current==mic_expected)
+    and v['motion_policy_owner_id'] is None)
   if not claim and not fence:continue
   payload=dict(expected_boot_id=p['boot'])
   if claim:payload['expected_owner_id']=p['owner']
@@ -130,16 +127,18 @@ def cleanup(io,p):
   try:
    io.req(AGENT,path,payload,v,2);out[kind+'_OFF_POST']=True
    if fence:out[kind+'_baseline_fenced']=True
-   if kind=='mic':mic_expected=(v['microphone_epoch']+1,False,None)
   except Exception:out[kind+'_POST_unknown']=True
  until=time.monotonic()+4
+ good=retired=False;running=None;s={};h={'stock_motion':{'unknown':True}}
  while time.monotonic()<until:
   v=io.op();s=io.status();h=io.req(HUB,'/status');running=io.req(FACTORY,'/api/move/running')
   good=(not v['microphone_enabled'] and not v['capture_active'] and not v['listening'] and v['microphone_owner_id'] is None
     and not v['motion_policy']['motor_enabled'] and v['motion_policy_owner_id'] is None and not playbacks(p['agent_pid']) and running==[])
-  if good:break
+  retired=(v['agent_boot_id']!=p['boot'] or
+    v['microphone_epoch']>p['mic_epoch'] and v['motion_policy']['epoch']>p['policy_epoch'])
+  if good and retired:break
   time.sleep(.1)
- out.update(final_OFF=good,volume_percent=s.get('volume_percent'),stock_unknown=h['stock_motion']['unknown'],factory_running_empty=running==[],aplay_absent=not playbacks(p['agent_pid']),
+ out.update(final_OFF=good,admission_retired=retired,volume_percent=s.get('volume_percent'),stock_unknown=h['stock_motion']['unknown'],factory_running_empty=running==[],aplay_absent=not playbacks(p['agent_pid']),
   microphone_epoch=v['microphone_epoch'],policy_epoch=v['motion_policy']['epoch'],newer_owner_preserved=v['agent_boot_id']!=p['boot'] or v['microphone_owner_id'] not in (None,p['owner']) or v['motion_policy_owner_id'] not in (None,p['owner']))
  return out
 
