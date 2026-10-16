@@ -1,9 +1,10 @@
 """Launcher authority/cleanup checks; these do not certify hardware acceptance."""
 import copy
 import unittest
+from urllib.error import HTTPError
 from unittest.mock import patch
 from types import SimpleNamespace
-from reachy_companion.client import demo, guarded_control, compare_control_operator
+from reachy_companion.client import demo, guarded_control, compare_control_operator, _demo_read
 from reachy_companion.microphone import validate_control
 
 
@@ -17,7 +18,7 @@ class DemoTests(unittest.TestCase):
         self.completed = 0
         self.fail_after_microphone = False
         self.foreign = False
-        def guarded(config,base,path,payload,expected):
+        def guarded(config,base,path,payload,expected,**kwargs):
             import time
             from reachy_companion.client import request
             began=time.monotonic()
@@ -97,6 +98,18 @@ class DemoTests(unittest.TestCase):
             self.assertEqual(demo({'network':{'hub_url':'http://fixture'}}),0)
         self.assertEqual(len(self.posts),4)
 
+    def test_single_monitor_503_recovers_without_repeating_any_post(self):
+        original=self.request;failed=[]
+        def transient(*args,**kwargs):
+            if args[1].endswith('/control/operator') and self.operator['microphone_enabled'] and not failed:
+                failed.append(True)
+                raise HTTPError(args[1],503,'unavailable',{},None)
+            return original(*args,**kwargs)
+        with patch('reachy_companion.client.request',side_effect=transient), \
+                patch('reachy_companion.client.time.sleep'),patch('builtins.print'):
+            self.assertEqual(demo({'network':{'hub_url':'http://fixture'}}),0)
+        self.assertEqual(failed,[True]);self.assertEqual(len(self.posts),4)
+
     def test_post_applied_but_response_lost_still_releases_own_claim(self):
         self.fail_after_microphone = True
         self.assertEqual(self.run_demo(), 1)
@@ -172,7 +185,8 @@ class DemoTests(unittest.TestCase):
 
 
 class GuardedControlTests(unittest.TestCase):
-    def run_send(self, *, slow_before=False, slow_headers=False, partial=False, changed=False, mutate=None, enabled=True):
+    def run_send(self, *, slow_before=False, slow_headers=False, partial=False, changed=False, mutate=None,
+                 enabled=True, transient=False, post_status=200):
         clock=[0];self.sent=[];expected=dict(agent_boot_id='boot',microphone_epoch=4,
             microphone_owner_id=None,microphone_enabled=False,capture_active=False,phase='paused',listening=False,
             microphone_state_error=None,motion_policy=dict(epoch=8,motor_enabled=False,quiet=False,privacy_all=False),
@@ -186,7 +200,12 @@ class GuardedControlTests(unittest.TestCase):
                     return 1
                 return len(data)
             connection.sock=SimpleNamespace(send=send,settimeout=lambda _:None,close=lambda:None)
+        self.gets=0;self.post_responses=0
         def read(*args,**kwargs):
+            self.gets+=1
+            if transient and self.gets==1:
+                clock[0]+=.4
+                raise HTTPError(args[1],503,'unavailable',{},None)
             current=copy.deepcopy(expected)
             if mutate:mutate(current)
             return {} if changed else current
@@ -195,11 +214,14 @@ class GuardedControlTests(unittest.TestCase):
         def putrequest(*args,**kwargs):
             if slow_headers:clock[0]+=.301
             return real_putrequest(*args,**kwargs)
+        def response(*args):
+            self.post_responses+=1
+            return SimpleNamespace(status=post_status,read=lambda _:b'{}')
         with patch('reachy_companion.client.time.monotonic',side_effect=lambda:clock[0]), \
                 patch('reachy_companion.client.request',side_effect=read), \
                 patch('http.client.HTTPConnection.connect',connect), \
                 patch('http.client.HTTPConnection.putrequest',putrequest), \
-                patch('http.client.HTTPConnection.getresponse',return_value=SimpleNamespace(status=200,read=lambda _:b'{}')):
+                patch('http.client.HTTPConnection.getresponse',side_effect=response):
             return guarded_control(SimpleNamespace(token='fixture'), 'http://fixture',
                 '/control/microphone',dict(enabled=enabled),expected)
 
@@ -216,6 +238,17 @@ class GuardedControlTests(unittest.TestCase):
     def test_operator_change_after_connect_denies_all_sends(self):
         with self.assertRaises(ValueError):self.run_send(changed=True)
         self.assertEqual(self.sent,[])
+
+    def test_retry_uses_successful_get_begin_not_failed_read_or_cached_authority(self):
+        self.assertEqual(self.run_send(transient=True),{})
+        self.assertEqual(self.gets,2);self.assertEqual(self.post_responses,1)
+        with self.assertRaises(ValueError):self.run_send(transient=True,changed=True)
+        self.assertEqual(self.sent,[])
+
+    def test_post_503_never_retried(self):
+        with self.assertRaises(RuntimeError):self.run_send(post_status=503)
+        self.assertEqual(self.gets,1);self.assertEqual(self.post_responses,1)
+        self.assertEqual(len(self.sent),2)
 
     def test_only_typed_volatile_fields_can_change_for_off(self):
         def transition(value):
@@ -237,6 +270,30 @@ class GuardedControlTests(unittest.TestCase):
             with self.subTest(mutate=mutate),self.assertRaises(ValueError):
                 self.run_send(mutate=mutate,enabled=False)
             self.assertEqual(self.sent,[])
+
+
+class DemoReadTests(unittest.TestCase):
+    def test_only_503_retries_and_only_twice(self):
+        for code,count in ((503,2),(401,1),(409,1),(500,1)):
+            with self.subTest(code=code),patch('reachy_companion.client.request',
+                    side_effect=lambda *a,**k:(_ for _ in ()).throw(HTTPError(a[1],code,'error',{},None))) as read:
+                with self.assertRaises(HTTPError):_demo_read(None,'http://fixture/control/operator')
+                self.assertEqual(read.call_count,count)
+        for error in (TimeoutError(),ValueError()):
+            with patch('reachy_companion.client.request',side_effect=error) as read:
+                with self.assertRaises(type(error)):_demo_read(None,'http://fixture/control/operator')
+                self.assertEqual(read.call_count,1)
+
+    def test_retry_cannot_extend_overall_deadline(self):
+        clock=[0]
+        def fail(*args,**kwargs):
+            self.assertEqual(kwargs['timeout'],.5)
+            clock[0]=1
+            raise HTTPError(args[1],503,'error',{},None)
+        with patch('reachy_companion.client.time.monotonic',side_effect=lambda:clock[0]), \
+                patch('reachy_companion.client.request',side_effect=fail) as read:
+            with self.assertRaises(TimeoutError):_demo_read(None,'http://fixture/control/operator',deadline=.5)
+            self.assertEqual(read.call_count,1)
 
 
 if __name__ == '__main__': unittest.main()

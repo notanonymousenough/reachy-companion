@@ -18,6 +18,11 @@ Every ON grant still requires a fresh paused Agent with microphone, capture and
 listening OFF and quiet/privacy OFF. OFF cleanup permits normal phase transitions.
 ExpressionPlayer's separate motion version checks remain active. Every actual
 socket send still requires an operator read younger than 300 ms and server CAS.
+Read-only polling tolerates one transient HTTP 503 by issuing at most two fresh
+GET attempts. The second attempt has its own read-BEGIN time and must fit the
+remaining overall demo deadline, which includes admission. No cached operator
+state is used for a write. POST commands are never retried. Repeated 503, invalid
+authority, malformed responses and other errors end the run and enter cleanup.
 
 With the existing private configuration available locally:
 

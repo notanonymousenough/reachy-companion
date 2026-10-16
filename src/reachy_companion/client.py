@@ -49,7 +49,22 @@ def compare_control_operator(current, expected, *, require_paused=False):
         raise ValueError('Current paused microphone/capture/listening OFF required')
 
 
-def guarded_control(config, base, path, payload, expected):
+def _demo_read(config, url, *, deadline=None):
+    """At most two fresh GETs on a transient 503; never retry a mutation."""
+    for attempt in range(2):
+        began = time.monotonic()
+        remaining = 2 if deadline is None else min(2, deadline - began)
+        if remaining <= 0:
+            raise TimeoutError('Demo deadline expired before read')
+        try:
+            return request(config, url, timeout=remaining), began
+        except HTTPError as exc:
+            exc.close()
+            if exc.code != 503 or attempt == 1:
+                raise
+
+
+def guarded_control(config, base, path, payload, expected, *, deadline=None):
     """Preconnect/serialize, then reread authority and guard every socket send."""
     endpoint = urlsplit(base)
     if endpoint.scheme not in ('http', 'https') or endpoint.query or endpoint.fragment or endpoint.username:
@@ -75,12 +90,11 @@ def guarded_control(config, base, path, payload, expected):
     connection = Connection(endpoint.hostname, endpoint.port, timeout=2)
     try:
         connection.connect()
-        began = time.monotonic()
-        current = request(config, base + '/control/operator', timeout=2)
+        current, began = _demo_read(config, base + '/control/operator', deadline=deadline)
         compare_control_operator(current, expected, require_paused=(
             (path == '/control/microphone' and payload.get('enabled') is True)
             or (path == '/control/motion-policy' and payload.get('motor_enabled') is True)))
-        connection.deadline = began + .3
+        connection.deadline = began + .3 if deadline is None else min(began + .3, deadline)
         connection.request('POST', endpoint.path.rstrip('/') + path, body=body,
             headers={'Authorization': 'Bearer ' + config.token, 'Content-Type': 'application/json'})
         connection.sock.settimeout(2)
@@ -98,14 +112,16 @@ def demo(config, *, turns=3, seconds=180):
     if type(turns) is not int or not 1 <= turns <= 3 or type(seconds) is not int or not 10 <= seconds <= 300:
         raise ValueError('Demo requires 1..3 turns and 10..300 seconds')
     base = config['network']['hub_url']
+    deadline = time.monotonic() + seconds
+    cleaning_up = False
     def call(path, payload=None):
+        if payload is None:
+            return _demo_read(config, base + path, deadline=None if cleaning_up else deadline)[0]
         return request(config, base + path, payload, timeout=2)
     def operator():
-        began = time.monotonic()
-        value = call('/control/operator')
-        return value, began
+        return _demo_read(config, base + '/control/operator', deadline=None if cleaning_up else deadline)
     def write(path, payload, expected):
-        return guarded_control(config, base, path, payload, expected)
+        return guarded_control(config, base, path, payload, expected, deadline=None if cleaning_up else deadline)
     def status():
         value = call('/control/status')
         if type(value.get('turns')) is not int or value['turns'] < 0:
@@ -151,7 +167,6 @@ def demo(config, *, turns=3, seconds=180):
         claims['microphone'] = initial['microphone_epoch'] + 1
         write('/control/microphone', dict(enabled=True, listen=True, expected_boot_id=boot,
             expected_epoch=initial['microphone_epoch'], owner_id=owner), current)
-        deadline = time.monotonic() + seconds
         print('Live demo starting. Ctrl-C or microphone OFF stops.', flush=True)
         listening_reported = False
         while time.monotonic() < deadline:
@@ -178,6 +193,7 @@ def demo(config, *, turns=3, seconds=180):
         # Upstream error bodies may contain private operational information.
         print('Demo stopped: admission, operator or service check failed.', flush=True)
     finally:
+        cleaning_up = True
         for kind in ('microphone', 'policy'):
             if kind not in claims:
                 continue
