@@ -1,6 +1,29 @@
 """Speech recognition runs exclusively on the compute PC."""
 import json
+import hashlib
+import re
 import threading
+
+
+def expected_whisper_hash(settings):
+    expected=settings.get('sha256')
+    if type(expected) is not str or re.fullmatch('[0-9a-f]{64}',expected) is None:
+        raise ValueError('Whisper model.bin requires a configured lowercase SHA256')
+    return expected
+
+
+def verified_whisper_cache(target,expected):
+    """Stream-hash weights; metadata presence/readability is not a content hash."""
+    try:
+        for name in ('config.json','tokenizer.json','vocabulary.json'):
+            path=target/name
+            if not path.is_file():return False
+            with path.open('rb') as source:source.read(1)
+        weights=target/'model.bin'
+        if not weights.is_file():return False
+        with weights.open('rb') as source:
+            return hashlib.file_digest(source,'sha256').hexdigest()==expected
+    except OSError:return False
 
 
 class Recognizer:
@@ -9,6 +32,9 @@ class Recognizer:
         self.settings = config['conversation'].get('recognition', {'backend': 'vosk'})
         self.lock = threading.Lock()
         if self.settings['backend'] == 'faster_whisper':
+            expected=expected_whisper_hash(self.settings)
+            if not verified_whisper_cache(config.path(self.settings['path']),expected):
+                raise ValueError('Whisper cache is incomplete, unreadable or fails model.bin SHA256')
             from faster_whisper import WhisperModel
             self.model = WhisperModel(str(config.path(self.settings['path'])),
                                       device=self.settings['device'], compute_type=self.settings['compute_type'],
@@ -69,16 +95,13 @@ def prepare(config):
     settings = config['conversation'].get('recognition', {})
     if settings.get('backend') != 'faster_whisper':
         return
-    import hashlib
+    expected=expected_whisper_hash(settings)
     target = config.path(settings['path'])
-    weights = target / 'model.bin'
-    if weights.exists() and all((target/name).exists() for name in ('config.json','tokenizer.json','vocabulary.json')):
-        with weights.open('rb') as source:
-            actual = hashlib.file_digest(source, 'sha256').hexdigest()
-        if actual == settings['sha256']:
-            return
+    if verified_whisper_cache(target,expected):return
     from huggingface_hub import snapshot_download
     target.mkdir(parents=True, exist_ok=True)
     snapshot_download(repo_id=settings['repository'], revision=settings['revision'], local_dir=str(target),
                       allow_patterns=['model.bin', 'config.json', 'tokenizer.json', 'vocabulary.*', 'preprocessor_config.json'])
+    if not verified_whisper_cache(target,expected):
+        raise ValueError('Downloaded Whisper cache is incomplete, unreadable or fails model.bin SHA256')
 
