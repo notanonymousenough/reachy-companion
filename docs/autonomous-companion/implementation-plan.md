@@ -156,6 +156,22 @@ native/runtime RC0, phase+postnative, OFF/100 и exact+2 epochs; STOP/unknown н
 перепрыгиваются. Early cap/STOP не выдают полный soak PASS. Это подготовленная
 серия, не завершённая 20-минутная приёмка.
 
+Фактический первый soak остановился после двух accepted ходов (AUTUMN49,586 s,
+SEA42,615 s), elapsed109,481 s: третий TIDE завершился runtime FAIL на
+`unknown_ALSA_role` до квалифицированного playback. Защитный watch подтвердил
+OFF/100; автопродолжения нет. Это не повтор предыдущего RAINBOW policy cleanup
+failure: здесь phase controller прервал проход из-за неоднозначного ALSA child.
+Пустая cmdline при exec/exit — гипотеза, конкретный guard не был записан.
+Отдельный LEAVES recovery перед soak прошёл RC0 за43,692 s; прежние FAIL сохранены.
+
+Pure read-only `alsa_role_observer.py` прошёл независимую source review и семь
+fixtures: empty/unknown/disappeared/reused/foreign children не допускаются как
+playback и не доказывают отсутствие playback; изменение Agent identity fatal.
+Следующий обычный poll допустим только внутри исходного deadline. Pre/post-cue
+quiescence требует `absence_verified` плюс прежние capture/owner guards. Это
+source acceptance; интеграция в frozen controller и отдельный hardware repeat
+ещё требуют проверки. Agent/profile/timeouts этим не меняются.
+
 После smoke runner выполняет 20–30-минутную сессию из последовательных bounded
 циклов с >=10 связанными ходами в той же реальной conversation session. Граница
 цикла и паузы отражаются честно; это не continuous-capture acceptance. Контекст:
