@@ -110,8 +110,24 @@ class Hub:
         # The stock daemon's stop is non-idempotent for completed UUIDs.
         # Only a fresh ready/free/empty observation may avoid that POST.
         began=time.monotonic()
-        try:absent=not self.stock_dependencies() and time.monotonic()-began<=.3
+        try:
+            active=self.stock_dependencies()
+            elapsed=time.monotonic()-began
         except Exception:absent=False
+        else:
+            if not active and elapsed>.3:
+                # Do not turn an expired EMPTY observation into a stop of an
+                # already completed, non-idempotent factory UUID. One fresh
+                # read-only attempt may establish absence; no stop POST retry.
+                began=time.monotonic()
+                try:
+                    active=self.stock_dependencies()
+                    if time.monotonic()-began>.3:raise TimeoutError('Stock stop preflight expired')
+                except Exception as exc:
+                    self.stock_unknown=True
+                    raise RuntimeError('Fresh stock stop preflight unavailable') from exc
+                absent=not active
+            else:absent=not active and elapsed<=.3
         if absent:
             self.stock_stop_observed=True
             if self.stock_unknown:raise RuntimeError('UUID absence observed; explicit reconciliation required')

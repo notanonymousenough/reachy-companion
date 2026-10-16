@@ -7,7 +7,8 @@ import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
+from urllib.error import HTTPError
 
 from reachy_companion.config import Config, initialize
 from reachy_companion.hub import Hub
@@ -164,6 +165,54 @@ class StockMotionTests(unittest.TestCase):
         self.assertTrue(self.hub.stock_unknown)
         self.assertFalse(self.hub.stock_stop_observed)
         self.assertEqual(self.hub.stock_owned, OWN)
+
+    def test_expired_empty_stop_preflight_gets_one_fresh_read_without_post(self):
+        self.hub.stock_owned=OWN
+        with patch.object(self.hub,'stock_dependencies',side_effect=[[],[]]) as reads, \
+                patch('reachy_companion.hub.time.monotonic',side_effect=[0,.301,.301,.31]):
+            self.hub.stock_stop_owned(OWN)
+        self.assertEqual(reads.call_count,2);self.assertEqual(self.writes,[])
+        self.assertTrue(self.hub.stock_stop_observed);self.assertFalse(self.hub.stock_unknown)
+        self.assertIsNone(self.hub.stock_owned)
+
+    def test_fresh_retry_still_active_stops_only_owned_uuid_once(self):
+        self.hub.stock_owned=OWN;self.active=[dict(uuid=OWN)]
+        with patch.object(self.hub,'stock_dependencies',side_effect=[[],[OWN]]), \
+                patch('reachy_companion.hub.time.monotonic',side_effect=[0,.301,.301,.31,.31,.31]):
+            self.hub.stock_stop_owned(OWN)
+        self.assertEqual(self.writes,[('/api/move/stop',{'uuid':OWN})])
+        self.assertTrue(self.hub.stock_stop_observed);self.assertFalse(self.hub.stock_unknown)
+
+    def test_expired_empty_retry_unknown_or_expired_never_posts_or_claims_completion(self):
+        for failure in ('expired','error'):
+            self.hub.stock_owned=OWN;self.hub.stock_unknown=False
+            values=[[],[] if failure=='expired' else TimeoutError('read unavailable')]
+            clock=[0,.301,.301,.602] if failure=='expired' else [0,.301,.301]
+            with self.subTest(failure=failure),patch.object(self.hub,'stock_dependencies',side_effect=values) as reads, \
+                    patch('reachy_companion.hub.time.monotonic',side_effect=clock):
+                with self.assertRaisesRegex(RuntimeError,'preflight unavailable'):self.hub.stock_stop_owned(OWN)
+            self.assertEqual(reads.call_count,2);self.assertEqual(self.writes,[])
+            self.assertTrue(self.hub.stock_unknown);self.assertFalse(self.hub.stock_stop_observed)
+            self.assertEqual(self.hub.stock_owned,OWN);self.assertIsNone(self.hub.stock_stop_request)
+
+    def test_fresh_retry_absence_does_not_clear_an_existing_unknown_latch(self):
+        self.hub.stock_owned=OWN;self.hub.stock_unknown=True
+        with patch.object(self.hub,'stock_dependencies',side_effect=[[],[]]), \
+                patch('reachy_companion.hub.time.monotonic',side_effect=[0,.301,.301,.31]):
+            with self.assertRaisesRegex(RuntimeError,'explicit reconciliation'):self.hub.stock_stop_owned(OWN)
+        self.assertTrue(self.hub.stock_unknown);self.assertTrue(self.hub.stock_stop_observed)
+        self.assertEqual(self.hub.stock_owned,OWN);self.assertEqual(self.writes,[])
+
+    def test_stop_500_then_absence_remains_unknown_without_post_retry(self):
+        self.hub.stock_owned=OWN
+        with patch.object(self.hub,'stock_dependencies',return_value=[OWN]), \
+                patch.object(self.hub,'factory',side_effect=[HTTPError('http://fixture',500,'error',{},None),[]]) as factory:
+            with self.assertRaisesRegex(RuntimeError,'explicit reconciliation'):self.hub.stock_stop_owned(OWN)
+        self.assertEqual(factory.call_count,2)
+        factory.assert_any_call('/api/move/stop',{'uuid':OWN})
+        factory.assert_any_call('/api/move/running')
+        self.assertTrue(self.hub.stock_unknown);self.assertTrue(self.hub.stock_stop_observed)
+        self.assertEqual(self.hub.stock_owned,OWN);self.assertEqual(self.hub.stock_stop_request['http_status'],500)
 
     def test_wake_failure_does_not_finally_sleep(self):
         original=self.factory
