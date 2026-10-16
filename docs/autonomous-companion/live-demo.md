@@ -42,6 +42,12 @@ The sole runner must arm the existing independent device stopwatch before
 granting microphone/motor permission. The CLI deadline is a client loop, not a
 device lease: killing the client or losing its network can prevent cleanup.
 Do not use this launcher unattended without that independent watchdog.
+The existing trusted watch launcher may call `demo(config, owner_id=owner, ...)`
+after arming and verifying its independent watch for that same canonical nonzero
+UUID. The default remains a freshly generated UUID. This internal argument does
+not arm a watch or verify readiness by itself; it supplies neither a new CLI flag
+nor a file/environment handoff protocol. A self-contained user wrapper must reuse
+the actual installed watch launcher's arm/readiness-to-child path.
 
 Wait for `Microphone capture active` before speaking. An existing startup greeting
 is not a model answer and does not count as a completed turn. Use a harmless

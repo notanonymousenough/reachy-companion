@@ -107,10 +107,16 @@ def guarded_control(config, base, path, payload, expected, *, deadline=None):
         connection.close()
 
 
-def demo(config, *, turns=3, seconds=180):
+def demo(config, *, turns=3, seconds=180, owner_id=None):
     """Run the existing live Agent, releasing only our unchanged CAS claims."""
     if type(turns) is not int or not 1 <= turns <= 3 or type(seconds) is not int or not 10 <= seconds <= 300:
         raise ValueError('Demo requires 1..3 turns and 10..300 seconds')
+    if owner_id is not None:
+        if type(owner_id) is not str:
+            raise ValueError('Demo owner must be a canonical nonzero UUID')
+        parsed_owner = uuid.UUID(owner_id)
+        if str(parsed_owner) != owner_id or parsed_owner.int == 0:
+            raise ValueError('Demo owner must be a canonical nonzero UUID')
     base = config['network']['hub_url']
     deadline = time.monotonic() + seconds
     cleaning_up = False
@@ -129,7 +135,7 @@ def demo(config, *, turns=3, seconds=180):
         if type(value.get('volume_percent')) is not int or not 0 < value['volume_percent'] <= 50:
             raise ValueError('Set audible volume to at most 50 before demo')
         return value
-    owner = str(uuid.uuid4())
+    owner = str(uuid.uuid4()) if owner_id is None else owner_id
     claims = {}
     boot = None
     completed = 0

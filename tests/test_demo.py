@@ -88,6 +88,19 @@ class DemoTests(unittest.TestCase):
         self.assertEqual(len(self.posts), 4)
         self.assertNotIn('owner_id', self.posts[-1][1])
 
+    def test_prearmed_launcher_owner_used_for_both_claims_and_cleanup(self):
+        owner='00112233-4455-4677-8899-aabbccddeeff'
+        self.assertEqual(self.run_demo(owner_id=owner),0)
+        self.assertEqual([p['owner_id'] for _,p in self.posts[:2]],[owner,owner])
+        self.assertEqual([p['expected_owner_id'] for _,p in self.posts[2:]],[owner,owner])
+
+    def test_invalid_launcher_owner_denied_before_any_read_or_write(self):
+        for owner in ('',False,12,{},'not-a-uuid','00112233445546778899aabbccddeeff',
+                '00112233-4455-4677-8899-AABBCCDDEEFF','00000000-0000-0000-0000-000000000000'):
+            with self.subTest(owner=owner),patch('reachy_companion.client.request') as io:
+                with self.assertRaises(ValueError):demo({},owner_id=owner)
+                io.assert_not_called()
+
     def test_idle_expression_counter_changes_do_not_deny_admission_or_release(self):
         original=self.request
         def changing(*args,**kwargs):
