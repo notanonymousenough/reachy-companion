@@ -1,6 +1,7 @@
 """Synthetic receipts and actual subprocess SQLite persistence, never live voice."""
 import importlib.util
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -11,10 +12,22 @@ from reachy_companion.autonomous import voice_memory_fixture as fixture
 from reachy_companion.autonomous.state import State
 from reachy_companion.autonomous.voice_memory_fixture import prepare,operate
 from reachy_companion.autonomous.memory import MemoryStore,MemoryConflict
+from reachy_companion.autonomous.windows_fixture_cleanup import WindowsKernel
 
 ROOT=Path(__file__).resolve().parents[1]
 spec=importlib.util.spec_from_file_location('voice_memory_realtime_fixture',ROOT/'deploy/autonomous/realtime_audio_session.py')
 runtime=importlib.util.module_from_spec(spec);spec.loader.exec_module(runtime)
+
+
+def fixture_parent(platform=None):
+    """Test scope only: ACL/exclusive ownership is independently runner-audited."""
+    if (os.name if platform is None else platform)!='nt':return None
+    parent=os.environ.get('REACHY_WINDOWS_CLEANUP_TEST_PARENT')
+    if not parent:raise RuntimeError('Native fixture requires REACHY_WINDOWS_CLEANUP_TEST_PARENT')
+    path=Path(parent)
+    if not path.is_absolute() or not path.is_dir():raise ValueError('Existing absolute private test parent required')
+    WindowsKernel().validate_volume(path)
+    return path
 
 
 def receipts():
@@ -44,7 +57,8 @@ def receipts():
 
 class VoiceMemoryTests(unittest.TestCase):
     def setUp(self):
-        self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup);self.root=Path(self.tmp.name)
+        self.tmp=tempfile.TemporaryDirectory(dir=fixture_parent(),prefix='reachy-neutral-memory-')
+        self.addCleanup(self.tmp.cleanup);self.root=Path(self.tmp.name)
         self.directory=self.root/'disposable';self.hub_path=self.root/'hub.json';self.device_path=self.root/'device.json'
         hub,device=receipts();self.hub_path.write_text(json.dumps(hub));self.device_path.write_text(json.dumps(device))
         self.binding=dict(controller='controller',session_boot='session',source_boot='source');self.number=0
@@ -64,7 +78,8 @@ class VoiceMemoryTests(unittest.TestCase):
         process=subprocess.run(command,cwd=ROOT,text=True,capture_output=True,timeout=8)
         self.assertEqual(process.returncode,0 if accepted else 2,process.stderr+process.stdout)
         result=json.loads(output.read_text());self.assertEqual(result['accepted'],accepted)
-        self.assertEqual(output.stat().st_mode & 0o777,0o600)
+        # Windows mode bits cannot establish an operator-only ACL.
+        if os.name=='posix':self.assertEqual(output.stat().st_mode & 0o777,0o600)
         self.assertFalse(result['live_voice_verified']);self.assertFalse(result['speaker_identity_confirmed'])
         self.assertFalse(result['model_inference']);return result
 
@@ -144,6 +159,7 @@ class VoiceMemoryTests(unittest.TestCase):
         operate('forget',self.directory,replacement['store_id'],0)
         operate('cleanup',self.directory,replacement['store_id'],-1,exclusive_filesystem_cleanup=True)
 
+    @unittest.skipUnless(os.name=='posix','POSIX OwnedCleanup fault injection; native Windows guards have separate tests')
     def test_cleanup_requires_exclusive_authority_and_supported_anchored_operations(self):
         store=self.prepared()['store_id'];operate('forget',self.directory,store,0)
         with self.assertRaises(ValueError):operate('cleanup',self.directory,store,-1)
@@ -152,6 +168,7 @@ class VoiceMemoryTests(unittest.TestCase):
         self.assertTrue((self.directory/'memory.sqlite').exists());self.assertFalse((self.directory/'operator.lock').exists())
         operate('cleanup',self.directory,store,-1,exclusive_filesystem_cleanup=True)
 
+    @unittest.skipUnless(os.name=='posix','POSIX OwnedCleanup fault injection; native Windows guards have separate tests')
     def test_mid_cleanup_file_and_directory_replacements_are_preserved(self):
         for replacement in ('file','directory'):
             with self.subTest(replacement=replacement):
@@ -172,6 +189,7 @@ class VoiceMemoryTests(unittest.TestCase):
                 self.assertTrue(saved.exists())
                 if replacement=='directory':self.assertEqual((self.directory/'operator.lock').read_bytes(),b'foreign lock')
 
+    @unittest.skipUnless(os.name=='posix','POSIX OwnedCleanup fault injection; native Windows guards have separate tests')
     def test_replacement_after_last_check_is_atomically_moved_and_preserved_not_unlinked(self):
         for after_detach in (False,True):
             with self.subTest(after_detach=after_detach):
