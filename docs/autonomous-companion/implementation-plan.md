@@ -16,8 +16,9 @@ Reachy, Hub, PC и VPS. Независимый reviewer проверяет ис�
 | Explicit snapshot | `d47f361`: свежий снимок → локальная 9B → полный spoken FINAL; человек подтвердил верность описания; наблюдались owned aplay, SDK tasks и движение антенн | Это отдельный командный путь `--vision`, не успешный голосовой запрос и не визуальная память |
 | STOP и cleanup explicit snapshot | Отдельный реальный STOP во время owned aplay: наблюдаемый cleanup 0,216848 s; три последующих проверки за 2 s без возобновления; известные OFF, factory empty, no aplay, 100% | Это одно наблюдение конкретного пути, не P95, не полная физическая/акустическая задержка остановки |
 | Spoken snapshot | `02bdaa2` установлен: минимальный Agent overlay и два helper-файла, один restart; readiness/source/config/state проверки прошли | **FAIL на реальном запросе:** child запущен, затем generic snapshot child failed; обычные фразы работают. Причина неизвестна, vision/context PASS не заявлен |
+| Prime-paused diagnostic | `73c241b`: Hub client обновлён без restart; в одном исправленном реальном прогоне cue выполнен при закрытом capture, затем подтверждены resume и свежий захват | **NOT_EXERCISED для камеры:** точный visual intent в STT отсутствовал, child не запускался. Один completed turn не доказывает vision/context. Повтора Alice vision не планируется |
 | Состояние после сбоя | Независимый watch подтвердил OFF, admission retired, factory empty, no aplay, stock known, volume 100%; активные сессии завершены | Поздний wrapper/client cleanup error после отзыва authority учитывать отдельно от исходного child failure |
-| Потоковый диалог | Есть NDJSON transport, PCM chunks, TTS сегменты, barge-in/AEC и STOP | **Не реализован настоящий token streaming ответа:** содержательный ответ ожидается целиком до TTS. ACK не является первым содержательным ответом |
+| Потоковый диалог | Реальный PC SSE/prefix contract подтверждён; `ad7c59b` содержит реализованный token-reader → segments → existing TTS с конечным drain | Runner выполняет конечную реальную приёмку. Meaningful early audio, STOP и следующий ответ ещё не подтверждены на устройствах. ACK/исходники не заменяют этот результат; continuous/partial STT ещё не реализован |
 | Задержка vision | Два реальных image inference заняли около 11,03 и 10,35 s | Уже один inference превышает цель 10 s; полный speech-end → meaningful audio не измерен. Не объявлять цель достигнутой |
 | Память | Обычная RAM session history существует | Snapshot `/say` не добавляет visual question/answer в worker history; долговременная память и continuity через restart не приняты |
 | Полная автономность | Есть реализованные contracts, guards, fixtures и отдельные реальные checkpoints | Непрерывное восприятие/решения, память, полезные интеграции, recovery и длительная реальная приёмка ещё не завершены |
@@ -31,8 +32,8 @@ Reachy, Hub, PC и VPS. Независимый reviewer проверяет ис�
 
 | Порядок | Статус | Минимальный результат | Владелец | Реальная приёмка и доказательство |
 |---|---|---|---|---|
-| P0.1 | В работе: диагностика `51f3e2c` установлена по подтверждению координатора; child cause UNKNOWN | Диагностировать и исправить selective STT-camera failure, сохранив рабочие explicit vision и ordinary voice | writer: helper diagnostic/точечный fix; reviewer + координатор: review; runner: единственные device actions | Ожидается реальный allowlisted phase/error_class, затем доказанная причина и минимальный fix. После этого real spoken intent → fresh frame → human-correct spoken FINAL, owned aplay/stock motion; отдельный STOP/no resume/final OFF100 |
-| P0.2 | Actual PC SSE/prefix PASS; timely-reader реализован локально, voice rollout готовится | Настоящее потоковое слушание и содержательный ответ до полной генерации | writer: existing capture/STT/brains/voice seams; runner: реальная запись timings и STOP; координатор: критерии | Один timely reader, bounded queue, DISCARD того же запроса до исходного deadline, общий lease до terminal + consumer cleanup. Предстоит реальный длинный ответ/STOP/следующий turn и повторяемая команда входа в проверенный режим. Continuous perception/partial STT/endpointing — отдельный следующий seam, ещё не реализован |
+| P0.1 | `51f3e2c` diagnostic и `73c241b` prime-paused установлены; исправленный Alice прогон NOT_EXERCISED, child cause UNKNOWN | Диагностировать и исправить selective STT-camera failure, сохранив рабочие explicit vision и ordinary voice | writer: точечный fix по новой evidence; reviewer + координатор: review; runner: единственные device actions | Нужен действительно распознанный точный visual intent и allowlisted phase/error_class; ещё одного Alice vision повтора нет. Затем proven fix → human-correct spoken FINAL, motion/STOP/no resume/final OFF100 |
+| P0.2 | Actual PC SSE/prefix PASS; конечная реальная streaming-приёмка в работе, hardware PASS ещё нет | Настоящее потоковое слушание и содержательный ответ до полной генерации | writer: existing capture/STT/brains/voice seams; runner: реальная запись timings и STOP; координатор: критерии | Предстоит реальный длинный ответ/STOP/следующий turn и повторяемая команда входа в проверенный режим. Source checks не заменяют этот результат. Continuous perception/partial STT/endpointing — отдельный следующий seam, ещё не реализован |
 | P1.1 | Частично, не принято | Обычный контекст, затем visual context с provenance/TTL; долговременные факты и исправления | writer: существующие session/memory seams; runner + человек: смысловая проверка | Факт → vision → местоименная ссылка на прежний факт; отдельно visual follow-up из реально виденного. Restart сохраняет разрешённые факты/mute, correction/deletion работает; vision history не обещать до реализации |
 | P1.2 | Не принято | Первая полезная typed integration через существующий broker/worker | writer: маленький adapter/schema; runner: настоящий target; координатор: scope | Реальная полезная задача с intended/attempted/completed receipt; ошибки/timeout/duplicate/cancel различимы. Нет raw shell/секретов/новых grants из текста модели или OCR |
 | P1.3 | Частично guards есть, полная приёмка открыта | Recovery, ресурсы, STOP, воспроизводимая доставка Git/transfer | writer + reviewer; runner: actual failures/recovery | Сеть/worker/model/restart/перегрузка не оживляют старые речь/движения. Bounded queues/VRAM/storage, сохранившиеся mute/volume, exact source hashes, конечный deploy/readiness/rollback без конкурирующих владельцев |
@@ -70,9 +71,19 @@ patch, новый dispatcher и model/runtime migration на активный ac
 и до cue. Это не новая причина исходного camera-child сбоя и не вывод о качестве
 Алисы. Минимальный `--prime-paused` оставляет первый same-owner/CAS ON grant с
 `listen=false`; существующий guarded cue → direct `/resume` сохраняет исходные
-epochs. Нужен только matching Hub client file, без Agent/worker restart. После
-source review runner выполняет один исправленный конечный метод с новым fresh
-watch; publication/source checks не заменяют реально выполненный diagnostic.
+epochs. Hub client `73c241b` уже установлен без Agent/worker/service restart.
+По актуальному receipt координатора исправленный конечный прогон действительно
+выполнил cue с capture closed и resume со свежим capture. Но STT exact visual
+question = false и child = false: это **NOT_EXERCISED**, не новая диагностика
+исходного child failure. Completed turn = 1 не является vision/context PASS.
+Независимый cleanup подтвердил OFF/100%, factory empty и no aplay. Повтора
+Alice vision не будет; следующая причина/правка требует новой реальной evidence.
+
+Активный следующий этап runner — конечная streaming voice acceptance под `ad7c59b`.
+При недоступном человеке готовятся ограниченные нейтральные акустические cues;
+это способ подать реальные реплики, не доказательство ответа. Аппаратные early
+meaningful audio/STOP/next-turn receipts ещё ожидаются. До обратной связи runtime
+не расширяется; continuous hearing/partial STT остаётся следующим невыполненным seam.
 
 ## P0.2: source audit и настоящий потоковый диалог
 
