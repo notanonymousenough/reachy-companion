@@ -60,6 +60,18 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual(self.packet['owner'],self.owner)
         self.assertEqual(self.packet['operator_binding'],self.binding)
 
+    def test_explicit_vision_snapshot_precedes_speech_child_and_never_prints_final(self):
+        def robot(config,hosts,payload):
+            if payload['action']!='vision':return self.robot(config,hosts,payload)
+            self.events.append('vision')
+            return dict(kind='companion-vision-snapshot',final_text='PRIVATE FINAL',expires_at_monotonic=160,frame={})
+        with patch.object(launcher,'robot_call',side_effect=robot),patch.object(launcher,'hub_command',return_value=['fixture']), \
+                patch.object(launcher.subprocess,'run',side_effect=self.child),patch('builtins.print') as output:
+            self.assertEqual(launcher.launch({},self.hosts,turns=3,seconds=180,vision='Что перед тобой?'),0)
+        self.assertEqual(self.events,['arm','vision','child','finish'])
+        self.assertEqual(self.packet['vision_text'],'PRIVATE FINAL')
+        self.assertNotIn('PRIVATE',str(output.call_args_list))
+
     def test_unverified_watch_never_starts_child(self):
         def bad(*args):
             value=self.robot(*args);value['owner_sha256']='0'*64;return value
@@ -156,6 +168,16 @@ class WatchTests(unittest.TestCase):
 
     def test_wrong_watch_pid_cannot_return_ready(self):
         with self.assertRaises(watch.GuardDenied):self.arm(wrong_pid=True)
+
+    def test_vision_child_metadata_framing_and_single_attempt_per_owned_plan(self):
+        ready=self.arm()
+        packet=dict(action='vision',owner=self.owner,run_id=ready['run_id'],plan_sha256=ready['plan_sha256'],question='Что перед тобой?')
+        result=dict(kind='companion-vision-snapshot',final_text='PRIVATE FINAL',expires_at_monotonic=160,frame={})
+        with patch.object(watch,'RUN_BASE',self.base),patch.object(watch,'VISION_SOURCE',b'fixture source',create=True), \
+                patch.object(watch.subprocess,'run',return_value=SimpleNamespace(returncode=0,stdout=b'SDK note\n'+json.dumps(result).encode()+b'\n')) as child:
+            self.assertEqual(watch.vision(packet),result)
+            with self.assertRaises(FileExistsError):watch.vision(packet)
+            self.assertEqual(child.call_count,1)
 
     def test_cleanup_never_posts_for_newer_owner(self):
         self.value.update(microphone_owner_id='human',motion_policy_owner_id='human')

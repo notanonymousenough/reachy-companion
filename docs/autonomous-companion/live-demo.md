@@ -8,6 +8,51 @@ From the Mac with the existing working SSH access and local private configuratio
 ./scripts/companion-demo --robot-known-hosts /path/to/existing-known-hosts --turns 3 --seconds 180
 ```
 
+For one explicit camera snapshot and a spoken description:
+
+```sh
+./scripts/companion-demo --vision --seconds 180
+./scripts/companion-demo --vision 'Что перед тобой? Опиши подробнее.' --seconds 180
+```
+
+Show the scene before requesting the snapshot. This is a command-triggered turn;
+it does not claim to recognize a spoken camera request. The regular voice demo
+and its short conversation history remain unchanged. The snapshot caption is
+not added to that conversation history in this increment.
+
+This mode requires the separately reviewed exact Agent speech-binding overlay
+described in `deploy/patches/agent-0a7-bound-vision-speech.md` and the matching Hub
+client. An authenticated read-only capability check rejects an old Agent before
+camera access or permission claims; there is no unguarded speech fallback.
+Pixels travel only from the Robot's existing camera IPC reader to the configured
+local PC native API in RAM. One latest 640×360 PNG is admitted within two seconds
+of dequeue; camera closes before inference. There is no raw image file, image
+export to the Mac/Hub, new model, new audio owner or new motor controller.
+
+The existing configured loaded 9B instance is selected exactly from native
+`/api/v1/models`. The tested `/api/v1/chat` request uses text plus image data URL,
+`store=false`, no integrations, no previous response and a 2048 output-token cap.
+Only bounded `message` FINAL is eligible for speech; reasoning, tools, empty or
+tagged reasoning content, changed instance and reported model loading are denied.
+An unknown/failed inference is never automatically retried in the same run.
+
+After inference, the same watch owner enables microphone permission with
+`listen=false`, keeping capture/listening OFF, solely to use the existing Agent
+`/say` TTS/playback/stock-expression path. The bound speech request checks the
+planned boot, microphone/policy epochs, both owners and a Robot monotonic expiry
+before and after the audio lock and during playback. Ctrl-C or microphone OFF
+revokes it; a late result cannot adopt a new owner's epochs. Exposure age is
+unverified: this describes a snapshot, not certified live scene tracking.
+Snapshot speech admission expires 60 seconds after dequeue. A cancelled/expired
+result is discarded, and final owned cleanup/volume preservation is unchanged.
+
+`--turns` is unused for this single explicit snapshot. Its summary reports
+`vision_speech_completed`, meaning the existing speaker RPC completed, not proof
+of audible or semantically correct speech. Human scene verification, actual
+owned aplay and bounded SDK movement/STOP remain the runner's acceptance gates.
+Only frame/timing metadata and sanitized failure phase/class may remain in the
+private run directory; neither the caption nor pixels are persisted there.
+
 This wrapper reads the existing local `config.local.json` deployment targets.
 It reuses the reviewed foreground SSH mux and documented factory credential
 helper (credential in RAM, never logged), strict host key verification and the

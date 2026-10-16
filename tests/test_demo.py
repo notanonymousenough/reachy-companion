@@ -35,6 +35,14 @@ class DemoTests(unittest.TestCase):
     def request(self, config, url, payload=None, timeout=None):
         path = url.removeprefix('http://fixture')
         if payload is not None:
+            if path=='/robot/say':
+                self.posts.append((path,copy.deepcopy(payload)))
+                self.assertFalse(self.operator['capture_active']);self.assertFalse(self.operator['listening'])
+                binding=payload['operator_binding']
+                self.assertEqual(binding['microphone_epoch'],self.operator['microphone_epoch'])
+                self.assertEqual(binding['policy_epoch'],self.operator['motion_policy']['epoch'])
+                self.assertEqual(binding['owner_id'],self.operator['microphone_owner_id'])
+                return dict(ok=True,cancelled=False)
             self.posts.append((path, copy.deepcopy(payload)))
             self.assertEqual(payload['expected_boot_id'], self.operator['agent_boot_id'])
             mic = path.endswith('/microphone')
@@ -47,8 +55,9 @@ class DemoTests(unittest.TestCase):
             state[epoch] += 1
             self.operator[owner] = payload.get('owner_id')
             if mic:
-                self.operator.update(microphone_enabled=payload['enabled'], listening=payload['enabled'],
-                    capture_active=payload['enabled'], phase='listening' if payload['enabled'] else 'paused')
+                listening=payload['enabled'] and payload.get('listen',True)
+                self.operator.update(microphone_enabled=payload['enabled'], listening=listening,
+                    capture_active=listening, phase='listening' if listening else 'paused')
                 if payload['enabled'] and self.fail_after_microphone:
                     raise TimeoutError('private upstream body')
             else:
@@ -65,6 +74,7 @@ class DemoTests(unittest.TestCase):
             if self.operator['microphone_enabled']:
                 self.completed += 1
             return dict(turns=self.completed, volume_percent=self.volume)
+        if path=='/vision-capabilities':return dict(bound_snapshot_say=1,agent_boot_id=self.operator['agent_boot_id'])
         if path == '/status':
             return dict(stock_motion=dict(selected=True, unknown=False,
                 owned_uuid='task' if self.completed and self.operator['microphone_enabled'] else None,
@@ -93,6 +103,32 @@ class DemoTests(unittest.TestCase):
         for volume in (0,101,True):
             self.volume=volume
             with self.subTest(volume=volume):self.assertEqual(self.run_demo(),1)
+        self.assertEqual(self.posts,[])
+
+    def test_vision_snapshot_uses_bound_existing_speaker_without_capture_or_turn_counter_claim(self):
+        with patch('reachy_companion.client.request',side_effect=self.request),patch('builtins.print') as output:
+            result=demo({'network':{'hub_url':'http://fixture','voice_url':'http://fixture','agent_url':'http://fixture'}},
+                vision_text='PRIVATE FINAL',vision_deadline=160)
+        self.assertEqual(result,0);self.assertEqual(self.completed,0)
+        self.assertEqual([path for path,_ in self.posts],['/control/motion-policy','/control/microphone',
+            '/robot/say','/control/microphone','/control/motion-policy'])
+        self.assertFalse(self.posts[1][1]['listen']);self.assertFalse(self.operator['microphone_enabled'])
+        self.assertNotIn('PRIVATE',str(output.call_args_list))
+
+    def test_invalid_vision_final_rejected_before_any_io(self):
+        for text,deadline in (('',160),('<think>private',160),('safe',None),('safe',True),('safe',float('nan'))):
+            with self.subTest(text=text,deadline=deadline),patch('reachy_companion.client.request') as io:
+                with self.assertRaises(ValueError):demo({},vision_text=text,vision_deadline=deadline)
+                io.assert_not_called()
+
+    def test_old_or_wrong_boot_speaker_overlay_is_denied_before_claims(self):
+        original=self.request
+        def unsupported(config,url,*args,**kwargs):
+            if url.endswith('/vision-capabilities'):return dict(bound_snapshot_say=True,agent_boot_id='boot')
+            return original(config,url,*args,**kwargs)
+        with patch('reachy_companion.client.request',side_effect=unsupported),patch('builtins.print'):
+            self.assertEqual(demo({'network':{'hub_url':'http://fixture','agent_url':'http://fixture'}},
+                vision_text='FINAL',vision_deadline=160),1)
         self.assertEqual(self.posts,[])
 
     def test_turn_limit_during_recording_cleans_up_without_a_fourth_loop(self):

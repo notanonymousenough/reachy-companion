@@ -1,0 +1,77 @@
+--- a/src/reachy_companion/agent.py
++++ b/src/reachy_companion/agent.py
+@@ -365,15 +365,16 @@
+                     process.wait()
+         time.sleep(self.audio['echo_tail_seconds'])
+ 
+-    def voice(self, path, payload, expected_epoch=None, allow_barge_in=True, replay=None):
++    def voice(self, path, payload, expected_epoch=None, allow_barge_in=True, replay=None, expected_policy_epoch=None, valid_until=None):
+         epoch = self.microphone_epoch if expected_epoch is None else expected_epoch
+-        motor_policy_epoch=self.motion_policy.snapshot()['epoch']
++        motor_policy_epoch=(self.motion_policy.snapshot()['epoch'] if expected_policy_epoch is None else expected_policy_epoch)
+         monitor = None
+         self.current_reply_text = replay.get('spoken_text', '') if replay else ''
+         def cancelled():
+             policy=self.motion_policy.snapshot()
+             return (not self.microphone.enabled or epoch != self.microphone_epoch or self.stopping.is_set()
+-                    or policy['epoch']!=motor_policy_epoch or policy['quiet'] or policy['privacy_all'])
++                    or policy['epoch']!=motor_policy_epoch or policy['quiet'] or policy['privacy_all']
++                    or (valid_until is not None and time.monotonic()>=valid_until))
+         def interrupted():
+             return bool(monitor and monitor.interrupted.is_set())
+         def cancelled_result():
+@@ -679,6 +680,29 @@
+         self.phase = 'stopped'
+ 
+     def manual(self, path, payload):
++        binding = payload.get('operator_binding')
++        if 'operator_binding' in payload:
++            if (path != '/say' or set(payload) != {'text', 'operator_binding'} or type(binding) is not dict
++                    or set(binding) != {'agent_boot_id', 'microphone_epoch', 'policy_epoch', 'owner_id', 'expires_at_monotonic'}
++                    or type(binding['agent_boot_id']) is not str or not 1 <= len(binding['agent_boot_id']) <= 256
++                    or type(binding['owner_id']) is not str or not 1 <= len(binding['owner_id']) <= 128
++                    or any(type(binding[k]) is not int or not 0 <= binding[k] < 2**63 for k in ('microphone_epoch', 'policy_epoch'))
++                    or type(binding['expires_at_monotonic']) not in (int, float)
++                    or not math.isfinite(binding['expires_at_monotonic'])):
++                raise ValueError('Exact bounded speech operator binding required')
++        def same_owner():
++            value = self.operator_status()
++            return (value['agent_boot_id'] == binding['agent_boot_id']
++                and value['microphone_epoch'] == binding['microphone_epoch']
++                and value['motion_policy']['epoch'] == binding['policy_epoch']
++                and value['microphone_owner_id'] == binding['owner_id']
++                and value['motion_policy_owner_id'] == binding['owner_id']
++                and value['microphone_enabled'] and not value['capture_active'] and not value['listening']
++                and value['phase'] == 'paused' and value['motion_policy']['motor_enabled']
++                and not value['motion_policy']['quiet'] and not value['motion_policy']['privacy_all']
++                and 0 < binding['expires_at_monotonic'] - time.monotonic() <= 60)
++        if binding is not None and not same_owner():
++            raise RuntimeError('Speech operator or snapshot changed')
+         was_listening = self.listening.is_set()
+         self.listening.clear()
+         acquired = self.audio_lock.acquire(timeout=self.config['timeouts']['manual_audio_lock'])
+@@ -687,8 +711,13 @@
+                 self.listening.set()
+             raise RuntimeError('Robot is processing a voice turn; try again when idle')
+         try:
++            options = dict(allow_barge_in=was_listening)
++            if binding is not None:
++                if not same_owner():raise RuntimeError('Speech operator or snapshot changed')
++                options.update(expected_epoch=binding['microphone_epoch'], expected_policy_epoch=binding['policy_epoch'],
++                               valid_until=binding['expires_at_monotonic'])
+             response = self.voice('/text' if path == '/ask' else '/say',
+-                                    {'text': payload['text'], 'session': self.config['conversation']['session']}, allow_barge_in=was_listening)
++                                    {'text': payload['text'], 'session': self.config['conversation']['session']}, **options)
+             return {k: v for k, v in response.items() if k != 'audio_base64'}
+         finally:
+             self.phase = 'paused'
+@@ -731,6 +760,9 @@
+ 
+         def do_GET(self):
+             if not self.auth():
++                return
++            if self.path == '/vision-capabilities':
++                self.reply(200, {'bound_snapshot_say':1,'agent_boot_id':agent.agent_boot_id})
+                 return
+             if self.path not in ('/status','/operator'):
+                 self.reply(404, {'error': 'Not found'})

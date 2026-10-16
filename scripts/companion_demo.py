@@ -28,12 +28,16 @@ def robot_call(config, known_hosts, payload):
     destination = robot['user'] + '@' + robot['host']
     source = (ROOT / 'deploy/autonomous/demo_watch.py').read_bytes()
     packed = base64.b64encode(zlib.compress(source)).decode()
+    vision_source=(ROOT/'deploy/autonomous/demo_vision.py').read_bytes() if payload.get('action')=='vision' else b''
+    vision_packed=base64.b64encode(zlib.compress(vision_source)).decode()
     bootstrap = ("import base64,zlib;raw=zlib.decompress(base64.b64decode(" + repr(packed) + "));"
-        "exec(compile(raw,'<companion-demo-watch>','exec'),{'__name__':'__main__','__file__':'<companion-demo-watch>','SOURCE':raw})")
+        "vision=zlib.decompress(base64.b64decode("+repr(vision_packed)+"));"
+        "exec(compile(raw,'<companion-demo-watch>','exec'),{'__name__':'__main__','__file__':'<companion-demo-watch>','SOURCE':raw,'VISION_SOURCE':vision})")
     remote = shlex.join(['sudo', '-n', '/venvs/mini_daemon/bin/python', '-I', '-B', '-c', bootstrap,
         '--production-root', robot['root']])
     need(len(remote.encode()) < 32768)
-    until = time.monotonic() + 35
+    transfer_seconds=50 if payload.get('action')=='vision' else 23
+    until = time.monotonic() + (60 if payload.get('action')=='vision' else 35)
     with tempfile.TemporaryDirectory(prefix='reachy-demo-mux-') as directory:
         os.chmod(directory, 0o700)
         control = str(Path(directory) / 'mux')
@@ -61,7 +65,7 @@ def robot_call(config, known_hosts, payload):
             check = subprocess.run(['ssh', '-S', control, '-O', 'check', destination], capture_output=True, timeout=3)
             need(check.returncode == 0 and master.poll() is None)
             value = subprocess.run(base + [remote], input=json.dumps(payload).encode(), capture_output=True,
-                timeout=min(23, max(.1, until - time.monotonic())))
+                timeout=min(transfer_seconds, max(.1, until - time.monotonic())))
             need(value.returncode == 0 and len(value.stdout) <= 16384)
             answer = json.loads(value.stdout)
             need(type(answer) is dict)
@@ -106,27 +110,38 @@ def hub_command(config):
         "source=root/'src/reachy_companion/client.py';"
         "assert hashlib.sha256(source.read_bytes()).hexdigest()==sys.argv[2],'Client revision changed';"
         "sys.path.insert(0,str(root/'src'));from reachy_companion.config import Config;"
-        "from reachy_companion.client import demo;p=json.loads(sys.stdin.buffer.read(2049));"
-        "assert set(p)=={'owner','operator_binding','turns','seconds'};"
+        "from reachy_companion.client import demo;raw=sys.stdin.buffer.read(16385);assert len(raw)<=16384;p=json.loads(raw);"
+        "assert set(p) in ({'owner','operator_binding','turns','seconds'},{'owner','operator_binding','turns','seconds','vision_text','vision_deadline'});"
         "sys.exit(demo(Config(root/'config.local.json'),owner_id=p['owner'],operator_binding=p['operator_binding'],"
-        "turns=p['turns'],seconds=p['seconds']))")
+        "turns=p['turns'],seconds=p['seconds'],vision_text=p.get('vision_text'),vision_deadline=p.get('vision_deadline')))")
     remote = shlex.join(['/usr/bin/python3', '-I', '-B', '-c', code, hub['root'], pin])
     return ['ssh', '-oBatchMode=yes', '-oStrictHostKeyChecking=yes', '-oConnectTimeout=5',
         hub['user'] + '@' + hub['host'], remote]
 
 
-def launch(config, known_hosts, *, turns, seconds):
+def launch(config, known_hosts, *, turns, seconds, vision=None):
     need(type(turns) is int and 1 <= turns <= 3 and type(seconds) is int and 10 <= seconds <= 300)
     need(known_hosts.is_file())
+    need(vision is None or (type(vision) is str and 1<=len(vision)<=256 and seconds>=60))
+    started=time.monotonic()
     owner = str(uuid.uuid4())
     ready = None
     code = 1
     cleanup = None
     try:
         ready = validate_ready(robot_call(config, known_hosts, dict(action='arm', owner=owner, seconds=seconds)), owner)
-        print('Independent device watch ready. Starting live demo on Hub.', flush=True)
+        print('Independent device watch ready.' if vision is not None else 'Independent device watch ready. Starting live demo on Hub.', flush=True)
         packet = dict(owner=owner, operator_binding=ready['operator_binding'], turns=turns, seconds=seconds)
-        child = subprocess.run(hub_command(config), input=json.dumps(packet).encode(), timeout=seconds + 10)
+        if vision is not None:
+            print('Taking one snapshot for a spoken reply. This command does not listen for an STT trigger.',flush=True)
+            snapshot=robot_call(config,known_hosts,dict(action='vision',owner=owner,run_id=ready['run_id'],
+                plan_sha256=ready['plan_sha256'],question=vision))
+            need(type(snapshot) is dict and set(snapshot)=={'kind','final_text','expires_at_monotonic','frame'}
+                 and snapshot['kind']=='companion-vision-snapshot')
+            remaining=int(seconds-(time.monotonic()-started));need(remaining>=10)
+            packet.update(vision_text=snapshot['final_text'],vision_deadline=snapshot['expires_at_monotonic'],seconds=remaining)
+            snapshot=None
+        child = subprocess.run(hub_command(config), input=json.dumps(packet).encode(), timeout=packet['seconds'] + 10)
         code = child.returncode
     except KeyboardInterrupt:
         code = 130
@@ -157,9 +172,10 @@ def main():
     parser.add_argument('--robot-known-hosts', type=Path, default=Path.home() / '.ssh/known_hosts')
     parser.add_argument('--turns', type=int, default=3)
     parser.add_argument('--seconds', type=int, default=180)
+    parser.add_argument('--vision',nargs='?',const='Что перед тобой?',help='One explicit snapshot reply; optional question (not an STT trigger)')
     args = parser.parse_args()
     from reachy_companion.config import Config
-    return launch(Config(args.config, require_token=False), args.robot_known_hosts.expanduser(), turns=args.turns, seconds=args.seconds)
+    return launch(Config(args.config, require_token=False), args.robot_known_hosts.expanduser(), turns=args.turns, seconds=args.seconds,vision=args.vision)
 
 
 if __name__ == '__main__':

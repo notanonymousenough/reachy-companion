@@ -236,6 +236,38 @@ def finish(request):
     return dict(kind='companion-demo-cleanup', cleanup=json.loads(raw(run / 'watch-result.json')))
 
 
+def vision(request):
+    need(set(request)=={'action','owner','run_id','plan_sha256','question'} and request['action']=='vision','vision_shape')
+    need(type(request['question']) is str and 1<=len(request['question'])<=256,'vision_question')
+    run,plan=load_plan(request['run_id'],request['plan_sha256'],request['owner'])
+    need(time.monotonic()+55<plan['deadline'] and not (run/'controller.done').exists(),'vision_window')
+    descriptor=os.open(run/'vision.started',os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+    os.close(descriptor)  # One snapshot request per plan; never retry an unknown inference.
+    source=globals().get('VISION_SOURCE')
+    need(type(source) is bytes and 0<len(source)<=50000,'vision_source')
+    script=run/'vision.py';script.write_bytes(source);script.chmod(0o444)
+    child=subprocess.run([PY,'-I','-B',str(script),'--production-root',str(ROOT),
+        '--plan',str(run/'plan.private.json'),'--pin',request['plan_sha256']],
+        input=json.dumps(dict(question=request['question'])).encode(),capture_output=True,timeout=50)
+    need(len(child.stdout)<=16000,'vision_child_size')
+    rows=[row for row in child.stdout.decode('utf-8').splitlines() if row.startswith('{')]
+    need(len(rows)==1,'vision_reply_framing')
+    result=json.loads(rows[0])
+    if child.returncode!=0:
+        allowed=('startup','capability','model_inventory','capture','image_admission','inference','final_parser','post_guards')
+        phase=result.get('phase') if type(result) is dict and result.get('phase') in allowed else 'unknown'
+        error=result.get('error_class') if type(result) is dict else None
+        save(run/'vision-error.metadata.json',dict(phase=phase,error_class=error if type(error) is str and error.isidentifier() and len(error)<=64 else 'UnknownError'))
+        raise RuntimeError('Finite vision child failed')
+    need(type(result) is dict and result.get('kind')=='companion-vision-snapshot','vision_result')
+    frame=result.get('frame')
+    if type(frame) is dict:
+        keys=('frame_id','width','height','source_capture_time_verified','inference_seconds','receipt_age_seconds',
+              'camera_closed','raw_pixel_files','model_instance_preserved','semantic_accuracy_verified')
+        save(run/'vision-frame.metadata.json',{key:frame[key] for key in keys if key in frame})
+    return result
+
+
 def main():
     global ROOT
     parser = argparse.ArgumentParser()
@@ -265,7 +297,8 @@ def main():
     need(0 < len(data) <= 2048, 'request_size')
     request = json.loads(data)
     need(type(request) is dict, 'request_type')
-    result = arm(io, request) if request.get('action') == 'arm' else finish(request)
+    result = (arm(io, request) if request.get('action') == 'arm' else
+              vision(request) if request.get('action') == 'vision' else finish(request))
     print(json.dumps(result), flush=True)
 
 

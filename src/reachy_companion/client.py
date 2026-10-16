@@ -4,6 +4,7 @@ from urllib.error import HTTPError
 import time
 import uuid
 import http.client
+import math
 from urllib.parse import urlsplit
 
 
@@ -64,7 +65,7 @@ def _demo_read(config, url, *, deadline=None):
                 raise
 
 
-def guarded_control(config, base, path, payload, expected, *, deadline=None):
+def guarded_control(config, base, path, payload, expected, *, deadline=None, authority_base=None, response_timeout=2):
     """Preconnect/serialize, then reread authority and guard every socket send."""
     endpoint = urlsplit(base)
     if endpoint.scheme not in ('http', 'https') or endpoint.query or endpoint.fragment or endpoint.username:
@@ -90,27 +91,33 @@ def guarded_control(config, base, path, payload, expected, *, deadline=None):
     connection = Connection(endpoint.hostname, endpoint.port, timeout=2)
     try:
         connection.connect()
-        current, began = _demo_read(config, base + '/control/operator', deadline=deadline)
+        current, began = _demo_read(config, (authority_base or base) + '/control/operator', deadline=deadline)
         compare_control_operator(current, expected, require_paused=(
             (path == '/control/microphone' and payload.get('enabled') is True)
             or (path == '/control/motion-policy' and payload.get('motor_enabled') is True)))
         connection.deadline = began + .3 if deadline is None else min(began + .3, deadline)
         connection.request('POST', endpoint.path.rstrip('/') + path, body=body,
             headers={'Authorization': 'Bearer ' + config.token, 'Content-Type': 'application/json'})
-        connection.sock.settimeout(2)
+        connection.sock.settimeout(response_timeout)
         response = connection.getresponse()
-        raw = response.read(8193)
-        if response.status != 200 or len(raw) > 8192:
+        maximum=65536 if path=='/robot/say' else 8192
+        raw = response.read(maximum+1)
+        if response.status != 200 or len(raw) > maximum:
             raise RuntimeError('Control response unavailable')
         return json.loads(raw)
     finally:
         connection.close()
 
 
-def demo(config, *, turns=3, seconds=180, owner_id=None, operator_binding=None):
+def demo(config, *, turns=3, seconds=180, owner_id=None, operator_binding=None, vision_text=None, vision_deadline=None):
     """Run the existing live Agent, releasing only our unchanged CAS claims."""
     if type(turns) is not int or not 1 <= turns <= 3 or type(seconds) is not int or not 10 <= seconds <= 300:
         raise ValueError('Demo requires 1..3 turns and 10..300 seconds')
+    if vision_text is not None or vision_deadline is not None:
+        if (type(vision_text) is not str or not 0<len(vision_text.strip())<=1600
+                or any(tag in vision_text.lower() for tag in ('<think','</think','<|analysis|>','<|im_start|>','<analysis','[analysis]'))
+                or type(vision_deadline) not in (int,float) or not math.isfinite(vision_deadline) or vision_deadline<=0):
+            raise ValueError('Bounded FINAL snapshot text and Robot deadline required')
     if owner_id is not None:
         if type(owner_id) is not str:
             raise ValueError('Demo owner must be a canonical nonzero UUID')
@@ -136,8 +143,9 @@ def demo(config, *, turns=3, seconds=180, owner_id=None, operator_binding=None):
         return request(config, base + path, payload, timeout=2)
     def operator():
         return _demo_read(config, base + '/control/operator', deadline=None if cleaning_up else deadline)
-    def write(path, payload, expected):
-        return guarded_control(config, base, path, payload, expected, deadline=None if cleaning_up else deadline)
+    def write(path, payload, expected, *, target=None, response_timeout=2):
+        return guarded_control(config, target or base, path, payload, expected, authority_base=base,
+            deadline=None if cleaning_up else deadline,response_timeout=response_timeout)
     def status():
         value = call('/control/status')
         if type(value.get('turns')) is not int or value['turns'] < 0:
@@ -153,6 +161,7 @@ def demo(config, *, turns=3, seconds=180, owner_id=None, operator_binding=None):
     result = 1
     cleanup_failed = False
     cleanup_unknown = False
+    vision_speech_completed = False
     print('Runner independent device watchdog required before starting: client timeout cannot survive client/network loss.', flush=True)
     try:
         initial = call('/control/operator')
@@ -161,6 +170,11 @@ def demo(config, *, turns=3, seconds=180, owner_id=None, operator_binding=None):
         if expected_binding is not None and expected_binding != (
                 initial['agent_boot_id'], initial['microphone_epoch'], policy['epoch']):
             raise ValueError('Operator changed after watchdog was armed')
+        if vision_text is not None:
+            capability,_=_demo_read(config,config['network']['agent_url']+'/vision-capabilities',deadline=deadline)
+            if (type(capability) is not dict or type(capability.get('bound_snapshot_say')) is not int
+                    or capability!={'bound_snapshot_say':1,'agent_boot_id':initial['agent_boot_id']}):
+                raise ValueError('Bound snapshot speech overlay unavailable')
         hardware = call('/status')
         stock = hardware['stock_motion']
         if (initial['microphone_enabled'] or initial['capture_active'] or initial['listening']
@@ -184,28 +198,42 @@ def demo(config, *, turns=3, seconds=180, owner_id=None, operator_binding=None):
                 or current['microphone_epoch'] != initial['microphone_epoch']):
             raise ValueError('Operator changed before demo listening')
         claims['microphone'] = initial['microphone_epoch'] + 1
-        write('/control/microphone', dict(enabled=True, listen=True, expected_boot_id=boot,
+        write('/control/microphone', dict(enabled=True, listen=vision_text is None, expected_boot_id=boot,
             expected_epoch=initial['microphone_epoch'], owner_id=owner), current)
-        print('Live demo starting. Ctrl-C or microphone OFF stops.', flush=True)
-        listening_reported = False
-        while time.monotonic() < deadline:
-            current = call('/control/operator')
-            if (current['agent_boot_id'] != boot or current['microphone_owner_id'] != owner
-                    or current['microphone_epoch'] != claims['microphone']
-                    or current['motion_policy_owner_id'] != owner
-                    or current['motion_policy']['epoch'] != claims['policy']):
-                raise ValueError('Operator changed; demo stopped')
-            value = status()
-            if current['capture_active'] and current['listening'] and not listening_reported:
-                print('Microphone capture active: speak related turns now.', flush=True)
-                listening_reported = True
-            completed = max(0, value['turns'] - start)
-            if completed >= turns:
-                result = 0
-                break
-            task = call('/status')['stock_motion']['owned_uuid']
-            receipt = receipt or (task is not None and task != previous_task)
-            time.sleep(.5)
+        if vision_text is not None:
+            current,_=operator()
+            if (current['agent_boot_id']!=boot or current['microphone_epoch']!=claims['microphone']
+                    or current['motion_policy']['epoch']!=claims['policy']
+                    or current['microphone_owner_id']!=owner or current['motion_policy_owner_id']!=owner):
+                raise ValueError('Snapshot speaker owner changed')
+            binding=dict(agent_boot_id=boot,microphone_epoch=claims['microphone'],policy_epoch=claims['policy'],
+                owner_id=owner,expires_at_monotonic=vision_deadline)
+            print('Speaking the captured snapshot FINAL. Ctrl-C or microphone OFF stops.',flush=True)
+            spoken=write('/robot/say',dict(text=vision_text,operator_binding=binding),current,
+                target=config['network']['voice_url'],response_timeout=min(60,max(.1,deadline-time.monotonic())))
+            vision_speech_completed=spoken.get('ok') is True and not spoken.get('cancelled')
+            result=0 if vision_speech_completed else 1
+        else:
+            print('Live demo starting. Ctrl-C or microphone OFF stops.', flush=True)
+            listening_reported = False
+            while time.monotonic() < deadline:
+                current = call('/control/operator')
+                if (current['agent_boot_id'] != boot or current['microphone_owner_id'] != owner
+                        or current['microphone_epoch'] != claims['microphone']
+                        or current['motion_policy_owner_id'] != owner
+                        or current['motion_policy']['epoch'] != claims['policy']):
+                    raise ValueError('Operator changed; demo stopped')
+                value = status()
+                if current['capture_active'] and current['listening'] and not listening_reported:
+                    print('Microphone capture active: speak related turns now.', flush=True)
+                    listening_reported = True
+                completed = max(0, value['turns'] - start)
+                if completed >= turns:
+                    result = 0
+                    break
+                task = call('/status')['stock_motion']['owned_uuid']
+                receipt = receipt or (task is not None and task != previous_task)
+                time.sleep(.5)
     except KeyboardInterrupt:
         result = 130
     except Exception:
@@ -255,9 +283,11 @@ def demo(config, *, turns=3, seconds=180, owner_id=None, operator_binding=None):
                     cleanup_unknown = True
             except Exception:
                 cleanup_unknown = True
-        print(json.dumps(dict(completed_turns=completed, stock_task_observed=receipt,
+        summary=dict(completed_turns=completed, stock_task_observed=receipt,
             physical_motion_verified=False, context_verified=False, cleanup_failed=cleanup_failed,
-            cleanup_unknown=cleanup_unknown)), flush=True)
+            cleanup_unknown=cleanup_unknown)
+        if vision_text is not None:summary.update(vision_snapshot=True,vision_speech_completed=vision_speech_completed)
+        print(json.dumps(summary), flush=True)
     return 1 if cleanup_failed or cleanup_unknown else result
 
 
