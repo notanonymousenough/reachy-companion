@@ -11,6 +11,64 @@ Agent voice → Hub/router → PC STT/LM Studio/TTS** после явной на
 старым установкам. Новый ПК требует собственного native smoke ниже; локальные
 unit-тесты и `/health` не заменяют проверку настоящего голоса/модели.
 
+## Миграция ordinary START: первая fail-closed граница
+
+Текущие `scripts/start.ps1` и `scripts/start-worker.ps1` выполняют только одно
+делегирование проверенному external adapter для read-only проверки **уже
+работающего accepted runtime**. Они не собирают/запускают/заменяют контейнер,
+не запускают Docker/LM Studio, не загружают/выгружают модель, не делают генерацию,
+Git pull, запись config/context, firewall или регистрацию/запуск task. Даже
+свой stopped container не стартует: это отдельная ещё не интегрированная операция.
+`-NoPull`/`-InTask` сохранены для совместимости аргументов, pull отсутствует
+независимо от флага; ненулевой `-ContextLength` отклоняется без записи.
+
+В `runtime.windows` задаются `startup_adapter_path`, `startup_adapter_sha256`
+(64 lowercase hex) и `accepted_runtime_selector`. Пример оставляет их пустыми:
+ordinary START по умолчанию **отказывает**, без fallback на старый bootstrap.
+Пути абсолютные либо относительно каталога config, без подстановки env/`~`.
+Selector — существующий приватный файл с opaque форматом: public launcher не
+читает его содержимое, не выдумывает schema и не выводит expected identity из
+Docker inspect, имени, порта или mutable tag. Все значения/IDs остаются локально.
+
+Stdlib `scripts/windows/verify_startup.py` проверяет SHA adapter и компилирует
+ровно прочитанные байты (не повторный import pathname), затем один раз вызывает:
+
+```python
+verify_accepted_runtime(configuration_path=..., selector_path=...,
+                        manual_stop_path=..., allow_lifecycle=False)
+```
+
+Ответ имеет ровно boolean-поля `admission_known=true`, `operation_released=true`,
+`runtime_verified=true`, `runtime_running=true`, `operation_unknown=false`.
+BUSY/UNKNOWN, stopped, неполный/нетипизированный ответ, missing/hash mismatch
+adapter/selector, исключение или manual stop дают отказ. Python text stdout/stderr
+adapter отбрасываются, наружу идут только ограниченные статусы/коды ошибок, не
+приватный ответ или exception text. Это trusted reviewed-code boundary, не sandbox.
+OS canonical per-user LocalApplicationData manual-stop проверяется до чтения
+config, перед adapter и после возврата; marker/reparse/IO uncertainty не очищаются.
+PowerShell сохраняет свои проверки той же canonical latch до/после делегирования.
+
+**Это только public seam, не готовый adapter или доказательство общего slot.**
+Реальная implementation/selector ещё требуют отдельного review: использовать
+ровно существующий STT OperationSlot/mutex/namespace, независимо pinned enrollment,
+существующие lock/anchor/known state, bounded read-only queries и проверенный
+known release. Missing state не означает idle; нет auto-init/clear/reclaim,
+второго slot-протокола или принятия существующего runtime по имени. Exact engine,
+full container/image/config/mount/command/model/server/loaded-instance identity
+и dependency closure adapter проверяются его независимым контрактом, не этим
+launcher. Fake-adapter unit tests не доказывают native interoperability/ownership.
+Не вводить generic timeout-kill как доказательство release: внешний runner/task
+deadline может оставить UNKNOWN, требующий существующего explicit recovery.
+
+Прежние уже исправленные lifecycle-рецепты сохранены как `scripts/bootstrap.ps1`
+и `scripts/bootstrap-worker.ps1`, но **безусловно отключены в начале** до review
+реального guarded bootstrap. Нет bypass-флага или bootstrap ABI. Не удалять
+защитный throw ради запуска. Установка нового ПК одной командой и durable
+startup acceptance остаются **OPEN**; следующие разделы описывают prerequisites,
+сохранённый рецепт и необходимые будущие проверки, не обещают активный bootstrap.
+Существующая установленная копия старых scripts/task не меняется от этого Git
+коммита. Её owned suspension/migration и реальная проверка — отдельные действия.
+
 ### Что воспроизводится из Git
 
 Reviewed commit фиксирует исходники и рецепт сборки, но не гарантирует побитово
@@ -115,6 +173,7 @@ notepad .\config.local.json
 | `container.desktop_llm_base_url` | Адрес LM Studio из контейнера, обычно `http://host.docker.internal:1234/v1`. |
 | `container.name` | Свободное имя, не имя чужого/незарегистрированного контейнера. |
 | `runtime.profile`, `runtime.git.branch` | Явный профиль и нужная ветка. Для pinned запуска ниже используется `-NoPull`. |
+| `runtime.windows.startup_adapter_path`, `startup_adapter_sha256`, `accepted_runtime_selector` | Только независимо reviewed integration/приватный selector; пустые defaults запрещают ordinary START. Не подставлять пример или выведенные из inspect IDs. |
 
 `runtime.profile` переопределяет llm/tts/conversation. Не копировать чужие PID,
 container IDs, ownership manifests или device receipts с другого ПК. Общий токен
@@ -151,11 +210,17 @@ Preflight только читает конфиг/токен, проверяет 
 `ok=true` означает только этот ограниченный набор проверок, не готовность ПК.
 Формат URL/IPv4 и непустой model key не доказывают существование адресата,
 доступность LAN/DNS или наличие нужной модели.
-`start.ps1` делает уже существующие LM Studio daemon/model/server + реальную
-короткую completion-проверку, затем Docker build/prepare/worker. Первая загрузка
+### Сохранённый bootstrap-рецепт — сейчас отключён
+
+Не ordinary START, а сохранённый `bootstrap.ps1` содержит прежние LM Studio
+daemon/model/server + короткую completion-проверку и вызов `bootstrap-worker.ps1`
+для Docker build/prepare/enrollment. Оба файла сейчас отказывают до этих действий.
+Будущая independently reviewed активация должна добавить тот же существующий
+operation admission, а не просто убрать throw. Первая загрузка
 весов требует сети и времени. Ошибки загрузки/TLS устранять по источникам из
 конфига, не отключая проверку сертификатов.
-`-NoPull` отключает только `git pull`; build/prepare продолжаются. Они могут
+В сохранённом bootstrap-рецепте `-NoPull` отключает только `git pull`; возможные
+будущие owned build/prepare могут
 обращаться к registries, apt, PyPI и model stores при отсутствии нужного cache,
 включая повторный запуск. Offline-работа этим флагом не гарантируется.
 
@@ -189,7 +254,7 @@ manifest-guarded image нужна reviewed сборка с этим `recognition
 отдельно сверить используемые артефакты/ревизии и фактическую загрузку модели;
 не объявлять одинаковость весов по имени или наличию файлов.
 
-Worker сначала создаётся **остановленным** с новым UUID launch label. Публичный
+В сохранённом отключённом bootstrap worker создаётся **остановленным** с новым UUID launch label. Публичный
 `enroll_worker.py` проверяет full container ID, engine, image, worker command,
 mount и свежие labels; записывает local ownership в единственный canonical
 inventory. Источник mount отдельно сверяется с запрошенным `scope_root`, а не
@@ -275,7 +340,8 @@ reviewed операция, не автоматическая подгонка п
 
 1. Записать commit, версии Python/Docker/lms, локальный model key и эффективные
    настройки. `check-pc.ps1` должен пройти без изменения конфига/токена.
-2. Запустить baseline. Сопоставить текущий полный container ID/labels/engine и
+2. После отдельной активации reviewed guarded bootstrap выполнить baseline
+   installation; текущий ordinary START его не выполняет. Сопоставить полный container ID/labels/engine и
    canonical inventory. `/health` worker должен стать ready. С Hub проверить
    доступ к `network.compute_url/health` и Bearer-защиту; на Windows разрешать
    worker port только нужному Hub. Правило создаётся существующим startup при

@@ -219,8 +219,9 @@ class WindowsManualStopTests(unittest.TestCase):
         for name in ('start.ps1','start-worker.ps1','install-startup.ps1','apply-character.ps1'):
             source=(ROOT/'scripts'/name).read_text()
             self.assertIn('Assert-CompanionNotManuallyStopped',source)
-            self.assertLess(source.index('Assert-CompanionNotManuallyStopped'),source.index('Read-CompanionSettings')
-                            if 'Read-CompanionSettings' in source else source.index('$characterPatch'))
+            next_action=('Read-CompanionSettings' if 'Read-CompanionSettings' in source else
+                         'Invoke-CompanionAcceptedRuntimeVerification' if 'Invoke-CompanionAcceptedRuntimeVerification' in source else '$characterPatch')
+            self.assertLess(source.index('Assert-CompanionNotManuallyStopped'),source.index(next_action))
         wrapper=(ROOT/'scripts/windows/stop-reachy.ps1').read_text()
         self.assertLess(wrapper.index('[IO.File]::Open'),wrapper.index('& $PythonExecutable'))
         self.assertIn('if (-not ($DryRun -or $WhatIf))',wrapper)

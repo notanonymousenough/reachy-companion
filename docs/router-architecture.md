@@ -39,17 +39,19 @@ PC не получает прямого доступа к Reachy. Worker про�
 
 Сначала выполнить prerequisites/config/token шаги из [clean-PC guide](windows-clean-pc.md).
 Нужен Python 3.11+ для preflight/enrollment/stop, хотя inference запускается в
-Docker. После настройки используется `scripts/start.ps1 -NoPull`; низкоуровневый
-`start-worker.ps1` запускает только worker. Первая установка не является одним
-кликом из пустого Windows: нужны Docker Linux engine, LM Studio/model key, общий
-токен и реальные LAN-настройки. Private ZIP не нужен и не является зависимостью.
-Startup регистрирует только свой только что созданный stopped container до
-первого старта; чужая коллизия имени не даёт права на удаление/перезапуск.
+Docker. Ordinary `scripts/start.ps1` и `start-worker.ps1` теперь только делегируют
+read-only проверку уже работающего accepted runtime через pinned external adapter;
+пустые defaults запрещают запуск, stopped container не стартует. Нужны отдельные
+review adapter/opaque selector и доказательство того же existing operation slot.
+Первая установка одной командой остаётся OPEN. Прежний enrollment/build рецепт
+сохранён как отключённые `bootstrap*.ps1`, без fallback или bypass-флага.
+Private ZIP не нужен; исходники рецепта в Git не равны готовому guarded bootstrap.
 Worker endpoints требуют Bearer, кроме health; firewall проверяется для нужного
 Hub отдельно от широких Docker Desktop rules.
 
-После `Worker ready` проверить доступ с Hub и настоящий голосовой smoke нового
-ПК. Строка ready не доказывает полный диалог или освобождение GPU при stop.
+После отдельной owned установки проверить доступ с Hub и настоящий голосовой
+smoke нового ПК. Ответ public adapter seam не доказывает runtime/slot
+interoperability, полный диалог или освобождение GPU при stop.
 Веса сохраняются локально; при ошибках TLS проверять источники, не отключая
 проверку сертификатов. Автозапуск/службы устанавливать только после acceptance.
 
@@ -74,9 +76,9 @@ Hub отдельно от широких Docker Desktop rules.
 Generic `worker_container` не выполняет Windows canonical manual-stop проверки
 или ownership enrollment. Его `start` не является эквивалентом поддержанного
 Windows START, а созданный им контейнер не становится автоматически целью
-`stop-reachy.ps1`. Не обходить marker/enrollment этим launcher. На Windows
-`scripts/start-worker.ps1` — только worker-часть поддержанного пути, когда LM
-Studio уже отдельно настроен/проверен; весь baseline запускает `scripts/start.ps1`.
+`stop-reachy.ps1`. Не обходить marker/enrollment этим launcher. На Windows оба
+ordinary entrypoint только проверяют accepted runtime через adapter; отдельная
+guarded bootstrap integration ещё не активирована.
 
 Порт worker должен быть доступен с хаба. Python launcher также умеет `command`: вывести docker run, не запуская его. Значения API-ключей не входят в командную строку: передаются по имени environment variable.
 

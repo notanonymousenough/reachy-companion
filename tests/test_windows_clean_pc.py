@@ -220,7 +220,8 @@ class WindowsCleanPCTests(unittest.TestCase):
         self.assertEqual(self.backend.docker.call_count,1)
 
     def test_public_startup_create_enroll_start_order_and_no_name_based_removal(self):
-        source=(ROOT/'scripts/start-worker.ps1').read_text()
+        source=(ROOT/'scripts/bootstrap-worker.ps1').read_text()
+        self.assertTrue(source.splitlines()[1].startswith('throw '))
         self.assertLess(source.index("@('create'"),source.index('--launch-id $workerLaunchID'))
         self.assertLess(source.index('--launch-id $workerLaunchID'),source.index("@('start',$workerCreatedID)"))
         self.assertIn('--verify-registered',source)

@@ -776,6 +776,9 @@
       "branch": "main"
     },
     "windows": {
+      "startup_adapter_path": "",
+      "startup_adapter_sha256": "",
+      "accepted_runtime_selector": "",
       "docker_desktop_path": "C:\\Program Files\\Docker\\Docker\\Docker Desktop.exe",
       "lms_command": "lms",
       "model_key": "qwen3.5-9b-uncensored-hauhaucs-aggressive",

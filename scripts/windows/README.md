@@ -18,8 +18,11 @@ Run as the same Windows user as the Reachy launchers; another account has a
 different per-user latch and is not an interchangeable stop context.
 Default inventory is `%LOCALAPPDATA%\ReachyCompanion\stop-inventory.local.json`.
 The tracked example is deliberately empty and is **not** an approved inventory.
-New `start-worker.ps1` enrolls only its just-created stopped worker into this
-canonical file before its first exact-ID start; see the [clean-PC guide](../../docs/windows-clean-pc.md).
+Ordinary `start.ps1`/`start-worker.ps1` now delegate only read-only verification
+through a pinned external adapter; empty integration settings deny, without a
+build/model/container fallback. The previous created-worker enrollment recipe
+is preserved in `bootstrap-worker.ps1`, disabled at its top pending separately
+reviewed shared-operation integration; see the [clean-PC guide](../../docs/windows-clean-pc.md).
 Other existing resources still require audited local enrollment from current
 observations before acceptance. A current custom kit inventory is not silently
 migrated or overwritten. No real device IDs, credentials or private inventory belong
@@ -55,6 +58,11 @@ before resuming device tests. A stop request does not wait for or reset another
 operation's busy/UNKNOWN slot. In-flight starts can be UNKNOWN: retain their
 receipts, reconcile exact resources, and do not call partial results complete.
 This is a cooperative launch fence, not a global Windows/Docker exclusion lock.
+The public START seam does not implement or prove the private shared STT
+OperationSlot protocol. Adapter/selector integration must independently reuse
+that exact existing namespace, pinned enrollment and known state, without
+initialization, reset or a second lock. Legacy explicit lifecycle helpers are not
+an accepted-runtime migration just because they check the manual-stop marker.
 
 The total operation budget defaults to 90 seconds (5–300 configurable), with a
 15-second per-command budget (3–60 configurable). Remaining commands use the

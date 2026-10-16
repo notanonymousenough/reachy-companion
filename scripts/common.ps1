@@ -1,4 +1,17 @@
 Set-StrictMode -Version Latest
+function Invoke-CompanionAcceptedRuntimeVerification {
+    param([string]$Configuration, [string]$PythonExecutable = 'py')
+    Assert-CompanionNotManuallyStopped
+    $verifyRepo = Split-Path -Parent $PSScriptRoot
+    $verifyConfiguration = if ([IO.Path]::IsPathRooted($Configuration)) { $Configuration } else { Join-Path $verifyRepo $Configuration }
+    $verifyArguments = @('-I','-B',(Join-Path $PSScriptRoot 'windows/verify_startup.py'),'--configuration',$verifyConfiguration)
+    if ([IO.Path]::GetFileName($PythonExecutable) -in @('py','py.exe')) { $verifyArguments = @('-3') + $verifyArguments }
+    & $PythonExecutable @verifyArguments
+    if ($LASTEXITCODE -ne 0) { throw 'Accepted-runtime verification denied; no bootstrap fallback is permitted.' }
+    Assert-CompanionNotManuallyStopped
+    Write-Host 'Pinned adapter returned read-only verification; runtime/slot integration requires its separate reviewed acceptance.'
+}
+
 function Assert-CompanionNotManuallyStopped {
     $manualStopFile = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'ReachyCompanion/manual-stop.json'
     $manualStopAncestor = [IO.Path]::GetDirectoryName($manualStopFile)

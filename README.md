@@ -227,23 +227,11 @@ PYTHONPATH=src python3 -m unittest discover -s tests -v
 
 Профиль `profiles/friend.json` задаёт остроумного, язвительного приятеля с собственным мнением. Он общается на «ты», может подколоть, огрызнуться или выругаться по ситуации, не льстит и прямо говорит о противоречиях. Не избегает сложных и чувствительных тем, различает факты и догадки. Обычно отвечает одним-двумя короткими предложениями, сразу по сути, без вступлений и навязчивых продолжений. Подробности даёт по просьбе или если они нужны для правильного ответа. Язвительность — только по конкретному поводу; на обычные вопросы отвечает спокойно, а при настоящем переживании человека убирает колкости. Профиль описывает манеру общения, а не гарантирует каждую реплику модели.
 
-Контекст LM Studio настроен на 32768 токенов (`runtime.windows.context_length`), включая системный prompt, историю, текущий вопрос и ответ. Лимит генерации отдельного ответа — 512 токенов (`llm.max_tokens` в профиле), история — до 64 сообщений (32 пары вопрос/ответ), с TTL 30 минут. Количество сообщений не гарантирует, что очень длинные реплики поместятся в токеновый контекст. Контекст и лимит ответа — разные настройки. Скрипт `start.ps1` проверяет размер уже загруженной модели и отказывает при несовпадении, сохраняя её: другая модель не становится нашей только по identifier. На существующей установке Windows применить и сохранить размер можно командой:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\start.ps1 -ContextLength 32768
-```
-
-Следующие запуски используют сохранённое значение из `config.local.json`. Проверка фактического размера: `lms ps --json`, поле `contextLength`.
+Контекст LM Studio задаётся `runtime.windows.context_length`, лимит генерации — `llm.max_tokens`, история — `llm.history_messages`/TTL в эффективном профиле. Это разные ограничения. Ordinary `start.ps1` теперь только делегирует read-only проверку accepted runtime и отклоняет ненулевой `-ContextLength` без записи. Изменение контекста/профиля требует отдельного reviewed owned перехода под существующим operation admission; имя/identifier не доказывает ownership. Прежний lifecycle-рецепт сохранён в отключённом `bootstrap.ps1`. Проверка фактического размера через `lms ps --json` — только наблюдение, не право менять модель.
 
 Голос остаётся Piper Ruslan; pitch-shift отключён, темп length_scale=1.0. Это изменение существующего голоса, а не новая обученная модель. Персонаж задаётся `llm.system_prompt`, звук — `tts`, служебные фразы — `conversation`.
 
-Чтобы применить профиль к уже работающему Windows worker, из каталога repo выполнить:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\apply-character.ps1
-```
-
-Скрипт читает profiles/friend.json, делает резервные копии, обновляет config.local.json и config.worker.local.json и перезапускает только контейнер worker. LM Studio, модели и токен не меняются. Перезапуск worker очищает прежний контекст разговора LM Studio backend. Если config.worker.local.json ещё отсутствует, сначала применить профиль, затем start-worker.ps1.
+`apply-character.ps1` — отдельный legacy config/restart helper с manual-stop check, но без доказанной интеграции общего operation slot/accepted-runtime selector. Не использовать его как миграцию принятого runtime или fallback нового START. Само редактирование профиля не даёт права перезапускать контейнер; guard такого перехода ещё требует отдельного review.
 
 
 ## Обновление из Git и единый запуск
@@ -256,7 +244,9 @@ Windows, PowerShell из каталога repo:
 powershell -ExecutionPolicy Bypass -File .\scripts\start.ps1
 ```
 
-Это одна команда: git pull --ff-only → Docker Desktop/Linux engine → lms daemon up → загрузка модели, если нужный identifier ещё не загружен → HTTP server LM Studio → проверочная генерация → Docker build/prepare/start worker → health. Повторный запуск использует только зарегистрированный container ID с теми же image/config; коллизия или изменение требуют review, без удаления по имени. Новый stopped worker регистрируется в локальном stop-inventory до первого start. Профиль применится автоматически. `-NoPull` отключает только Git pull: build/prepare могут снова потребовать сеть и не гарантируют offline-запуск. Dockerfile и version-only locks задают рецепт, а не побитово одинаковое окружение; локальный frozen base другого ПК не является частью Git. Границы preflight/сборки и переносимых артефактов описаны в [clean-PC guide](docs/windows-clean-pc.md). Модель/CLI/путь Docker/context/GPU/bind/timeouts задаются runtime.windows, API identifier — llm.model, порт — container.desktop_llm_base_url. Скрипт не выгружает чужие модели.
+**Поведение START изменено.** `start.ps1` и standalone `start-worker.ps1` один раз вызывают pinned external adapter с `allow_lifecycle=False`. Они не делают Git pull/build/prepare/model load/unload/generation/container start/replacement/config/firewall/task mutation. Пустые `runtime.windows.startup_adapter_path`, `startup_adapter_sha256`, `accepted_runtime_selector` по умолчанию дают отказ. `-NoPull`/`-InTask` сохранены как совместимые аргументы; ordinary START вообще не делает pull. Selector остаётся приватным opaque файлом, не выводится из имени/порта/текущего inspect.
+
+Это public fail-closed seam, **не** уже готовый adapter или доказательство общего STT OperationSlot. Настоящая implementation с тем же existing namespace/mutex, independently pinned known state и accepted-runtime ownership требует отдельного review/native acceptance. Fake-adapter tests этого не доказывают. Старые уже исправленные lifecycle-рецепты сохранены как `bootstrap.ps1`/`bootstrap-worker.ps1`, но отключены безусловным throw до guarded integration. Не удалять denial и не обходить его legacy launcher/profile helper. Установка нового ПК одной командой остаётся OPEN. Подробный ABI, границы и миграция — в [clean-PC guide](docs/windows-clean-pc.md). Dockerfile/version-only locks по-прежнему не означают битовую воспроизводимость или наличие frozen base на другом ПК.
 
 Для запуска при входе пользователя Windows:
 
@@ -264,7 +254,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\start.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\install-startup.ps1
 ```
 
-Задача запускает тот же start.ps1 с -NoPull. Требуется вход пользователя и работающий Docker Desktop; это не служба до входа в Windows. Снять автозапуск: `Unregister-ScheduledTask -TaskName` со значением runtime.windows.startup_task. Если регистрация требует повышения прав, выполнить установку задачи из PowerShell администратора.
+Установка Task Scheduler — отдельная explicit административная операция, не выполняется ordinary START. Задача указывает на тот же `start.ps1 -NoPull`, который с пустой integration откажет. До включения требуется review exact script/task identity, adapter и того же operation slot; `IgnoreNew` защищает только копии одной задачи и не координирует runner/manual clients. Смена Git-файлов не обновляет установленные старые копии автоматически. Это не служба до входа в Windows и не доказательство readiness.
 
 На хабе / Reachy, из каталога checkout:
 
@@ -279,9 +269,9 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install-startup.ps1
 
 Команды lms проверены по локальному --help и [официальной CLI-документации](https://lmstudio.ai/docs/cli). Сервер запускается с [явным bind и port](https://lmstudio.ai/docs/cli/serve/server-start).
 
-Docker CLI worker использует собственный data/docker-client/config.json без credential helper и фактический endpoint текущего Docker context. Это позволяет собирать публичный базовый образ через SSH Windows, где Desktop helper не имеет доступа к Windows Credential Manager. Пользовательский ~/.docker/config.json не изменяется.
+В сохранённом отключённом bootstrap-рецепте Docker CLI использует собственный `data/docker-client/config.json` без credential helper и endpoint текущего Docker context. Это описание исходников рецепта, не активный путь ordinary START или доказательство сборки через SSH на новой машине. Пользовательский `~/.docker/config.json` этим рецептом не меняется.
 
-При запуске start.ps1 через SSH Windows весь стек запускается задачей Task Scheduler вне дерева процессов OpenSSH: LM Studio продолжает работать после выхода из SSH. Тот же task запускается при входе User; пароль не сохраняется. Журнал запуска — data/startup.log с ограничением из logging.max_bytes; статус/код последнего запуска — Get-ScheduledTaskInfo.
+Прежний bootstrap содержал SSH→Task Scheduler ветку и `data/startup.log`; она сохранена только в отключённом рецепте. Новый ordinary START не создаёт/запускает task или процессы модели. Устойчивый запуск через logon/SSH и его координация с принятым runtime остаются отдельным gate, не следствием успешного public seam test.
 
 
 ### Первоначальная установка Git checkout
