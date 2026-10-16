@@ -32,16 +32,21 @@ Reachy, Hub, PC и VPS. Независимый reviewer проверяет ис�
 
 ## Очередь поставки и владельцы
 
+Актуальный scope задан прямым поручением человека 2026-10-16: short useful speech →
+long Alice dialogue → true streaming/continuous hearing → camera/sensors. Эта
+очередь имеет приоритет над прежними полными product goals и историческими
+критериями ниже. Долговременная память, интеграции и перенос **вне MVP**.
+
 | Порядок | Статус | Минимальный результат | Владелец | Реальная приёмка и доказательство |
 |---|---|---|---|---|
-| P0.MVP | **АКТИВНО: длительная обкатка рабочей версии с Алисой** | Сначала один реальный normal-path smoke, затем 20–30 минут конечных последовательных циклов и >=10 связанных ходов; далее камера и доступный полезный датчик | writer: минимальные исправления, command/runbook/план; runner: единственный hardware owner; reviewer: source/evidence; координатор: последовательность и heartbeat | Каждый intentional вопрос начинается «Алиса»; реальные fresh STT → 9B FINAL → собственное воспроизведение, контекст между ходами, штатные движения, STOP и свежий следующий ход. Измерять доступные latency/resource/VRAM/stalls; неизвестный acoustic E2E не подменять HTTP. Конечный OFF/unowned/100, exact working launch command/pins и receipts обязательны |
-| P0.0 | **Наблюдение incident антенн; прежний hold отменён человеком** | Отличить покой/озвучивание и собственные targets от SDK holding/idle path по конечным безопасным данным | runner: штатные реальные диалоги и конечная проверка/STOP собственного UUID; writer: source audit по фактическим сбоям | Причина UNKNOWN; человек наблюдает симптом только при ответе/движениях. Следующий source-only focus — commanded cue/phase transition step/rate. Использовать штатный guarded SDK путь; не менять torque/smoothing/limits/UART. Наблюдать фактические движения в реальных диалогах |
-| P0.1 | **Spoken camera PASS для одного реального human-запроса:** socket-only fix установлен, описание подтверждено человеком, финальный cleanup проверен | Сохранить принятый camera voice path и воспроизводимый `7799e89` fix | writer: public fix/план; runner: единственные device actions; координатор: следующая приёмка | Следующий приоритет — P0.2. Отдельные camera STOP/motion/no-resume и visual follow-up memory остаются открыты; один корректный spoken ответ их не заменяет |
-| P0.2 | Real cf50 measurement: strict join, producer overlap, STOP/next turn и baseline PASS; 0,926774 s completion gate измерен | Оптимизация streaming после сохранённого рабочего MVP: meaningful audible overlap, затем actual continuous capture/partial STT | writer: source audit/proposal; runner: sole physical owner; координатор: evidence/review | Штатные expressive trials разрешены человеком; streaming proposals не блокируют рабочий голосовой путь. S1 OFF/S2 source не являются hardware streaming PASS |
-| P1.1 | Частично, не принято | Обычный контекст, затем visual context с provenance/TTL; долговременные факты и исправления | writer: существующие session/memory seams; runner + человек: смысловая проверка | Факт → vision → местоименная ссылка на прежний факт; отдельно visual follow-up из реально виденного. Restart сохраняет разрешённые факты/mute, correction/deletion работает; vision history не обещать до реализации |
-| P1.2 | Не принято | Первая полезная typed integration через существующий broker/worker | writer: маленький adapter/schema; runner: настоящий target; координатор: scope | Реальная полезная задача с intended/attempted/completed receipt; ошибки/timeout/duplicate/cancel различимы. Нет raw shell/секретов/новых grants из текста модели или OCR |
-| P1.3 | Частично guards есть, полная приёмка открыта | Recovery, ресурсы, STOP, воспроизводимая доставка Git/transfer | writer + reviewer; runner: actual failures/recovery | Сеть/worker/model/restart/перегрузка не оживляют старые речь/движения. Bounded queues/VRAM/storage, сохранившиеся mute/volume, exact source hashes, конечный deploy/readiness/rollback без конкурирующих владельцев |
-| Final | Не принято | Постоянно доступный автономный companion: слышит/видит, отвечает по ходу генерации, помнит, полезно действует и естественно сопровождает речь движениями | координатор сводит результаты; все реальные действия через runner | Длительные реальные silence/mixed/overlap/outage/restart сценарии, все product criteria ниже. Demo или отдельный PASS не заменяют конечную цель |
+| P0.1 | Активно: короткий полезный голос | Одна короткая законченная фраза/вопрос по умолчанию и в Alice dialogue; подробный ответ только по явной просьбе | writer: минимальная response policy; runner: реальные короткие ходы | Содержательная речь, не ACK; не обрезать PCM. Временные96 токенов Alice-профиля не должны ограничивать explicit long request в общем режиме |
+| P0.2 | Следом: длительная беседа с Алисой | >=20 минут, >=10 реальных коротких ходов в текущей conversation epoch | runner: единственный hardware owner; reviewer: source/evidence | Runtime stability, тематическая уместность и длина речи считаются отдельно. Каждый intentional вопрос начинается «Алиса»; STOP/owner/epoch fences сохраняются |
+| P0.3 | Затем: настоящее streaming и continuous hearing | Meaningful speech до завершения model generation; endpointing, AEC, barge-in и STOP | writer: существующие audio seams; runner: actual overlap | Chunking уже готового целого ответа не считается streaming. Producer overlap и0,926774 s completion gate не заменяют meaningful audible overlap. S1 OFF/S2 source не hardware PASS |
+| P0.4 | Затем: камера и другие доступные датчики | Сохранить принятый spoken camera путь, добавить один полезный typed sensor readout | writer: минимальная интеграция; runner: actual sensor → speech | Camera accuracy/свежесть и sensor units/provenance/TTL проверяются отдельно; нет данных → UNKNOWN |
+| P0.C | Лёгкая проверка контекста | Проверить существующую session history и оставить её, если работает | writer + runner | Контекст не превращается в большой rewrite/blocker. Restart worker начинает новую history epoch; память через restart не обещается |
+| P0.O | Постоянная работа служб | Reachy/PC/Hub продолжают работать после тестов | runner: existing supervisor/services; writer: узкие исправления | Finite test освобождает только свой permit; сервис остаётся idle или listening при живом valid grant. STOP/manual OFF, ownership, epochs, TTL и fail-closed сохраняются; watchdog вслепую не отключать |
+| После MVP | Отложено пользователем | Долговременная память, интеграции, перенос | координатор определяет следующий scope | Не включать в текущую MVP-приёмку и не задерживать ими голос/Alice/streaming/sensors |
+| Поддержка | Наблюдение антенн и recovery | Штатные expressive движения разрешены, причина дрожи UNKNOWN; воспроизводимые delivery/rollback/resources | runner + writer + reviewer | Не менять torque/limits/UART. Сохранять mute/volume, source pins, STOP, no stale replay и один hardware owner |
 
 Параллельно допустимы только независимые локальные source review и подготовка.
 На устройствах — один runner и один согласованный этап; не накладывать latency
@@ -66,7 +71,10 @@ motorTrue claim, protected own cue и подтверждённым terminal/quie
 Проверка распознанного ответа выполняется posthoc как functional evidence; это
 не строгий arithmetic pre-LLM whitelist и не speaker identity. Source-accepted
 Agent5174/audio-only/gate proposals сохраняются отдельно и **не установлены**;
-они не являются условием рабочего normal-path прогона. Исправлять только реальные blockers
+они не являются условием рабочего normal-path прогона. Временный PC short-profile
+96 — только текущая Alice обкатка, не универсальная политика explicit long request.
+Службы остаются запущенными после finite cleanup; возобновление listening допустимо
+только при живом valid grant, без обхода manual OFF/TTL/ownership. Исправлять только реальные blockers
 самым маленьким изменением, сохраняя воспроизводимую working команду.
 
 **Первый normal-path Alice smoke: functional route checkpoint принят; playback witness позже пересмотрен.** Исходные Agentcf50, clientadc,
