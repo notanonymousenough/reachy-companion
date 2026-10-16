@@ -72,6 +72,34 @@ CREATE у клиентов, соблюдающих протокол. Общий 
 scope, а не требованием доказать отсутствие любых будущих внешних клиентов.
 Известные прежние submitters отсутствуют. Новых мутаций и supersession нет.
 
+### Конечный source audit управляемых путей
+
+Writer проверил публичные исходники перечисленных entry points. Это не
+доказательство версии файлов, установленной на Windows, или отсутствия задач:
+runner должен сопоставить только принадлежащие проекту task/service/process
+metadata с этим списком. ROOT подтверждает полноту управляемого scope после
+такого сопоставления; до этого HOLD coverage остаётся OPEN.
+
+| Публичный путь | Guard / возможный обход | Кто удерживает |
+|---|---|---|
+| `scripts/start.ps1`, `scripts/start-worker.ps1`, `scripts/common.ps1`, `scripts/windows/verify_startup.py` | Обычный START вызывает read-only verifier; manual-stop проверяется до и после; bootstrap fallback запрещён | ROOT HOLD; runner проверяет installed source/task delegation |
+| `scripts/install-startup.ps1` | Создаёт logon task с тремя restart attempts, делегирующий `start.ps1`; entry проверяет manual-stop; сам installer изменяет scheduler | ROOT запрещает installer; runner сверяет нашу фактическую task action/retry metadata |
+| `scripts/bootstrap.ps1`, `scripts/bootstrap-worker.ps1` | Безусловный throw в начале; сохранённый ниже lifecycle recipe недостижим без изменения исходника | ROOT запрещает запуск/изменение; runner сверяет installed entry denial |
+| `scripts/worker-docker`, `src/reachy_companion/worker_container.py` | Прямой Docker launcher **не проверяет** canonical slot/manual-stop; build/prepare/start/stop могут мутировать; command только печатает argv | ROOT HOLD прямого CLI; runner проверяет отсутствие наших task/service/watchdog ссылок на этот entry |
+| `scripts/apply-character.ps1` | Manual-stop guard есть, но profile write и Docker restart не проходят canonical slot | ROOT HOLD profile/restart пути; runner проверяет наши ссылки/акторы |
+| `scripts/windows/enroll_worker.py`, `scripts/windows/stop_reachy.py` | Enrollment/owned stop — явные mutating инструменты, не разрешение обходить HOLD; dry-run отдельно | ROOT HOLD всех mutating вызовов, runner только разрешённая RO metadata |
+| Frozen deployment caller runner | StrictSlot UNKNOWN блокирует protocol-compliant повтор; private installed source и launcher не входят в public source audit | Runner подтверждает отсутствие старых actors и retry/resume путей; ROOT HOLD новых вызовов |
+| Управляемые chats/automation/watchdog | Координационный HOLD трёх role classes сам по себе не инвентаризация scheduler | ROOT объявляет конечный список наших launch/retry/resume путей, runner сопоставляет наши metadata |
+
+Pure builders `deploy/autonomous/prepare_question_gate_container.py` и
+`deploy/autonomous/docker_create_payload.py` не исполняют Docker operations.
+Robot-native owner/runtime services не являются Windows CREATE submitters;
+их сохранение и состояние проверяются отдельно. Наличие legacy bypass выше
+запрещает объявлять canonical slot глобальной механической блокировкой.
+Новый framework или патч guard в этом аудите не вводится. Условие будущего
+обслуживания: пользователь и внешние клиенты не выполняют команды вне
+согласованного managed scope во время границы.
+
 1. Зафиксировать свежие operator state/STOP/epochs и RO inventory. Сохранить
    приватные exact baseline/spec/image/source/profile/FI receipts у runner.
    Проверить recoverability baseline и возможность вернуть штатные службы.
