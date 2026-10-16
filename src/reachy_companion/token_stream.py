@@ -21,6 +21,58 @@ LOG=logging.getLogger('reachy-content-stream')
 ENDPOINTS={}
 
 
+CONTENT_INSTRUCTION = (
+    'В потоковом голосовом ответе просьба пользователя о подробностях или заданном числе предложений '
+    'имеет приоритет над обычной краткостью, в пределах существующих ограничений. '
+    'Начни с одного короткого законченного содержательного предложения, сразу отвечающего на вопрос; '
+    'затем дай запрошенное объяснение. Первое предложение входит в запрошенное число. '
+    'Если подробностей не просили, отвечай обычно кратко. Не заменяй ответ обещанием ответить '
+    'или пустым подтверждением и не растягивай его искусственно.')
+
+METADATA_BOOLEANS = frozenset(('queue_overflow','queue_backpressure','terminal_verified','producer_quiesced',
+    'failed','model_post_attempted','fast_grace_exceeded','generation_clock_verified',
+    'cross_host_clock_verified','acoustic_consumption_verified'))
+METADATA_COUNTS = dict(token_chunks=8192,queue_peak=8192,queue_bytes_peak=1048576,discarded_chunks=8192)
+METADATA_NUMBERS = frozenset(('request_seconds','request_started_monotonic','request_started_unix','max_read_gap_seconds'))
+FIRST_AUDIO_DURATIONS = frozenset(('first_piper_wait_seconds','first_sox_seconds',
+    'first_cues_seconds','first_segment_prepare_seconds'))
+METADATA_OPTIONAL_NUMBERS = frozenset(('first_token_read_seconds','last_token_read_seconds','terminal_read_seconds',
+    'first_semantic_seconds','first_pcm_yield_seconds','close_wait_seconds')) | FIRST_AUDIO_DURATIONS
+FIRST_BOUNDARIES = frozenset(('period','question','exclamation','ellipsis','tail'))
+METADATA_FIELDS = (METADATA_BOOLEANS | METADATA_COUNTS.keys() | METADATA_NUMBERS | METADATA_OPTIONAL_NUMBERS
+    | {'attempt_id','first_segment_chars','first_segment_boundary'})
+
+
+def validate_metadata(value):
+    """One exact portable producer/consumer contract; no coercion or unknown keys."""
+    need(type(value) is dict and set(value)==METADATA_FIELDS)
+    need(type(value['attempt_id']) is str and re.fullmatch('[0-9a-f]{32}',value['attempt_id']) is not None)
+    for key in METADATA_BOOLEANS:need(type(value[key]) is bool)
+    for key,maximum in METADATA_COUNTS.items():need(type(value[key]) is int and 0<=value[key]<=maximum)
+    for key in METADATA_NUMBERS | METADATA_OPTIONAL_NUMBERS:
+        number=value[key]
+        if number is None and key in METADATA_OPTIONAL_NUMBERS:continue
+        need(type(number) in (int,float) and 0<=number<=1e15 and math.isfinite(number))
+    need(value['request_seconds']>0)
+    count=value['first_segment_chars'];boundary=value['first_segment_boundary']
+    need((count is None and boundary is None) or (type(count) is int and 1<=count<=600
+        and type(boundary) is str and boundary in FIRST_BOUNDARIES))
+    return dict(value)
+
+
+
+def metadata_rows(raw):
+    """Private finite consumer reuses this exact pinned parser; logs stay in RAM."""
+    need(type(raw) is bytes and len(raw)<=1048576)
+    rows=[]
+    for line in raw.decode('utf8',errors='replace').splitlines():
+        if 'content_stream_metadata ' not in line:continue
+        value=json.loads(line.split('content_stream_metadata ',1)[1],
+                         object_pairs_hook=unique,parse_constant=reject_constant)
+        rows.append(validate_metadata(value))
+    return rows
+
+
 def prepare_endpoint(config):
     """Resolve at opt-in readiness, before any model request/reader exists."""
     url=config['network']['llm_base_url'].rstrip('/')+'/completions'
@@ -196,6 +248,8 @@ class TimelyReader:
         self.fast_grace_exceeded=False;self.close_elapsed=None
         self.token_chunks=0;self.max_read_gap=0
         self.post_attempted=False
+        self.first_segment_chars=self.first_segment_boundary=None
+        self.first_audio_durations={key:None for key in FIRST_AUDIO_DURATIONS}
         def produce():
             from . import brains
             tokens=None
@@ -278,10 +332,19 @@ class TimelyReader:
             self.closed=not self.thread.is_alive()
             if not self.closed:raise RuntimeError('Owned model reader did not quiesce')
 
+    def observe_first_audio(self, durations):
+        need(type(durations) is dict and set(durations)==FIRST_AUDIO_DURATIONS)
+        need(all(type(v) in (int,float) and math.isfinite(v) and v>=0 for v in durations.values()))
+        with self.condition:
+            if self.first_audio_durations['first_piper_wait_seconds'] is None:
+                self.first_audio_durations={key:round(value,6) for key,value in durations.items()}
+
     def metadata(self):
         with self.condition:
             def elapsed(value):return None if value is None else round(value-self.started,6)
             return dict(attempt_id=self.attempt_id,request_seconds=self.seconds,
+                first_segment_chars=self.first_segment_chars,first_segment_boundary=self.first_segment_boundary,
+                **self.first_audio_durations,
                 request_started_monotonic=self.started,request_started_unix=self.started_unix,
                 token_chunks=self.token_chunks,max_read_gap_seconds=round(self.max_read_gap,6),
                 first_token_read_seconds=elapsed(self.first_token),last_token_read_seconds=elapsed(self.last_token),
@@ -356,7 +419,7 @@ def semantic_segments(tokens,maximum):
         if close is not None:close()
 
 
-def incremental_audio(pipeline,segments,prefix,*,valid=None):
+def incremental_audio(pipeline,segments,prefix,*,valid=None,first_segment_observer=None):
     """Reuse existing TTS, clock offsets and output bounds across all segments."""
     total=cue_count=characters=0;first=True
     maximum=pipeline.config['conversation']['expressions']['speech_sync']['max_cues']
@@ -368,7 +431,9 @@ def incremental_audio(pipeline,segments,prefix,*,valid=None):
             need(characters<=pipeline.config['limits']['max_speech_chars'])
             yield dict(type='reply',reply=text,emotion=segment['emotion'],command=None,
                 **pipeline.speech_address_metadata(text,actual_prefix))
-            events=pipeline.audio_events([segment],total,speech_address_prefix=actual_prefix)
+            observation=({'first_segment_observer':first_segment_observer}
+                         if first and first_segment_observer is not None else {})
+            events=pipeline.audio_events([segment],total,speech_address_prefix=actual_prefix,**observation)
             try:
                 for event in events:
                     if event['type']=='audio':
@@ -423,16 +488,20 @@ def content_events(pipeline,payload,path):
         del p.sessions[min(p.sessions,key=lambda k:p.sessions[k]['used'])]
     p.agent_sessions={k:v for k,v in p.agent_sessions.items() if k in p.sessions}
     entry=p.sessions.get(session,dict(used=now,messages=[]))
-    messages=[dict(role='system',content=cfg['llm']['system_prompt'])]+entry['messages'][-cfg['llm']['history_messages']:]
+    messages=[dict(role='system',content=cfg['llm']['system_prompt']+'\n'+CONTENT_INSTRUCTION)]+entry['messages'][-cfg['llm']['history_messages']:]
     if payload.get('previous_reply_interrupted',False):
         messages.append(dict(role='system',content='Предыдущий ответ был прерван и не прозвучал полностью. Отвечай на новую реплику пользователя, не продолжай старый ответ без просьбы.'))
     messages.append(dict(role='user',content=text));p.agent_sessions.setdefault(session,uuid.uuid4().hex)
     collected=[];reader=TimelyReader(cfg,messages)
     def collect():
         for segment in semantic_segments(reader,cfg['limits']['max_speech_chars']):
+            if not collected:
+                with reader.condition:
+                    reader.first_segment_chars=len(segment['text'])
+                    reader.first_segment_boundary={'.':'period','?':'question','!':'exclamation','…':'ellipsis'}.get(segment['text'][-1],'tail')
             collected.append(segment)
             yield segment
-    events=incremental_audio(p,collect(),prefix,valid=reader.check)
+    events=incremental_audio(p,collect(),prefix,valid=reader.check,first_segment_observer=reader.observe_first_audio)
     try:
         p.phase='thinking'
         for event in events:

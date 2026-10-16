@@ -11,8 +11,8 @@ need to repeat those capability probes before the next voice increment.
 
 The exact legacy preimages remain those in
 [content-token-stream-source.md](content-token-stream-source.md). Brains still
-maps `9c69…` → `020e435…`; the current worker maps `92cf…` → `0bc761…`, adding
-only opt-in startup endpoint resolution and the existing stream hook. The new
+maps `9c69…` → `020e435…`; the current worker maps `92cf…` → `bbdb7be…`, adding
+opt-in startup resolution, the stream hook and an optional first-segment audio observer. The new
 runtime helper contains the implemented reader/owned HTTP transport. Do not replace the whole package,
 build a HEAD worker image, repair old container/spec drift, change the model,
 Agent or camera helper. Final helper hash/public pin must match the handoff.
@@ -22,8 +22,15 @@ Current exact three-file bundle (these are not the repository HEAD brains/voice)
 | File | SHA256 |
 |---|---|
 | brains.py | `020e435e37602271d2d40160b055650f781b60a8ee9fc601e3b28d82444bdae6` |
-| voice.py | `0bc7617cdce2b61e5b80ad9ffab79e3f35d97e9b7bdb4ceae432028f5b665d8a` |
-| token_stream.py | `34764e2a00915821cfefbb9b480d17d595db12cf6178f75bb8e6d90246715201` |
+| voice.py | `bbdb7be523946396cedd16a2f629caabdb54bf3d9979bfd5e7403f2730995764` |
+| token_stream.py | `a4aa26d375b46cfd0348f6cb42df6adb1f82a0f1b4252afb11df571f4edc539d` |
+
+The first real attempt produced meaningful speech and owned STOP, but its short
+response completed before playback: overlap NOT met. The next stream-only
+first-sentence refinement and FIRST-segment telemetry require the matching
+shared private-consumer contract, not the old handwritten metadata allowlist:
+[content-first-sentence-iteration.md](content-first-sentence-iteration.md).
+Producer/consumer pins must be reviewed together before any new activation.
 
 Generate it reproducibly on the Mac from public local Git preimages and frozen
 patch/helper hashes; this command does not contact devices or change config:

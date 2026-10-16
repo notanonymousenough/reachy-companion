@@ -513,14 +513,14 @@ class ExactWorkerOverlayTests(unittest.TestCase):
         p.audio_events=lambda *args,**kwargs:iter([dict(type='audio',pcm_base64='AAA=')])
         return p
 
-    def test_only_stream_method_changes_and_exact_output_pins(self):
+    def test_only_stream_startup_and_audio_observer_change_exact_pins(self):
         def outside(source):
             tree=ast.parse(source)
             pipeline=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='Pipeline')
-            pipeline.body=[n for n in pipeline.body if getattr(n,'name',None) not in ('stream','__init__')]
+            pipeline.body=[n for n in pipeline.body if getattr(n,'name',None) not in ('stream','__init__','audio_events')]
             return ast.dump(tree,include_attributes=False)
         self.assertEqual(outside(self.old),outside(self.new))
-        self.assertEqual(hashlib.sha256(self.new.encode()).hexdigest(),'0bc7617cdce2b61e5b80ad9ffab79e3f35d97e9b7bdb4ceae432028f5b665d8a')
+        self.assertEqual(hashlib.sha256(self.new.encode()).hexdigest(),'bbdb7be523946396cedd16a2f629caabdb54bf3d9979bfd5e7403f2730995764')
         self.assertEqual(hashlib.sha256(self.brains_source.encode()).hexdigest(),'020e435e37602271d2d40160b055650f781b60a8ee9fc601e3b28d82444bdae6')
 
     def test_opt_in_startup_resolves_before_model_initialization_with_real_config_facade(self):

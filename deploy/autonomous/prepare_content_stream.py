@@ -17,9 +17,9 @@ SOURCES={
     'voice.py':('2865db30e92fcb069c241c34bae4419ad65ed594',
         '92cf69096fd6f08551a13a9c44d85fbbfc0470ca2f17315616691044018ab865',
         'reachy-worker-92cf-content-stream.patch',
-        '804d7889d0a08f8c722d086021c157500a02c166c4f1dd5e56d294c870cd4d41',
-        '0bc7617cdce2b61e5b80ad9ffab79e3f35d97e9b7bdb4ceae432028f5b665d8a')}
-HELPER='34764e2a00915821cfefbb9b480d17d595db12cf6178f75bb8e6d90246715201'
+        '31cb59ad378bc1180d527598e4e8f1b0392be04881c5aa0fa7f4ffef6e4c8b8b',
+        'bbdb7be523946396cedd16a2f629caabdb54bf3d9979bfd5e7403f2730995764')}
+HELPER='a4aa26d375b46cfd0348f6cb42df6adb1f82a0f1b4252afb11df571f4edc539d'
 
 
 def sha(value):return hashlib.sha256(value).hexdigest()
@@ -57,7 +57,8 @@ def build(destination):
     if sha(helper)!=HELPER:raise ValueError('Frozen helper mismatch')
     data['token_stream.py']=helper
     for name,raw in data.items():compile(raw,name,'exec')
-    manifest=dict(kind='content-stream-exact-legacy-2',sources=pins,outputs={k:sha(v) for k,v in data.items()},
+    manifest=dict(kind='content-stream-exact-legacy-3',sources=pins,outputs={k:sha(v) for k,v in data.items()},
+        metadata_validator='token_stream.validate_metadata',metadata_consumer='token_stream.metadata_rows',
         dependencies_added=False,default_config_changed=False,devices_modified=False,
         actual_voice_acceptance=False,required_acceptance_config={'streaming.content_tokens':True,'streaming.content_request_seconds':40})
     destination.mkdir(mode=0o700)

@@ -1,21 +1,42 @@
 --- a/src/reachy_companion/voice.py
 +++ b/src/reachy_companion/voice.py
-@@ -38,6 +38,11 @@
- class Pipeline:
-     def __init__(self, config):
-         self.config = config
+@@ -40,0 +41,5 @@
 +        mode=config['streaming'].get('content_tokens', False)
 +        if type(mode) is not bool:raise ValueError('Boolean content stream mode required')
 +        if mode:
 +            from .token_stream import prepare_endpoint
 +            prepare_endpoint(config)
-         self.http = build_opener(ProxyHandler({}))
-         self.lock = threading.Lock()
-         self.sessions = {}
-@@ -322,42 +327,48 @@
-         started = time.monotonic()
-         future = executor = None
-         try:
+@@ -277 +282 @@
+-    def audio_events(self, segments, initial_bytes=0, *, speech_address_prefix=DEFAULT_SPEECH_ADDRESS):
++    def audio_events(self, segments, initial_bytes=0, *, speech_address_prefix=DEFAULT_SPEECH_ADDRESS, first_segment_observer=None):
+@@ -291,0 +297,2 @@
++        observing=first_segment_observer is not None
++        measured=False
+@@ -292,0 +300 @@
++            if observing:tts_began=time.monotonic()
+@@ -294,0 +303,2 @@
++                measuring=observing and not measured
++                if measuring:piper_ready=time.monotonic()
+@@ -300,0 +311 @@
++                if measuring:sox_began=time.monotonic()
+@@ -302,0 +314 @@
++                if measuring:sox_ready=time.monotonic()
+@@ -304,0 +317 @@
++                if measuring:cues_began=time.monotonic()
+@@ -307,0 +321 @@
++                if measuring:cues_ready=time.monotonic();measured=True
+@@ -313,2 +327,8 @@
+-                    yield {'type': 'audio', 'format': 'S16_LE', 'sample_rate': rate,
+-                           'channels': 1, 'pcm_base64': base64.b64encode(pcm[offset:offset+size]).decode()}
++                    event = {'type': 'audio', 'format': 'S16_LE', 'sample_rate': rate,
++                             'channels': 1, 'pcm_base64': base64.b64encode(pcm[offset:offset+size]).decode()}
++                    if observing:
++                        first_segment_observer(dict(first_piper_wait_seconds=piper_ready-tts_began,
++                            first_sox_seconds=sox_ready-sox_began,first_cues_seconds=cues_ready-cues_began,
++                            first_segment_prepare_seconds=time.monotonic()-tts_began))
++                        observing=False
++                    yield event
+@@ -325,36 +345,42 @@
 -            recognized = answer_result = None
 -            intro_bytes = 0
 -            acknowledgements = self.config['conversation'].get('interaction', {}).get('acknowledgements', {})
@@ -94,6 +115,3 @@
 +                segments = result.get('segments') or [{'text': result['reply'], 'emotion': result.get('emotion', 'neutral'), 'gesture': 'auto'}]
 +                yield from self.audio_events(segments, intro_bytes,speech_address_prefix=prefix)
 +                terminal = {'type': 'done', 'ok': True, **self.completed(result, session, pending, started)}
-         finally:
-             try:
-                 if executor is not None:

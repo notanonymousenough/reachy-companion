@@ -18,7 +18,7 @@ Reachy, Hub, PC и VPS. Независимый reviewer проверяет ис�
 | Spoken snapshot | **РЕАЛЬНО РАБОТАЕТ:** после socket-only fix `7799e89` один human visual-запрос завершился успешно; человек подтвердил верность названия и описания. Exact visual STT, один turn без ошибки, CLI rc0 и независимый cleanup подтверждены | Это приёмка голосового camera → spoken description пути. Visual memory, latency target, streaming, отдельный STOP/motion прогон этим результатом не приняты; observer не дал terminal returned |
 | Prime-paused diagnostic | `73c241b`: Hub client обновлён без restart; в одном исправленном реальном прогоне cue выполнен при закрытом capture, затем подтверждены resume и свежий захват | **NOT_EXERCISED для камеры:** точный visual intent в STT отсутствовал, child не запускался. Один completed turn не доказывает vision/context. Повтора Alice vision не планируется |
 | Состояние после сбоя | Независимый watch подтвердил OFF, admission retired, factory empty, no aplay, stock known, volume 100%; активные сессии завершены | Поздний wrapper/client cleanup error после отзыва authority учитывать отдельно от исходного child failure |
-| Потоковый диалог | Реальный PC SSE/prefix contract подтверждён; `ad7c59b` содержит реализованный token-reader → segments → existing TTS с конечным drain | Реальная попытка остановилась на lifecycle validation: Docker после собственного запуска изменил только OomKillDisable false → null. Исходный worker/config восстановлены и проверены; streaming voice PASS нет. Public comparator `e86e54b` готов; runner разбирает GuardDenied первого fact-шага перед новым окном. ACK/исходники не заменяют этот результат; continuous/partial STT ещё не реализован |
+| Потоковый диалог | Реальный human-прогон дал содержательное начало ответа и owned STOP/cleanup; metadata terminal/producer true, failed/overflow false | **Overlap condition NOT met:** короткий ответ завершён до PCM/APLAY. Baseline восстановлен. Следующий stream-only инкремент — короткое содержательное первое предложение, приоритет запрошенной подробности и first-segment timings с общей producer/consumer schema; continuous/partial STT ещё не реализован |
 | Задержка vision | Два реальных image inference заняли около 11,03 и 10,35 s | Уже один inference превышает цель 10 s; полный speech-end → meaningful audio не измерен. Не объявлять цель достигнутой |
 | Память | Обычная RAM session history существует | Snapshot `/say` не добавляет visual question/answer в worker history; долговременная память и continuity через restart не приняты |
 | Полная автономность | Есть реализованные contracts, guards, fixtures и отдельные реальные checkpoints | Непрерывное восприятие/решения, память, полезные интеграции, recovery и длительная реальная приёмка ещё не завершены |
@@ -33,7 +33,7 @@ Reachy, Hub, PC и VPS. Независимый reviewer проверяет ис�
 | Порядок | Статус | Минимальный результат | Владелец | Реальная приёмка и доказательство |
 |---|---|---|---|---|
 | P0.1 | **Spoken camera PASS для одного реального human-запроса:** socket-only fix установлен, описание подтверждено человеком, финальный cleanup проверен | Сохранить принятый camera voice path и воспроизводимый `7799e89` fix | writer: public fix/план; runner: единственные device actions; координатор: следующая приёмка | Следующий приоритет — P0.2. Отдельные camera STOP/motion/no-resume и visual follow-up memory остаются открыты; один корректный spoken ответ их не заменяет |
-| P0.2 | Actual PC SSE/prefix PASS; реальный lifecycle failure, исходный worker/config восстановлены; streaming hardware PASS нет | Настоящее потоковое слушание и содержательный ответ до полной генерации | writer: existing capture/STT/brains/voice seams; runner: реальная запись timings и STOP; координатор: критерии | Сначала scoped Docker false→null comparison в candidate validation/recovery, затем реальный длинный ответ/STOP/следующий turn и повторяемая команда входа в проверенный режим. Source checks не заменяют этот результат. Continuous perception/partial STT/endpointing — отдельный следующий seam, ещё не реализован |
+| P0.2 | Содержательный human answer и owned STOP подтверждены; overlap на этом коротком ответе не получен; baseline восстановлен | Настоящий длинный ответ с ранней содержательной речью и последующим next turn | writer: малый opt-in prompt/timing/schema инкремент в exact legacy seams; runner: один реальный прогон; координатор: критерии | Проверить фактически распознанную просьбу о длине, meaningful речь до следующих token READ, STOP/terminal/quiescence и fresh next turn в одном PC процессе. Source timings не являются acoustic PASS; continuous/partial STT — отдельный следующий seam |
 | P1.1 | Частично, не принято | Обычный контекст, затем visual context с provenance/TTL; долговременные факты и исправления | writer: существующие session/memory seams; runner + человек: смысловая проверка | Факт → vision → местоименная ссылка на прежний факт; отдельно visual follow-up из реально виденного. Restart сохраняет разрешённые факты/mute, correction/deletion работает; vision history не обещать до реализации |
 | P1.2 | Не принято | Первая полезная typed integration через существующий broker/worker | writer: маленький adapter/schema; runner: настоящий target; координатор: scope | Реальная полезная задача с intended/attempted/completed receipt; ошибки/timeout/duplicate/cancel различимы. Нет raw shell/секретов/новых grants из текста модели или OCR |
 | P1.3 | Частично guards есть, полная приёмка открыта | Recovery, ресурсы, STOP, воспроизводимая доставка Git/transfer | writer + reviewer; runner: actual failures/recovery | Сеть/worker/model/restart/перегрузка не оживляют старые речь/движения. Bounded queues/VRAM/storage, сохранившиеся mute/volume, exact source hashes, конечный deploy/readiness/rollback без конкурирующих владельцев |
@@ -112,10 +112,30 @@ Producer socket replacement требует fail-closed проверки и от�
 Agent refresh; широкого /tmp bind и auto media acquire нет.
 
 Следующий P0 — настоящая streaming voice приёмка через существующие seams,
-без расширения инфраструктуры. Runner разбирает конкретный GuardDenied первого
-fact-шага; до этой evidence runtime features не меняются. Текущий исходный PC
-worker/config/inventory и пустой slot сохранены. Старые stream boot/epoch pins
-не активируются: новому окну нужна свежая привязка к текущему Agent.
+без расширения инфраструктуры. В новом реальном human-прогоне человек услышал
+начало содержательного объяснения; owned STOP и cleanup подтверждены. На одном
+PC clock first semantic = 0,868067 s, first PCM = 1,193608 s, last token READ =
+1,087325 s, DONE READ = 1,087982 s; 54 chunks, terminal и producer quiesced true,
+failed/overflow false. Воспроизведение наблюдалось после завершения модели:
+**overlap condition NOT met** на этом коротком ответе, не общий отказ streaming.
+STOP guard span 3,0287 s и cleanup 0,4509 s относятся к этому software-наблюдению,
+не physical E2E/P95. Следующий turn не был принят: private consumer пропустил
+из своего allowlist существующий boolean model_post_attempted. Это schema drift,
+а не ошибка worker. После коррекции и quiescence исходный baseline/config
+полностью восстановлены, slot пустой, Robot OFF/unowned/100%; камера сохранена.
+
+Effective-config witness подтвердил default brevity и explicit detail exception;
+распознанная просьба именно о восьми предложениях не сохранилась. Hard cap или
+ошибка STT не доказаны. Подготовлен конкретный следующий opt-in инкремент: просьба
+о подробности/числе предложений имеет приоритет над обычной краткостью, первое
+предложение короткое, законченное и содержательное; затем запрошенное объяснение.
+FIRST-segment timings отделяют Piper wait, SoX, cues и подготовку первого audio
+события на одном PC clock; producer и private consumer используют один pinned
+строгий parser/schema вместо отдельных allowlists:
+[content-first-sentence-iteration.md](../../deploy/patches/content-first-sentence-iteration.md).
+Это source checkpoint, не улучшенная реальная latency/overlap/next-turn приёмка.
+Нет Agent/profile/model/budget изменений, нового owner или искусственного delay.
+Старые stream boot/epoch pins не активируются; runner готовит свежее конечное окно.
 
 Реальный streaming rollout под `ad7c59b` завершился **lifecycle failure**, а не
 голосовой приёмкой. На Docker Engine 29.7.2 / API 1.55 собственный candidate был
