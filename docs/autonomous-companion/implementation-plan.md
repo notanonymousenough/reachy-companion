@@ -26,7 +26,33 @@ Bound say использует тот же locked guard перед очистк�
 старое listening. Независимый source GO и13 focused tests PASS, включая actual HTTP
 handler, mixed owners, новый grant перед Event mutation и TTL при ожидании lock;
 16 вместе с прежними pause/voice regressions PASS.
-Это source acceptance; установка/новый boot и actual bound turn ещё не приняты.
+Actual установка4e2 выполнена: один Agent restart, новый boot подтверждён,
+OFF/100, config/profile/token/unit/shared sources, factory instance и camera IPC
+сохранены. Новая baseline receipt отдельная; исторический prefix receipt не менялся.
+Caller delta также source-reviewed: say/pause/resume используют один исходный
+binding, deadlines не расширены, controller/posthoc/new baseline pins согласованы.
+Actual bound CLOUDS завершён native/phase/postnative/topic PASS, cleanup OFF/100,
+без interruptions. Краткость FAIL:14 spoken words, два вопроса, sampled span7,180 s
+как нижняя граница. Первый целый вопрос сам содержит7 words, поэтому выбор первого
+вопроса тоже не удовлетворяет target. Prompt-only изменение недостаточно.
+
+Подготовлен и независимо принят source-only opt-in gate для прежних RAW9B/endpoint:
+точные overlays Voice92cf→248e389 и Configc0→e7d3de62, default
+`conversation.alice_question_gate=false`. При opt-in и Alice prefix весь complete
+model candidate до TTS должен быть одним законченным вопросом3–5 words. Ничего
+не выбирается, не обрезается, не ремонтируется и не заменяется ACK. Только после
+known-complete invalid candidate разрешена одна regeneration в оставшемся исходном
+request budget с теми же user/history. Invalid output не публикуется и не попадает
+в history; HTTP/timeout/backend errors не повторяются. STOP/authority/deadline
+проверяются до/между/после генераций и перед TTS; ACK branch отключён в Alice mode.
+Explicit-details request сохраняет исходный long-answer путь/max512.16 focused
+tests PASS, independent source GO. Deadline запрещает позднюю публикацию, но не
+доказывает мгновенное прерывание blocking backend I/O; gate проверяет форму,
+не семантическую полезность или отсутствие скрытой просьбы выполнить действие.
+Runtime ещё не принят. Из-за read-only worker rootfs установка использует прежний
+same-image strict-slot overlay с двумя individual read-only binds Voice/Config,
+единственным worker на8082, recoverable baseline и exact private-profile restore.
+Это не доказательство длительного диалога или meaningful streaming.
 
 Обновлено 2026-10-17. Владелец плана — координатор Reachy Mini; writer ведёт код,
 проверки и этот документ; единственный runner выполняет изменения и проверки на

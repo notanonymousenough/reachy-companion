@@ -1,0 +1,20 @@
+--- a/config.py
++++ b/config.py
+@@ -32,7 +32,7 @@
+                 fill(self.data, {section: defaults[section]})
+         # Safe even when a deployed checkout has no example configuration.
+         fill(self.data, {'guarded_motion': {'enabled': False, 'transport':'native','socket_path':'data/native-motion.sock','policy_path':'data/motion-policy.json'}})
+-        fill(self.data, {'conversation':{'speech_address_prefix':''}})
++        fill(self.data, {'conversation':{'speech_address_prefix':'', 'alice_question_gate':False}})
+         profile = self.data.get('runtime', {}).get('profile', '')
+         if profile:
+             profile_path = (self.root / profile).resolve()
+@@ -150,6 +150,8 @@
+                 raise ValueError('Invalid speaker EQ headroom')
+         barge = self.data['conversation'].get('barge_in', {})
+         prefix=self.data['conversation']['speech_address_prefix']
++        if type(self.data['conversation']['alice_question_gate']) is not bool:
++            raise ValueError('Boolean Alice question gate required')
+         if type(prefix) is not str or prefix not in ('','Алиса, '):
+             raise ValueError('Invalid conversation speech address prefix')
+         if not 0 <= barge.get('warmup_chunks', 9) <= 30:

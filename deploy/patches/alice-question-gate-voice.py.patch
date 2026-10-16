@@ -1,0 +1,215 @@
+--- a/voice.py
++++ b/voice.py
+@@ -1,6 +1,7 @@
+ #!/usr/bin/env python3
+ """LAN-only Russian voice pipeline: Vosk -> LM Studio -> Piper."""
+ import base64
++import copy
+ import hmac
+ import io
+ import json
+@@ -33,6 +34,41 @@
+             'equalizer', str(eq['bass_hz']), str(eq['bass_width_q']) + 'q', str(eq['bass_db']),
+             'equalizer', str(eq['presence_hz']), str(eq['presence_width_q']) + 'q', str(eq['presence_db']),
+             'treble', str(eq['treble_db']), 'gain', '-n', str(-eq['headroom_db'])]
++
++
++class AliceQuestionRejected(RuntimeError):
++    """A complete model candidate failed the opt-in spoken-question policy."""
++
++
++def explicit_details(text):
++    value = unicodedata.normalize('NFKC', text).casefold().replace('ё', 'е').strip()
++    value = re.sub(r'^(?:ричи|reachy|алиса)\s*[,!]\s*', '', value)
++    value = re.sub(r'^пожалуйста[,\s]+', '', value)
++    detail = r'(?:подробнее|подробно|развернуто|детальнее|детально)'
++    if re.fullmatch(r'(?:можно\s+|давай\s+)?'+detail+r'[.!?]?', value):
++        return True
++    return bool(not re.search(r'\b(?:не|без|кратко|коротко)\b', value)
++        and re.search(r'\b'+detail+r'\b', value)
++        and re.match(r'^(?:(?:расскажи|объясни|раскрой|опиши|поясни|ответь|разверни)\b|'
++            r'(?:можешь\s+)?(?:рассказать|объяснить|раскрыть|описать|пояснить)\b|'
++            +detail+r'\s+(?:расскажи|объясни|опиши|поясни)\b)', value))
++
++
++def validate_alice_question(reply):
++    if type(reply) is not str:
++        raise TypeError('Model candidate must be text')
++    from .expressions import spoken_expression
++    from .spoken_reply import validate_text
++    body, _ = spoken_expression(reply)
++    try:
++        validate_text(body, dict(schema_version='reply-1', max_chars=120, no_question=False, no_wake=True))
++    except RuntimeError:
++        raise AliceQuestionRejected('Invalid short-question text') from None
++    if (not re.fullmatch(r'[^.!?…;:\n\r]+\?', body)
++            or not 3 <= len(re.findall(r'[^\W_]+', body)) <= 5
++            or not re.match(r'(?i)^(?:почему|как|что|откуда|зачем|когда|где|чем|какой|какая|какое|какие|кто|насколько)\b', body)):
++        raise AliceQuestionRejected('One complete 3-5 word question required')
++    return body  # Validation only: never select, repair, trim or substitute text.
+ 
+ 
+ class Pipeline:
+@@ -163,7 +199,42 @@
+         return dict(speech_address_prefix=prefix,speech_address_scope='tts_utterance',
+                     spoken_text=self.address_speech(re.sub(r'[*#`]', '', text).strip(),prefix)) if prefix else {}
+ 
+-    def answer(self, text, session, interrupted=False, *, reply_constraints=None):
++    def alice_authority(self, deadline, expected=None):
++        began = time.monotonic()
++        remaining = deadline - began
++        if remaining <= 0:
++            raise TimeoutError('Question request deadline expired')
++        op = self.request(self.config['network']['hub_url'].rstrip('/')+'/control/operator',
++                          authenticated=True, timeout=min(.3, remaining))
++        fields = {'agent_boot_id','microphone_epoch','microphone_owner_id','microphone_enabled',
++            'capture_active','phase','listening','microphone_state_error','motion_policy',
++            'motion_policy_owner_id','expression_version'}
++        if type(op) is not dict or set(op) != fields or type(op['motion_policy']) is not dict:
++            raise RuntimeError('Question operator unknown')
++        policy = op['motion_policy']
++        if (set(policy) != {'epoch','motor_enabled','quiet','privacy_all'}
++                or type(op['agent_boot_id']) is not str or not 1 <= len(op['agent_boot_id']) <= 256
++                or any(type(v) is not int or not 0 <= v < 2**63 for v in
++                       (op['microphone_epoch'], op['expression_version'], policy['epoch']))
++                or any(op[k] is not None and (type(op[k]) is not str or not 1 <= len(op[k]) <= 128)
++                       for k in ('microphone_owner_id','motion_policy_owner_id'))
++                or any(type(op[k]) is not bool for k in ('capture_active','listening'))
++                or op['phase'] not in ('starting','paused','listening','recording','processing','speaking','waiting_to_resume','music','error','stopped')
++                or op['microphone_owner_id'] != op['motion_policy_owner_id']
++                or op['microphone_state_error'] is not None
++                or op['microphone_enabled'] is not True or policy['motor_enabled'] is not True
++                or policy['quiet'] is not False or policy['privacy_all'] is not False):
++            raise RuntimeError('Question operator unavailable')
++        authority = (op['agent_boot_id'], op['microphone_epoch'], op['microphone_owner_id'],
++                     policy['epoch'], op['motion_policy_owner_id'], op['listening'])
++        ended = time.monotonic()
++        if ended - began > .3 or ended >= deadline:
++            raise TimeoutError('Question operator or request expired')
++        if expected is not None and authority != expected:
++            raise RuntimeError('Question operator changed')
++        return authority
++
++    def answer(self, text, session, interrupted=False, *, reply_constraints=None, question_gate=False, question_scope=None, question_deadline=None):
+         now = time.monotonic()
+         self.sessions = {k: v for k, v in self.sessions.items() if now - v['used'] < self.config['llm']['history_ttl_seconds']}
+         if session not in self.sessions and len(self.sessions) >= self.config['llm']['max_sessions']:
+@@ -177,11 +248,49 @@
+         messages.append({'role': 'user', 'content': text})
+         from .brains import answer
+         agent_session = self.agent_sessions.setdefault(session, uuid.uuid4().hex)
+-        reply = (answer(self.config,messages,agent_session,reply_constraints=reply_constraints)
+-                 if reply_constraints is not None else answer(self.config,messages,agent_session))
++        attempts = None
++        if question_gate:
++            if reply_constraints is not None or self.config['brains']['provider'] != 'lm_studio':
++                raise ValueError('Short questions require the existing raw local model route')
++            deadline = question_deadline
++            if type(deadline) not in (int, float) or not 0 < deadline <= 1e15 or not math.isfinite(deadline):
++                raise ValueError('Original question deadline required')
++            scope = self.alice_authority(deadline, question_scope)
++            for attempt in range(2):
++                self.alice_authority(deadline, scope)
++                remaining = deadline - time.monotonic()
++                if remaining <= 0:
++                    raise TimeoutError('Question request deadline expired')
++                scoped = copy.copy(self.config)
++                scoped.data = dict(self.config.data)
++                scoped.data['timeouts'] = dict(self.config['timeouts'], llm=remaining)
++                request_messages = list(messages)
++                if attempt:
++                    request_messages[0] = dict(messages[0], content=messages[0]['content']+
++                        '\nСформулируй ровно один законченный познавательный вопрос на 3–5 слов. '
++                        'Начни с вопросительного слова. Только вопрос, без обращения, вступления и второго вопроса.')
++                # Backend exceptions, HTTP errors, unknown POST/timeout and incomplete
++                # model terminals escape. Only a returned complete invalid candidate
++                # permits one new generation in this same original request budget.
++                reply = answer(scoped, request_messages, agent_session)
++                self.alice_authority(deadline, scope)
++                try:
++                    validate_alice_question(reply)
++                except AliceQuestionRejected:
++                    if attempt:
++                        raise
++                    continue
++                self.alice_authority(deadline, scope)
++                attempts = attempt + 1
++                break
++        else:
++            reply = (answer(self.config,messages,agent_session,reply_constraints=reply_constraints)
++                     if reply_constraints is not None else answer(self.config,messages,agent_session))
+         pending = entry['messages'] + [{'role': 'user', 'content': text},
+                                        {'role': 'assistant', 'content': reply}]
+-        return reply, {'used': now, 'messages': pending[-self.config['llm']['history_messages']:]}
++        pending = {'used': now, 'messages': pending[-self.config['llm']['history_messages']:]}
++        if attempts is not None:pending['_alice_question_attempts'] = attempts
++        return reply, pending
+ 
+     def reset(self, session):
+         self.sessions.pop(session, None)
+@@ -189,6 +298,15 @@
+ 
+     def prepare(self, payload, path, recognized_text=None, answer_result=None):
+         prefix=self.speech_address(payload.get('speech_address_prefix',DEFAULT_SPEECH_ADDRESS))
++        alice_mode = (self.config['conversation'].get('alice_question_gate', False) is True
++                      and prefix == 'Алиса, ' and path != '/say')
++        question_scope = question_deadline = None
++        if alice_mode:
++            budget = self.config['timeouts']['llm']
++            if type(budget) not in (int, float) or not 0 < budget <= 3600 or not math.isfinite(budget):
++                raise ValueError('Finite original LLM request budget required')
++            question_deadline = time.monotonic() + budget
++            question_scope = self.alice_authority(question_deadline)
+         reply_constraints=None
+         if 'reply_constraints' in payload:
+             from .spoken_reply import constraints,check_profile
+@@ -211,6 +329,9 @@
+         pending = None
+         command = None
+         decision = self.classify(text)
++        question_gate = alice_mode and not explicit_details(text) and bool(text) and decision['action'] == 'answer'
++        if question_gate and (reply_constraints is not None or answer_result is not None):
++            raise ValueError('Short-question generation cannot use a schema or precomputed answer')
+         if reply_constraints is not None and (not text or decision['action']!='answer'):
+             raise ValueError('Constrained reply cannot use a preset/control path')
+         if not text:
+@@ -228,9 +349,11 @@
+             reply = text
+         else:
+             self.phase = 'thinking'
+-            reply, pending = (answer_result if answer_result is not None else
++            reply, pending = (self.answer(text,session,payload.get('previous_reply_interrupted',False),
++                                question_gate=True, question_scope=question_scope, question_deadline=question_deadline)
++                              if question_gate else (answer_result if answer_result is not None else
+                               (self.answer(text,session,payload.get('previous_reply_interrupted',False),reply_constraints=reply_constraints)
+-                               if reply_constraints is not None else self.answer(text,session,payload.get('previous_reply_interrupted',False))))
++                               if reply_constraints is not None else self.answer(text,session,payload.get('previous_reply_interrupted',False)))))
+         if reply_constraints is not None:
+             from .spoken_reply import validate_text
+             validate_text(reply,reply_constraints)
+@@ -246,8 +369,14 @@
+             raise RuntimeError('Backend returned an expression without spoken text')
+         if pending is not None:
+             pending['messages'][-1]['content'] = reply
++        report = {}
++        if question_gate:
++            self.alice_authority(question_deadline, question_scope)
++            validate_alice_question(reply)
++            report = dict(alice_question_gate_validated=True,
++                alice_question_generation_attempts=pending.pop('_alice_question_attempts'))
+         return {'transcript': text, 'reply': reply, 'command': command, 'emotion': emotion, 'segments': segments,
+-                'decision': decision, **self.speech_address_metadata(reply,prefix)}, session, pending
++                'decision': decision, **report, **self.speech_address_metadata(reply,prefix)}, session, pending
+ 
+     def completed(self, result, session, pending, started):
+         if pending is not None:
+@@ -325,7 +454,8 @@
+             recognized = answer_result = None
+             intro_bytes = 0
+             acknowledgements = self.config['conversation'].get('interaction', {}).get('acknowledgements', {})
+-            if path != '/say' and acknowledgements.get('enabled', False) and 'reply_constraints' not in payload:
++            if (path != '/say' and acknowledgements.get('enabled', False) and 'reply_constraints' not in payload
++                    and not (self.config['conversation'].get('alice_question_gate', False) is True and prefix == 'Алиса, ')):
+                 self.check_robot()
+                 recognized = (self.transcribe(base64.b64decode(payload['pcm_base64'], validate=True))
+                               if path == '/turn' else payload['text'].strip())
