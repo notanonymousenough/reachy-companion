@@ -3,9 +3,12 @@ import copy
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 import tempfile
+import stat
+import subprocess
 import unittest
 from unittest.mock import Mock, patch
 
@@ -78,6 +81,30 @@ class LauncherTests(unittest.TestCase):
             if args[-1]['action']=='finish':raise TimeoutError
             return self.robot(*args)
         self.assertEqual(self.run_launch(robot=lost),1)
+
+    def test_owned_mux_255_requires_validated_transfer_explicit_close_and_natural_reap(self):
+        cfg=dict(deployment=dict(robot=dict(user='pollen',host='robot',root='/home/pollen/reachy-companion'),
+            hub=dict(user='deploy',host='hub')))
+        for close_status,forced,valid,accepted in ((0,False,True,True),(1,False,True,False),
+                (0,True,True,False),(0,False,False,False)):
+            with self.subTest(close=close_status,forced=forced,valid=valid):
+                master=Mock();master.poll.return_value=None;master.returncode=None;calls=[]
+                def communicate(**kwargs):
+                    calls.append(True)
+                    if forced and len(calls)==1:raise subprocess.TimeoutExpired('fixture',2)
+                    master.returncode=255
+                    return b'controlled helper EOF',b''
+                master.communicate.side_effect=communicate
+                def run(command,**kwargs):
+                    if '-O' in command:
+                        return SimpleNamespace(returncode=close_status if 'exit' in command else 0)
+                    return SimpleNamespace(returncode=0,stdout=b'{}' if valid else b'not JSON')
+                with patch.object(launcher.subprocess,'Popen',return_value=master), \
+                        patch.object(launcher.subprocess,'run',side_effect=run), \
+                        patch.object(Path,'lstat',return_value=SimpleNamespace(st_mode=stat.S_IFSOCK|0o600,st_uid=os.geteuid())):
+                    if accepted:self.assertEqual(launcher.robot_call(cfg,self.hosts,dict(action='fixture')), {})
+                    else:
+                        with self.assertRaises(RuntimeError):launcher.robot_call(cfg,self.hosts,dict(action='fixture'))
 
 
 class WatchTests(unittest.TestCase):

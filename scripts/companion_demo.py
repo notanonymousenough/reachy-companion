@@ -45,6 +45,8 @@ def robot_call(config, known_hosts, payload):
             '-oConnectTimeout=3', destination]
         master = subprocess.Popen(setup, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
         close_known = False
+        transfer_validated = False
+        forced_reap = False
         try:
             while time.monotonic() < until:
                 need(master.poll() is None)
@@ -63,6 +65,7 @@ def robot_call(config, known_hosts, payload):
             need(value.returncode == 0 and len(value.stdout) <= 16384)
             answer = json.loads(value.stdout)
             need(type(answer) is dict)
+            transfer_validated = True
             return answer
         finally:
             try:
@@ -71,12 +74,16 @@ def robot_call(config, known_hosts, payload):
             except (OSError, subprocess.TimeoutExpired): pass
             try: master.communicate(timeout=2)
             except subprocess.TimeoutExpired:
+                forced_reap = True
                 master.terminate()
                 try: master.communicate(timeout=1)
                 except subprocess.TimeoutExpired:
                     master.kill()
                     master.communicate(timeout=1)
-            need(close_known and master.returncode == 0)
+            # The existing PTY helper can report SSH 255 after OUR successful
+            # mux exit. Accept it only after validated transfer + explicit close
+            # + natural helper EOF/reaping, never after a forced or lost close.
+            need(transfer_validated and close_known and not forced_reap and master.returncode in (0, 255))
 
 
 def validate_ready(value, owner):
