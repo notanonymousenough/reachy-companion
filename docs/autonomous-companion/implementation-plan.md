@@ -241,6 +241,16 @@ Reply sampled process span6,7747 s — нижняя граница, поэтом
 граница длительности. Следующий шаг — более короткий обычный вопрос и явное
 исключение подробного ответа, без универсального96-token ограничения.
 
+Эта коррекция выполнена через existing cfg-only путь: старый short suffix заменён
+на default3–5 words с explicit-details exception, max_tokens96→512. После одного
+restart этого этапа initial readiness снова истекла; отдельный RO reconcile
+подтвердил effective profile/idle200/прежние source/image и OFF. Новая history
+epoch отражена явно. Следующий SNOW actual turn прошёл native/phase/postnative,
+cleanup OFF/100;6 spoken words/complete true, reply sampled span2,998 s, cue3,134 s.
+Topic false сохранён отдельно. Это подтверждает короткую законченную реплику по
+word count, не certified <=5 s acoustic duration и не длительную сессию. Настоящий
+streaming/continuous hearing/длительная Alice беседа ещё не приняты этим ходом.
+
 На cf50/default-off выполнен один согласованный human-цикл. Оба окна объявлены
 человеку только после actual capture-active; человек прямо подтвердил, что оба
 ответа слышны. Один уникальный content attempt прошёл общий strict Agent21 + PC31
