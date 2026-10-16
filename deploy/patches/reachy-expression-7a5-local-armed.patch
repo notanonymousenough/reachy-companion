@@ -1,0 +1,136 @@
+--- expression_player.py
++++ expression_player.py
+@@ -14,6 +14,12 @@
+         self.stock=getattr(config,'data',config).get('guarded_motion',{}).get('transport','native')=='stock'
+         self.state_binding=None
+         self.settings = config['conversation'].get('expressions', {})
++        self.timeline_gate = self.settings.get('timeline_gate', 'completion')
++        if type(self.timeline_gate) is not str or self.timeline_gate not in ('completion', 'local_armed'):
++            raise ValueError('Invalid timeline gate mode')
++        if self.timeline_gate == 'local_armed' and (not self.stock or self.binding is None):
++            raise ValueError('Local timeline arming requires the existing stock binding')
++        self.timeline_armed = None
+         self.condition = threading.Condition()
+         self.state = None
+         self.cues = []
+@@ -65,12 +71,13 @@
+                 raise ValueError('Invalid motion timestamp')
+             validate_steps(cue['steps'], self.settings)
+             valid.append(cue)
+-        binding=self.capture_binding()
++        binding=self._timeline_binding() if self.timeline_gate == 'local_armed' else self.capture_binding()
+         with self.condition:
+             if self.stock and self.version!=observed_version:return
+             if self.state != ('timeline', 'neutral') or self.clock is not clock:
+                 self.state = ('timeline', 'neutral')
+                 self.version += 1
++                self.timeline_armed = None
+                 self.cues = []
+                 self.clock = clock
+                 self.state_binding=binding
+@@ -79,11 +86,53 @@
+ 
+     def wait_timeline(self, clock):
+         if not self.settings.get('enabled', False) or not self.permitted(): return
++        if self.timeline_gate == 'local_armed':
++            return self._wait_timeline_armed(clock)
+         with self.condition:
+             version = self.version
+             deadline = time.monotonic()+self.config['timeouts']['http']+self.settings['max_total_seconds']+2
+             while self.clock is clock and self.completed < version and not self.stopping.is_set():
+                 if time.monotonic() >= deadline: raise TimeoutError('First speech motion did not start')
++                self.condition.wait(.05)
++
++    def _timeline_binding(self):
++        # Never call while holding condition: Agent withdrawal holds its mic
++        # lock while calling hold(), and capture_binding acquires that mic lock.
++        value = self.capture_binding()
++        fields = {'agent_boot_id', 'microphone_epoch', 'microphone_enabled', 'policy_epoch'}
++        if (type(value) is not dict or set(value) != fields
++                or type(value['agent_boot_id']) is not str or not 1 <= len(value['agent_boot_id']) <= 256
++                or type(value['microphone_enabled']) is not bool
++                or any(type(value[key]) is not int or not 0 <= value[key] < 2**63
++                       for key in ('microphone_epoch', 'policy_epoch'))):
++            raise RuntimeError('Current typed timeline binding required')
++        return dict(value)
++
++    def _timeline_current(self, ticket):
++        # Pure local checks, called under condition; this is not SDK admission.
++        return (self.state == ('timeline', 'neutral') and self.clock is ticket[0]
++                and self.version == ticket[1] and self.state_binding == ticket[2])
++
++    def _timeline_ready(self, ticket):
++        armed = self.timeline_armed
++        return (armed is not None and armed[0] is ticket[0] and armed[1] == ticket[1]
++                and armed[2] == ticket[2])
++
++    def _wait_timeline_armed(self, clock):
++        with self.condition:
++            ticket = (clock, self.version, dict(self.state_binding or {}))
++        deadline = time.monotonic()+self.config['timeouts']['http']+self.settings['max_total_seconds']+2
++        while True:
++            current = self._timeline_binding()
++            allowed = self.permitted()
++            with self.condition:
++                if (self.stopping.is_set() or not allowed or not self._timeline_current(ticket)
++                        or current != ticket[2]):
++                    raise RuntimeError('Timeline arming authority changed')
++                if time.monotonic() >= deadline:
++                    raise TimeoutError('Local speech timeline did not arm')
++                if self._timeline_ready(ticket):
++                    return
+                 self.condition.wait(.05)
+ 
+     def dance(self, result, captured_at):
+@@ -110,6 +159,7 @@
+ 
+     def hold(self):
+         with self.condition:
++            self.timeline_armed = None
+             self.state = None
+             self.cues = []
+             self.clock = None
+@@ -128,6 +178,7 @@
+         variant = 0
+         while not self.stopping.is_set():
+             cue = None
++            arm = None
+             with self.condition:
+                 while not self.stopping.is_set():
+                     if self.state == ('dance','playful'):
+@@ -139,6 +190,11 @@
+                             break
+                         self.condition.wait(.05)
+                     elif self.state == ('timeline', 'neutral'):
++                        if self.timeline_gate == 'local_armed':
++                            ticket = (self.clock, self.version, dict(self.state_binding))
++                            if not self._timeline_ready(ticket):
++                                arm = ticket
++                                break
+                         if self.cues and self.cues[0]['at'] <= self.clock.seconds():
+                             cue = self.cues.pop(0)
+                             # Late cues are merged into the current target, never queued as a backlog.
+@@ -157,6 +213,23 @@
+                 if self.stopping.is_set():
+                     break
+                 state, version, binding = self.state, self.version, self.state_binding
++            if arm is not None:
++                try:
++                    current = self._timeline_binding()
++                    allowed = self.permitted()
++                    with self.condition:
++                        if (not self.stopping.is_set() and self._timeline_current(arm)
++                                and allowed and current == arm[2]):
++                            # Scheduler owns this validated timeline. Do not
++                            # call this a submitted/admitted/completed SDK move.
++                            self.timeline_armed = arm
++                            self.condition.notify_all()
++                        else:
++                            self.condition.wait(.05)
++                except Exception:
++                    self.last_error = 'Local timeline binding unavailable'
++                    self.stopping.wait(.05)
++                continue
+             if state is None:
+                 with self.condition:
+                     handled = version
