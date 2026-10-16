@@ -71,6 +71,8 @@ for the launcher's unchanged boot/epoch/owner claims. It never restores old ON
 states or overwrites a newer operator. Mic OFF uses the existing Agent speaker,
 capture and expression cancellation path; factory motion retains its existing
 owned-task stop checks. This is not a certified physical emergency stop.
+Reaching the completed-turn limit enters cleanup immediately, including when
+the next capture is already recording; it does not wait for a listening phase.
 
 The printed summary contains counts and a stock task observation only, without
 transcripts, prompts, audio, tokens or private configuration. A new stock UUID

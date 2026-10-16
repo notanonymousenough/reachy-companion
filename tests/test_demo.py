@@ -88,6 +88,22 @@ class DemoTests(unittest.TestCase):
         self.assertEqual(len(self.posts), 4)
         self.assertNotIn('owner_id', self.posts[-1][1])
 
+    def test_turn_limit_during_recording_cleans_up_without_a_fourth_loop(self):
+        original=self.request;status_reads=[]
+        def recording(*args,**kwargs):
+            if args[1].endswith('/control/operator') and self.operator['microphone_enabled']:
+                self.operator['phase']='recording'
+            if args[1].endswith('/control/status'):status_reads.append(True)
+            return original(*args,**kwargs)
+        with patch('reachy_companion.client.request',side_effect=recording), \
+                patch('reachy_companion.client.time.sleep'),patch('builtins.print'):
+            self.assertEqual(demo({'network':{'hub_url':'http://fixture'}},turns=3),0)
+        self.assertEqual(self.completed,3)
+        self.assertEqual(len(status_reads),4)  # initial counter plus exactly three loop reads
+        self.assertEqual(len(self.posts),4)
+        self.assertFalse(self.operator['microphone_enabled'])
+        self.assertFalse(self.operator['motion_policy']['motor_enabled'])
+
     def test_prearmed_launcher_owner_used_for_both_claims_and_cleanup(self):
         owner='00112233-4455-4677-8899-aabbccddeeff'
         self.assertEqual(self.run_demo(owner_id=owner),0)

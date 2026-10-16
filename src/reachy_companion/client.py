@@ -200,11 +200,11 @@ def demo(config, *, turns=3, seconds=180, owner_id=None, operator_binding=None):
                 print('Microphone capture active: speak related turns now.', flush=True)
                 listening_reported = True
             completed = max(0, value['turns'] - start)
-            task = call('/status')['stock_motion']['owned_uuid']
-            receipt = receipt or (task is not None and task != previous_task)
-            if completed >= turns and current['phase'] == 'listening':
+            if completed >= turns:
                 result = 0
                 break
+            task = call('/status')['stock_motion']['owned_uuid']
+            receipt = receipt or (task is not None and task != previous_task)
             time.sleep(.5)
     except KeyboardInterrupt:
         result = 130
