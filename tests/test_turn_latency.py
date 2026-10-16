@@ -21,6 +21,32 @@ class Clock:
 
 
 class LatencyRecordTests(unittest.TestCase):
+    def test_pcm_counts_cumulative_odd_writes_even_frames_and_saturates_without_inflation(self):
+        trace=TurnLatency(ID,'agent')
+        initial=trace.report('complete')
+        self.assertIsNone(initial['pcm_frames']);self.assertIsNone(initial['written_frames'])
+        self.assertIsNone(initial['pcm_seconds'])
+        trace.pcm(320)
+        trace.pcm(1,written=True)
+        self.assertEqual(trace.report('complete')['written_frames'],0)
+        trace.pcm(319,written=True)
+        report=trace.report('complete')
+        self.assertEqual(report['written_frames'],160);self.assertEqual(report['pcm_frames'],160)
+        self.assertEqual(report['pcm_seconds'],.01);self.assertEqual(set(report),set(initial))
+        for parts in ((320,320),(1,1,317,1),(0,320,0)):
+            with self.subTest(parts=parts):
+                even=TurnLatency(ID,'agent')
+                for size in parts:even.pcm(size,written=True)
+                self.assertEqual(even.report('complete')['written_frames'],sum(parts)//2)
+                self.assertIsNone(even.report('complete')['pcm_frames'])
+        for written in (False,True):
+            capped=TurnLatency(ID,'agent');name='written_frames' if written else 'pcm_frames'
+            capped.pcm(2*10**9-1,written=written)
+            self.assertEqual(capped.report('complete')[name],10**9-1)
+            for size in (1,1,319,2*10**9):
+                capped.pcm(size,written=written)
+                self.assertEqual(capped.report('complete')[name],10**9)
+
     def test_generator_active_time_excludes_consumer_backpressure_and_close_does_not_advance(self):
         clock=Clock();closed=[]
         def chunks():

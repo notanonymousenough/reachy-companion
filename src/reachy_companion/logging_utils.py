@@ -25,6 +25,7 @@ class TurnLatency:
                        for name in LATENCY_STAGES[role]}
         self.marks = dict.fromkeys(LATENCY_MARKS[role])
         self.pcm_frames = self.written_frames = None
+        self._pcm_bytes = self._written_bytes = None
 
     def offset(self):return round(min(86400.0, max(0.0, time.monotonic() - self.started)), 6)
 
@@ -49,7 +50,12 @@ class TurnLatency:
     def pcm(self, byte_count, written=False):
         with self.lock:
             name = 'written_frames' if written else 'pcm_frames'
-            setattr(self, name, min(10**9, (getattr(self, name) or 0) + byte_count//2))
+            byte_name = '_written_bytes' if written else '_pcm_bytes'
+            # A positive pipe write may end between the two bytes of a frame.
+            # Saturate cumulative bytes, preserving that remainder until paired.
+            total = min(2*10**9, (getattr(self, byte_name) or 0) + byte_count)
+            setattr(self, byte_name, total)
+            setattr(self, name, total//2)
 
     def report(self, outcome):
         if outcome not in ('complete', 'cancelled', 'interrupted', 'error'):raise ValueError('Invalid latency outcome')

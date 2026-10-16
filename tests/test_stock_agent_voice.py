@@ -367,8 +367,15 @@ class StockAgentVoiceTests(unittest.TestCase):
         self.config.data['logging']['latency_diagnostics']=True
         self.config.data['conversation']['expressions']['enabled']=False
         real_popen=subprocess.Popen
+        from reachy_companion import agent as agent_module
+        real_write=agent_module.os.write
         for cancel in (False,True):
             processes=[]
+            accepted=[]
+            def partial_write(fd,pcm):
+                written=real_write(fd,pcm[:1] if not accepted else pcm)
+                accepted.append(written)
+                return written
             def opened(item,**kwargs):
                 request=json.loads(item.data)
                 worker=TurnLatency(request['latency_request_id'],'worker').report('complete')
@@ -388,11 +395,13 @@ class StockAgentVoiceTests(unittest.TestCase):
                 self.assertEqual(command[0],'aplay')
                 process=real_popen([sys.executable,'-c','import sys,time;sys.stdin.buffer.read();time.sleep(.02)'],*args,**kwargs)
                 processes.append(process);return process
-            with patch.object(self.agent.http,'open',side_effect=opened),patch('reachy_companion.agent.subprocess.Popen',side_effect=popen):
+            with patch.object(self.agent.http,'open',side_effect=opened),patch('reachy_companion.agent.subprocess.Popen',side_effect=popen), \
+                    patch('reachy_companion.agent.os.write',side_effect=partial_write):
                 result=self.agent.voice('/turn',{})
             report=result['latency'];own=report['agent']
             self.assertIsNotNone(own['marks']['first_write'])
             self.assertEqual(own['written_frames'],160);self.assertEqual(own['pcm_seconds'],.01)
+            self.assertEqual(accepted,[1,319])
             self.assertTrue(all(process.poll() is not None for process in processes))
             self.assertIsNone(self.agent.voice_response);self.assertIsNone(self.agent.playback_process)
             if cancel:
