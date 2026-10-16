@@ -1,0 +1,44 @@
+--- barge_in.py
++++ barge_in.py
+@@ -20,8 +20,14 @@
+     def start(self):
+         self.thread.start()
+ 
++    def capture_stop_parameters(self):
++        return {}
++
++    def capture_permitted(self):
++        return True
++
+     def trigger(self, pcm=None):
+-        if self.epoch != self.agent.microphone_epoch or self.stop.is_set():
++        if not self.capture_permitted() or self.epoch != self.agent.microphone_epoch or self.stop.is_set():
+             return False
+         if pcm and self.agent.config['conversation']['barge_in'].get('confirm_with_stt', False):
+             try:
+@@ -30,7 +36,16 @@
+                 text = recognized['transcript']
+                 if not text:
+                     return False
++                if not self.capture_permitted():
++                    return False
+                 if recognized['decision']['action'] == 'stop':
++                    parameters = self.capture_stop_parameters()
++                    if parameters:
++                        self.agent.set_microphone(False, **parameters)
++                        self.agent.last_transcript = text
++                        self.interrupted.set()
++                        self.agent.interruptions += 1
++                        return True
+                     self.agent.last_transcript = text
+                     self.interrupted.set()
+                     self.agent.interruptions += 1
+@@ -47,6 +62,8 @@
+                 LOG.warning('interruption_confirmation_failed error=%s', exc)
+                 self.agent.barge_in_error = str(exc)
+                 return False
++        if not self.capture_permitted():
++            return False
+         if not self.interrupted.is_set():
+             self.interrupted.set()
+             self.agent.interruptions += 1

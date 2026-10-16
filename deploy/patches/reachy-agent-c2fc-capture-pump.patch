@@ -1,0 +1,339 @@
+--- agent.py
++++ agent.py
+@@ -70,6 +70,11 @@
+     def __init__(self, config):
+         self.config = config
+         self.audio = config['audio']
++        self._capture_source_generation = 0
++        self._capture_pump = None
++        self._capture_packet = None
++        self._capture_suspended = False
++        self._capture_enabled()
+         self.http = build_opener(ProxyHandler({}))
+         self.listening = threading.Event()
+         from .microphone import MicrophoneState
+@@ -152,51 +157,61 @@
+                 raise ValueError('Policy owner cannot be null')
+             parameters.pop('expected_boot_id')
+         result=self.motion_policy.save(value,**parameters)
+-        if result['quiet'] or result['privacy_all']:
+-            self.stop_speaker();self.resume_audio=None;self.pending_pcm=None
+-        if not result['motor_enabled'] or result['quiet'] or result['privacy_all']:self.expressions.hold()
+-        if result['privacy_all']:self.listening.clear()
+-        return result
++        pump = self._capture_retire() if self._capture_enabled() else None
++        try:
++            if result['quiet'] or result['privacy_all']:
++                self.stop_speaker();self.resume_audio=None;self.pending_pcm=None
++            if not result['motor_enabled'] or result['quiet'] or result['privacy_all']:self.expressions.hold()
++            if result['privacy_all']:self.listening.clear()
++            return result
++        finally:
++            if pump is not None: pump.close()
+ 
+     def set_microphone(self, enabled, listen=True, *, expected_boot_id=None, expected_epoch=None,
+                        owner_id=None,expected_owner_id=None):
+-        if type(listen) is not bool:raise ValueError('listen must be boolean')
+-        if not isinstance(enabled, bool):
+-            raise ValueError('enabled must be boolean')
+-        if expected_boot_id is not None or expected_epoch is not None:
+-            if not isinstance(expected_boot_id,str) or not expected_boot_id or type(expected_epoch) is not int or not 0<=expected_epoch<2**63:
+-                raise ValueError('Complete microphone authority required')
+-        for owner in (owner_id,expected_owner_id):
+-            if owner is not None and (not isinstance(owner,str) or not 1<=len(owner)<=128 or expected_boot_id is None):
+-                raise ValueError('Bounded microphone owner requires authority')
+-        with self.microphone_lock:
+-            if expected_boot_id is not None and (expected_boot_id!=self.agent_boot_id or expected_epoch!=self.microphone_epoch):
+-                raise RuntimeError('Microphone authority changed')
+-            if expected_owner_id is not None and expected_owner_id!=self.microphone_owner_id:
+-                raise RuntimeError('Microphone owner changed')
+-            self.microphone_epoch += 1
+-            self.microphone_owner_id=owner_id
+-            self.listening.clear()
+-            if not enabled:
+-                self.microphone.enabled = False
+-                self.expressions.hold()
+-                self.pending_pcm = None
+-                self.resume_audio = None
+-                self.stop_speaker()
+-            try:
+-                self.microphone.save(enabled)
+-            except (OSError, ValueError):
+-                self.expressions.hold()
+-                self.pending_pcm = None
+-                self.resume_audio = None
+-                self.stop_speaker()
+-                raise
+-            self.sounds.reset()
+-            if enabled and listen:
+-                self.listening.set()
+-        return {'ok': True, 'microphone_enabled': enabled, 'capture_active': self.capture_active,
+-                'agent_boot_id': self.agent_boot_id, 'microphone_epoch': self.microphone_epoch,
+-                'microphone_owner_id':self.microphone_owner_id,'listening':self.listening.is_set()}
++        retired_capture = None
++        try:
++            if type(listen) is not bool:raise ValueError('listen must be boolean')
++            if not isinstance(enabled, bool):
++                raise ValueError('enabled must be boolean')
++            if expected_boot_id is not None or expected_epoch is not None:
++                if not isinstance(expected_boot_id,str) or not expected_boot_id or type(expected_epoch) is not int or not 0<=expected_epoch<2**63:
++                    raise ValueError('Complete microphone authority required')
++            for owner in (owner_id,expected_owner_id):
++                if owner is not None and (not isinstance(owner,str) or not 1<=len(owner)<=128 or expected_boot_id is None):
++                    raise ValueError('Bounded microphone owner requires authority')
++            with self.microphone_lock:
++                if expected_boot_id is not None and (expected_boot_id!=self.agent_boot_id or expected_epoch!=self.microphone_epoch):
++                    raise RuntimeError('Microphone authority changed')
++                if expected_owner_id is not None and expected_owner_id!=self.microphone_owner_id:
++                    raise RuntimeError('Microphone owner changed')
++                self.microphone_epoch += 1
++                retired_capture = self._capture_retire() if self._capture_enabled() else None
++                self.microphone_owner_id=owner_id
++                self.listening.clear()
++                if not enabled:
++                    self.microphone.enabled = False
++                    self.expressions.hold()
++                    self.pending_pcm = None
++                    self.resume_audio = None
++                    self.stop_speaker()
++                try:
++                    self.microphone.save(enabled)
++                except (OSError, ValueError):
++                    self.expressions.hold()
++                    self.pending_pcm = None
++                    self.resume_audio = None
++                    self.stop_speaker()
++                    raise
++                self.sounds.reset()
++                if enabled and listen:
++                    self.listening.set()
++            if retired_capture is not None: retired_capture.close()
++            return {'ok': True, 'microphone_enabled': enabled, 'capture_active': self.capture_active,
++                    'agent_boot_id': self.agent_boot_id, 'microphone_epoch': self.microphone_epoch,
++                    'microphone_owner_id':self.microphone_owner_id,'listening':self.listening.is_set()}
++        finally:
++            if retired_capture is not None: retired_capture.close()
+ 
+     def vision_route_update(self, **fields):
+         bound, previous = self._vision_route
+@@ -331,7 +346,100 @@
+         except HTTPError as exc:
+             raise RuntimeError('Hub HTTP %s: %s' % (exc.code, exc.read().decode()[:600])) from exc
+ 
++    def _capture_enabled(self):
++        enabled = self.config['conversation'].get('capture_pump_enabled', False)
++        if type(enabled) is not bool:
++            raise ValueError('Boolean capture pump opt-in required')
++        if enabled:
++            barge = self.config['conversation']['barge_in']
++            if (self.config['streaming']['enabled'] is not True or barge['enabled'] is not True
++                    or barge.get('confirm_with_stt', False) is not True or self.audio['sample_rate'] != 16000):
++                raise ValueError('Capture pump requires existing streaming mono AEC and confirmed barge-in')
++        return enabled
++
++    def _capture_retire(self):
++        pump = getattr(self, '_capture_pump', None)
++        if pump is not None:
++            pump.retire()
++        self._capture_packet = None
++        self.pending_pcm = None
++        control = getattr(self, '_capture_control', None)
++        if control is not None:
++            control.stop.set()
++            control.pcm = None
++            control.capture_permitted = lambda: False
++        return pump
++
++    def _capture_get(self):
++        from .capture_pump import CapturePump
++        pump = getattr(self, '_capture_pump', None)
++        if pump is not None and not pump.permitted():
++            pump.close()
++            self._capture_pump = pump = None
++        if pump is None:
++            self._capture_source_generation = getattr(self, '_capture_source_generation', 0) + 1
++            pump = CapturePump(self, self._capture_source_generation)
++            self._capture_pump = pump
++            pump.start()
++        return pump
++
++    def _capture_fresh(self):
++        pump = getattr(self, '_capture_pump', None)
++        return pump is not None and pump.fresh(getattr(self, '_capture_packet', None))
++
++    def _capture_pending(self, value):
++        from .capture_pump import Utterance
++        with self.microphone_lock:
++            self._capture_packet = value if isinstance(value, Utterance) else None
++            if self._capture_fresh():
++                return value.pcm
++            self._capture_packet = None
++            return None
++
++    def _capture_visual(self, dispatch, text, epoch, expected):
++        if not self._capture_enabled():
++            return dispatch(self, text, epoch, expected)
++        pump = self._capture_retire()
++        if pump is not None:
++            pump.close()
++        self._capture_suspended = True
++        try:
++            return dispatch(self, text, epoch, expected)
++        finally:
++            self._capture_suspended = False
++            policy = self.motion_policy.snapshot()
++            if (self.microphone.enabled and self.listening.is_set() and not self.stopping.is_set()
++                    and epoch == self.microphone_epoch and policy['epoch'] == expected['policy_epoch']
++                    and not policy['quiet'] and not policy['privacy_all']):
++                self._capture_get()
++
+     def capture(self, during_reply=False, on_speech=None, stop_event=None, idle_deadline=None, skip_expression=False):
++        if not self._capture_enabled():
++            return self._finite_capture(during_reply, on_speech, stop_event, idle_deadline, skip_expression)
++        if during_reply or on_speech is not None:
++            raise RuntimeError('Capture pump barge-in requires the shared consumer')
++        if (not self.microphone.enabled or not self.listening.is_set() or self.stopping.is_set()
++                or self._capture_suspended):
++            return None
++        if not skip_expression:
++            self.expressions.set('neutral')
++            self.phase = 'listening'
++        previous = getattr(self, '_capture_control', None)
++        if previous is not None and previous.thread.is_alive():
++            raise RuntimeError('Previous capture control still active')
++        pump = self._capture_get()
++        pump.mode(False)
++        packet = pump.event(stop=stop_event, idle_deadline=idle_deadline, final_only=True)
++        with self.microphone_lock:
++            if packet is not None and pump.claim(packet):
++                self._capture_packet = packet
++                pump.mode(True)
++                return packet.pcm
++        if pump.error is not None:
++            raise RuntimeError(pump.error)
++        return None
++
++    def _finite_capture(self, during_reply=False, on_speech=None, stop_event=None, idle_deadline=None, skip_expression=False):
+         epoch = self.microphone_epoch
+         def active():
+             return self.microphone.enabled and (during_reply or self.listening.is_set()) and not self.stopping.is_set() and epoch == self.microphone_epoch and not (stop_event and stop_event.is_set())
+@@ -472,12 +580,19 @@
+         epoch = self.microphone_epoch if expected_epoch is None else expected_epoch
+         motor_policy_epoch=(self.motion_policy.snapshot()['epoch'] if expected_policy_epoch is None else expected_policy_epoch)
+         monitor = None
++        pump_reply_seen = False
++        capture_source = None
++        previous_capture_control = getattr(self, '_capture_control', None)
++        if self._capture_enabled() and previous_capture_control is not None and previous_capture_control.thread.is_alive():
++            raise RuntimeError('Previous capture control still active')
+         timing = None
+         self._stream_timing = None
+-        self.current_reply_text = replay.get('spoken_text', '') if replay else ''
++        self.current_reply_text = (replay.get('spoken_text', '') if replay else
++                                   self.current_reply_text[-self.config['limits']['max_speech_chars']:] if self._capture_enabled() else '')
+         def cancelled():
+             policy=self.motion_policy.snapshot()
+             return (not self.microphone.enabled or epoch != self.microphone_epoch or self.stopping.is_set()
++                    or (capture_source is not None and not capture_source.permitted())
+                     or policy['epoch']!=motor_policy_epoch or policy['quiet'] or policy['privacy_all']
+                     or (valid_until is not None and time.monotonic()>=valid_until))
+         def interrupted():
+@@ -527,10 +642,20 @@
+         all_cues = []
+         cursor = None
+         from .replay import ReplayResponse
+-        self._stream_timing_mark(timing,'response_open_begin')
+-        response_context = self.http.open(item, timeout=self.config['timeouts']['client']) if replay is None else ReplayResponse(replay, settings)
+-        self._stream_timing_mark(timing,'response_open_end')
+         try:
++            if (self._capture_enabled() and self.microphone.enabled and self.listening.is_set()
++                    ):
++                # Spoken visual child has returned before it calls voice('/say').
++                self._capture_suspended = False
++                capture_source = self._capture_get()
++                if allow_barge_in:
++                    from .capture_pump import barge_monitor
++                    monitor = barge_monitor(self, capture_source)
++                    monitor.start()
++                    self._stream_timing_mark(timing,'monitor_start_return')
++            self._stream_timing_mark(timing,'response_open_begin')
++            response_context = self.http.open(item, timeout=self.config['timeouts']['client']) if replay is None else ReplayResponse(replay, settings)
++            self._stream_timing_mark(timing,'response_open_end')
+             with response_context as response:
+                 self.voice_response = response
+                 if response.headers.get_content_type() != 'application/x-ndjson':
+@@ -552,6 +677,9 @@
+                         spoken=event.get('spoken_text')
+                         if type(spoken) is not str or not spoken.strip() or len(spoken)>self.config['limits']['max_speech_chars']:
+                             spoken=event.get('reply','')
++                        if self._capture_enabled() and not pump_reply_seen:
++                            self.current_reply_text = ''
++                            pump_reply_seen = True
+                         self.current_reply_text += ' ' + spoken
+                     elif event['type'] == 'motion':
+                         if len(all_cues) + len(event['cues']) > self.config['conversation']['expressions']['speech_sync']['max_cues']:
+@@ -591,7 +719,7 @@
+                                 stdin=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
+                             self._stream_timing_mark(timing,'aplay_popen_end')
+                             self.playback_process = process
+-                            if allow_barge_in and self.microphone.enabled and self.config['conversation'].get('barge_in', {}).get('enabled', False):
++                            if not self._capture_enabled() and allow_barge_in and self.microphone.enabled and self.config['conversation'].get('barge_in', {}).get('enabled', False):
+                                 from .barge_in import BargeInMonitor
+                                 monitor = BargeInMonitor(self)
+                                 monitor.start()
+@@ -684,11 +812,17 @@
+                 process.stderr.close()
+             self.playback_process = None
+             try:
+-                if epoch != self.microphone_epoch or not self.microphone.enabled:
++                if (epoch != self.microphone_epoch or not self.microphone.enabled
++                        or (capture_source is not None and not capture_source.permitted())):
+                     self.resume_audio = None
+                 if monitor is not None:
+                     pcm = monitor.finish()
+-                    if pcm:
++                    if pcm and self._capture_enabled():
++                        with self.microphone_lock:
++                            pump = getattr(self, '_capture_pump', None)
++                            if pump is not None and epoch == self.microphone_epoch and pump.fresh(pcm):
++                                self.pending_pcm = (epoch, pcm)
++                    elif pcm:
+                         self.pending_pcm = (epoch, pcm)
+                     if self.resume_audio is not None:
+                         self.resume_audio['deadline'] = (self.last_voice_at or time.monotonic()) + self.config['conversation']['interaction']['resume_after_empty_seconds']
+@@ -739,7 +873,7 @@
+                     captured_operator = binding(self.operator_status())
+                     pending, self.pending_pcm = self.pending_pcm, None
+                     if pending is not None and pending[0] == epoch:
+-                        pcm = pending[1]
++                        pcm = self._capture_pending(pending[1]) if self._capture_enabled() else pending[1]
+                         interrupted_input = True
+                     else:
+                         pcm = self.capture()
+@@ -756,6 +890,8 @@
+                     if interrupted_input:
+                         recognized = self.request(self.config['network']['voice_url'], '/transcribe',
+                                                   {'pcm_base64': base64.b64encode(pcm).decode()})
++                        if self._capture_enabled() and not self._capture_fresh():
++                            continue
+                         text = recognized['transcript']
+                         if not text and self.resume_audio is not None:
+                             saved = self.resume_audio
+@@ -792,6 +928,8 @@
+                         self.vision_route_update(stage='stt', result='pending')
+                         recognized = self.request(self.config['network']['voice_url'], '/transcribe',
+                                                   {'pcm_base64': base64.b64encode(pcm).decode()})
++                        if self._capture_enabled() and not self._capture_fresh():
++                            continue
+                         text = recognized['transcript']
+                         if (recognized.get('ok') is not True or type(text) is not str
+                                 or len(text) > self.config['limits']['max_text_chars']):
+@@ -822,7 +960,7 @@
+                             snapshot_turn = True
+                             self.vision_route_update(route_attempted=True, stage='dispatch', result='pending')
+                             try:
+-                                response = dispatch(self, text, epoch, captured_operator)
++                                response = self._capture_visual(dispatch, text, epoch, captured_operator)
+                             except Exception as exc:
+                                 self.vision_route_failure(exc)
+                                 raise

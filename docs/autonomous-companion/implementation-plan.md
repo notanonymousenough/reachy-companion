@@ -329,6 +329,20 @@ STOP и следующий turn. Список ниже описывает пол
 preimages recognition/barge-in и выбранного worker pin нужны до правки. Сейчас
 экспортов устройств и runtime изменений нет.
 
+**S1 SOURCE ACCEPTABLE по независимым review, default-off exact overlay; на устройствах не установлен:**
+[builder/runbook](../../deploy/patches/capture-pump-S1.md). Exact c2fc Agent,
+установленный barge-in и новый bounded helper собираются с frozen hashes;
+свежие public preimages проверены, installed microphone/recognition отличаются
+от HEAD и не заменяются. Focused fixtures включают реальный Agent.run с просроченным
+STT без model dispatch/turn commit; один fake owned pipe через фазы; early monitor
+до model open, default parity, primed playback без capture, TTL/revisions/STOP/CAS
+и честный camera quiesce. 38 focused checks прошли; два P1 закрыты: quiet/privacy withdrawal до reap и
+общий bound source-error wake для return/exception. Это source evidence, не
+continuous hardware/AEC/partial STT PASS.
+Текущий физический measurement по-прежнему идёт первым отдельно на c2fc после
+fresh human ready; source S1 не блокирует и не подменяет его. Будущий S1 acceptance
+потребует отдельной paired consumer привязки к новому hash/порядку monitor timing.
+
 **S1 — один capture pump текущего audio owner.** Сохранить существующий mono AEC
 `arecord` через обычные idle → capture → STT/inference → playback: один reader,
 один VAD/utterance assembler, один final claim для main/barge-in. `capture()`
