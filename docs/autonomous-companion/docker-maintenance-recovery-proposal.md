@@ -34,19 +34,19 @@ Read-only inventory runner установил следующие агрегат�
 принять архитектор и runner. В документе намеренно нет исполняемых команд:
 доказательства завершения домена пока недостаточны.
 
-Архитектор предложил один кандидат: штатно остановить Docker Desktop, завершить
-**только** соответствующую Desktop WSL distro, подтвердить завершение старых
-Windows request/backend/proxy, недоступность прежнего API и отсутствие
-автоматического возобновления; затем выполнить fresh start. Это кандидат для
-review, **не maintenance GO**. Runner ещё проверяет RO CLI version/help и
-соответствие endpoint конкретному домену. Имена distro/процессов и endpoint
-остаются в приватном inventory; угадывать их по типовой установке нельзя.
+Текущий конкретный кандидат runner: штатно остановить **только Docker Desktop**
+и bounded RO проверкой подтвердить завершение соответствующей Desktop WSL
+среды и старых Windows request/backend/proxy, недоступность прежнего API и
+отсутствие автоматического возобновления; только после этого fresh start.
+Если среда остаётся running или свидетельства неизвестны — abort/manual handoff,
+**без start и без принудительного WSL terminate/shutdown**. Это кандидат для
+review, **не maintenance GO**. Имена distro/процессов и endpoint остаются в
+приватном inventory; угадывать их по типовой установке нельзя.
 
-Docker документирует [Desktop stop](https://docs.docker.com/reference/cli/docker/desktop/stop/),
-Microsoft — [завершение отдельной WSL distribution](https://learn.microsoft.com/en-us/windows/wsl/basic-commands#terminate).
-Эти описания подтверждают назначение средств управления, но не наличие нужной
-версии на PC, отсутствие durable replay или завершение конкретного запроса.
-Общий WSL shutdown и перезагрузка PC не входят в этот кандидат.
+Docker документирует [Desktop stop](https://docs.docker.com/reference/cli/docker/desktop/stop/).
+Это описание подтверждает назначение средства управления, но не отсутствие
+durable replay или завершение конкретного запроса. Отдельные WSL lifecycle
+команды и перезагрузка PC не входят в этот кандидат.
 
 Дополнительный bounded RO capability check: установлен Desktop CLI 0.4.3;
 version/status и help stop/start доступны, stop/start поддерживают timeout.
