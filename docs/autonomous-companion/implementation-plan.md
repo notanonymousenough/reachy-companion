@@ -15,10 +15,10 @@ Reachy, Hub, PC и VPS. Независимый reviewer проверяет ис�
 | Обычный голос | Реальные STT → локальная модель → TTS/owned aplay работают; реальные фразы получают ответы | Полная приёмка контекста с точным распознаванием факта и последующей ссылкой на него ещё открыта; два turns в неудачном vision-прогоне этого не доказывают |
 | Explicit snapshot | `d47f361`: свежий снимок → локальная 9B → полный spoken FINAL; человек подтвердил верность описания; наблюдались owned aplay, SDK tasks и движение антенн | Это отдельный командный путь `--vision`, не успешный голосовой запрос и не визуальная память |
 | STOP и cleanup explicit snapshot | Отдельный реальный STOP во время owned aplay: наблюдаемый cleanup 0,216848 s; три последующих проверки за 2 s без возобновления; известные OFF, factory empty, no aplay, 100% | Это одно наблюдение конкретного пути, не P95, не полная физическая/акустическая задержка остановки |
-| Spoken snapshot | `02bdaa2` установлен: минимальный Agent overlay и два helper-файла, один restart; readiness/source/config/state проверки прошли | **FAIL на новом реальном human-запросе:** Agent289 подтвердил точный visual STT, отсутствие echo и вызов dispatch; child вернул capture/ValueError. Конкретный capture guard ещё неизвестен; intent/STT не менять, camera/context PASS нет |
+| Spoken snapshot | **РЕАЛЬНО РАБОТАЕТ:** после socket-only fix `7799e89` один human visual-запрос завершился успешно; человек подтвердил верность названия и описания. Exact visual STT, один turn без ошибки, CLI rc0 и независимый cleanup подтверждены | Это приёмка голосового camera → spoken description пути. Visual memory, latency target, streaming, отдельный STOP/motion прогон этим результатом не приняты; observer не дал terminal returned |
 | Prime-paused diagnostic | `73c241b`: Hub client обновлён без restart; в одном исправленном реальном прогоне cue выполнен при закрытом capture, затем подтверждены resume и свежий захват | **NOT_EXERCISED для камеры:** точный visual intent в STT отсутствовал, child не запускался. Один completed turn не доказывает vision/context. Повтора Alice vision не планируется |
 | Состояние после сбоя | Независимый watch подтвердил OFF, admission retired, factory empty, no aplay, stock known, volume 100%; активные сессии завершены | Поздний wrapper/client cleanup error после отзыва authority учитывать отдельно от исходного child failure |
-| Потоковый диалог | Реальный PC SSE/prefix contract подтверждён; `ad7c59b` содержит реализованный token-reader → segments → existing TTS с конечным drain | Реальная попытка остановилась на lifecycle validation: Docker после собственного запуска изменил только OomKillDisable false → null. Исходный worker/config восстановлены и проверены; streaming voice PASS нет. Следующий шаг — узкое исправление сравнения в validation и recovery. ACK/исходники не заменяют этот результат; continuous/partial STT ещё не реализован |
+| Потоковый диалог | Реальный PC SSE/prefix contract подтверждён; `ad7c59b` содержит реализованный token-reader → segments → existing TTS с конечным drain | Реальная попытка остановилась на lifecycle validation: Docker после собственного запуска изменил только OomKillDisable false → null. Исходный worker/config восстановлены и проверены; streaming voice PASS нет. Public comparator `e86e54b` готов; runner разбирает GuardDenied первого fact-шага перед новым окном. ACK/исходники не заменяют этот результат; continuous/partial STT ещё не реализован |
 | Задержка vision | Два реальных image inference заняли около 11,03 и 10,35 s | Уже один inference превышает цель 10 s; полный speech-end → meaningful audio не измерен. Не объявлять цель достигнутой |
 | Память | Обычная RAM session history существует | Snapshot `/say` не добавляет visual question/answer в worker history; долговременная память и continuity через restart не приняты |
 | Полная автономность | Есть реализованные contracts, guards, fixtures и отдельные реальные checkpoints | Непрерывное восприятие/решения, память, полезные интеграции, recovery и длительная реальная приёмка ещё не завершены |
@@ -32,7 +32,7 @@ Reachy, Hub, PC и VPS. Независимый reviewer проверяет ис�
 
 | Порядок | Статус | Минимальный результат | Владелец | Реальная приёмка и доказательство |
 |---|---|---|---|---|
-| P0.1 | Agent289 actual human route подтверждён; child capture_sample/ValueError; camera IPC socket отсутствует в private /tmp Agent — причина доказана | Диагностировать и исправить selective STT-camera failure, сохранив рабочие explicit vision и ordinary voice | writer: точечный fix по новой evidence; reviewer + координатор: review; runner: единственные device actions | Точный human visual intent и capture/ValueError уже получены. Следующий шаг — exact socket-only read-only bind с сохранением PrivateTmp, затем один реальный human image/voice прогон → human-correct spoken FINAL, motion/STOP/no resume/final OFF100 |
+| P0.1 | **Spoken camera PASS для одного реального human-запроса:** socket-only fix установлен, описание подтверждено человеком, финальный cleanup проверен | Сохранить принятый camera voice path и воспроизводимый `7799e89` fix | writer: public fix/план; runner: единственные device actions; координатор: следующая приёмка | Следующий приоритет — P0.2. Отдельные camera STOP/motion/no-resume и visual follow-up memory остаются открыты; один корректный spoken ответ их не заменяет |
 | P0.2 | Actual PC SSE/prefix PASS; реальный lifecycle failure, исходный worker/config восстановлены; streaming hardware PASS нет | Настоящее потоковое слушание и содержательный ответ до полной генерации | writer: existing capture/STT/brains/voice seams; runner: реальная запись timings и STOP; координатор: критерии | Сначала scoped Docker false→null comparison в candidate validation/recovery, затем реальный длинный ответ/STOP/следующий turn и повторяемая команда входа в проверенный режим. Source checks не заменяют этот результат. Continuous perception/partial STT/endpointing — отдельный следующий seam, ещё не реализован |
 | P1.1 | Частично, не принято | Обычный контекст, затем visual context с provenance/TTL; долговременные факты и исправления | writer: существующие session/memory seams; runner + человек: смысловая проверка | Факт → vision → местоименная ссылка на прежний факт; отдельно visual follow-up из реально виденного. Restart сохраняет разрешённые факты/mute, correction/deletion работает; vision history не обещать до реализации |
 | P1.2 | Не принято | Первая полезная typed integration через существующий broker/worker | writer: маленький adapter/schema; runner: настоящий target; координатор: scope | Реальная полезная задача с intended/attempted/completed receipt; ошибки/timeout/duplicate/cancel различимы. Нет raw shell/секретов/новых grants из текста модели или OCR |
@@ -47,7 +47,10 @@ patch, новый dispatcher и model/runtime migration на активный ac
 приоритет над любым планом. Точечная диагностика не должна запускать новый снимок
 или inference автоматически.
 
-## P0.1: ближайший шаг после фактического сбоя
+## P0.1: причина сбоя и принятый spoken camera путь
+
+Ниже сохранена цепочка диагностики; актуальный принятый результат и пределы
+доказательства описаны после неё. Старые installation шаги повторно не выполняются.
 
 1. Сохранить known OFF/100 и исходные private receipts. Различать child cause,
    последующий withdrawal authority и wrapper cleanup: это разные события.
@@ -89,11 +92,30 @@ Read-only actual проверка установила причину: `PrivateT
 Подготовлен минимальный unit/drop-in `BindReadOnlyPaths` только для этого сокета,
 с сохранением PrivateTmp и всех прежних ограничений:
 [agent-camera-ipc-bind.md](../../deploy/patches/agent-camera-ipc-bind.md).
-Следующий шаг — runner установит exact drop-in после review, один Agent restart,
-сверит тот же socket inode в Agent/factory/host; затем один bounded human запрос
-должен дать свежий кадр, local FINAL и верное spoken описание. Camera/context PASS
-до этого не заявлен. Producer socket replacement требует fail-closed проверки
-и отдельного guarded Agent refresh; широкого /tmp bind и auto media acquire нет.
+Fix `7799e89` **установлен и проверен на реальном запросе**. Сохранён
+`PrivateTmp=yes`, socket-only bind read-only; host/factory/Agent видят один
+текущий socket inode. Выполнен один Agent restart суммарно за установку и её
+продолжение. Agent и диагностические helper-исходники остались неизменными.
+После этого один bounded human-запрос завершился с CLI rc0 и cleanup true;
+человек подтвердил, что предмет назван и описан верно. Независимая конечная
+проверка подтвердила exact visual STT, один turn без last_error, OFF/unowned,
+громкость 100%, factory running empty и отсутствие camera/aplay. Это реальная
+приёмка **spoken camera description**, не только source/readiness PASS.
+
+Ограничение доказательства: observer увидел dispatch, затем завершился с UNKNOWN
+по guard; terminal `returned` он не зафиксировал. Не дописывать отсутствующие
+булевы признаки или terminal outcome. Причинная цепочка приёмки — успешный CLI/cleanup,
+конечные STT/turn/error признаки и непосредственное подтверждение человеком
+услышанного корректного описания. Visual memory, ordinary context continuity,
+streaming, latency target и отдельные motion/STOP показатели этим не доказаны.
+Producer socket replacement требует fail-closed проверки и отдельного guarded
+Agent refresh; широкого /tmp bind и auto media acquire нет.
+
+Следующий P0 — настоящая streaming voice приёмка через существующие seams,
+без расширения инфраструктуры. Runner разбирает конкретный GuardDenied первого
+fact-шага; до этой evidence runtime features не меняются. Текущий исходный PC
+worker/config/inventory и пустой slot сохранены. Старые stream boot/epoch pins
+не активируются: новому окну нужна свежая привязка к текущему Agent.
 
 Реальный streaming rollout под `ad7c59b` завершился **lifecycle failure**, а не
 голосовой приёмкой. На Docker Engine 29.7.2 / API 1.55 собственный candidate был
@@ -106,8 +128,8 @@ Read-only actual проверка установила причину: `PrivateT
 worker running/idle, исходные brains/voice загружены, `content_tokens=false`,
 сохранён исходный inventory, candidate припаркован, pending slot пустой, OOM нет.
 Robot сохранил текущий Agent, OFF/unowned, factory free и громкость 100%.
-Нового streaming voice PASS нет. Следующий source fix — один typed comparator
-для candidate validation и failure recovery, с исключением только literal
+Нового streaming voice PASS нет. Public source fix `e86e54b` подготовил один
+typed comparator для candidate validation и failure recovery, с исключением только literal
 false→null после подтверждённого собственного старта на указанном Engine/API;
 initial never-started creation требует raw false. Все остальные проверки остаются
 точными. Public seam и issuer contract:
