@@ -108,6 +108,9 @@ def service_unit(config, role, group):
         raise ValueError('Service installation path cannot contain whitespace or escapes')
     python = str(Path(root) / target['venv_dir'] / 'bin/python')
     data = str(config.path(config['paths']['data_dir']))
+    # The SDK IPC reader needs this host socket inside the Agent's private /tmp.
+    camera_bind = ('BindReadOnlyPaths=/tmp/reachymini_camera_socket\n'
+                   if role == 'robot' and group == 'agent' else '')
     return f'''[Unit]
 Description=Reachy Companion {group}
 Wants=network-online.target
@@ -122,7 +125,7 @@ Restart=on-failure
 RestartSec=5
 NoNewPrivileges=yes
 PrivateTmp=yes
-ProtectSystem=strict
+{camera_bind}ProtectSystem=strict
 ProtectHome=read-only
 ReadWritePaths={data}
 UMask=0077

@@ -32,7 +32,7 @@ Reachy, Hub, PC и VPS. Независимый reviewer проверяет ис�
 
 | Порядок | Статус | Минимальный результат | Владелец | Реальная приёмка и доказательство |
 |---|---|---|---|---|
-| P0.1 | Agent289 actual human route подтверждён; child capture/ValueError, конкретный guard UNKNOWN | Диагностировать и исправить selective STT-camera failure, сохранив рабочие explicit vision и ordinary voice | writer: точечный fix по новой evidence; reviewer + координатор: review; runner: единственные device actions | Точный human visual intent и capture/ValueError уже получены. Следующий шаг — fixed capture substage на exact helpers, затем proven fix → human-correct spoken FINAL, motion/STOP/no resume/final OFF100 |
+| P0.1 | Agent289 actual human route подтверждён; child capture_sample/ValueError; camera IPC socket отсутствует в private /tmp Agent — причина доказана | Диагностировать и исправить selective STT-camera failure, сохранив рабочие explicit vision и ordinary voice | writer: точечный fix по новой evidence; reviewer + координатор: review; runner: единственные device actions | Точный human visual intent и capture/ValueError уже получены. Следующий шаг — exact socket-only read-only bind с сохранением PrivateTmp, затем один реальный human image/voice прогон → human-correct spoken FINAL, motion/STOP/no resume/final OFF100 |
 | P0.2 | Actual PC SSE/prefix PASS; реальный lifecycle failure, исходный worker/config восстановлены; streaming hardware PASS нет | Настоящее потоковое слушание и содержательный ответ до полной генерации | writer: existing capture/STT/brains/voice seams; runner: реальная запись timings и STOP; координатор: критерии | Сначала scoped Docker false→null comparison в candidate validation/recovery, затем реальный длинный ответ/STOP/следующий turn и повторяемая команда входа в проверенный режим. Source checks не заменяют этот результат. Continuous perception/partial STT/endpointing — отдельный следующий seam, ещё не реализован |
 | P1.1 | Частично, не принято | Обычный контекст, затем visual context с provenance/TTL; долговременные факты и исправления | writer: существующие session/memory seams; runner + человек: смысловая проверка | Факт → vision → местоименная ссылка на прежний факт; отдельно visual follow-up из реально виденного. Restart сохраняет разрешённые факты/mute, correction/deletion работает; vision history не обещать до реализации |
 | P1.2 | Не принято | Первая полезная typed integration через существующий broker/worker | writer: маленький adapter/schema; runner: настоящий target; координатор: scope | Реальная полезная задача с intended/attempted/completed receipt; ошибки/timeout/duplicate/cancel различимы. Нет raw shell/секретов/новых grants из текста модели или OCR |
@@ -79,16 +79,21 @@ question = false и child = false: это **NOT_EXERCISED**, не новая д�
 Независимый cleanup подтвердил OFF/100%, factory empty и no aplay. Повтора
 Alice vision не будет; следующая причина/правка требует новой реальной evidence.
 
-Новый отдельный human camera-запрос на Agent289 **подтвердил маршрутизацию**:
+Новый human camera-запрос на Agent289 **подтвердил маршрутизацию**:
 STT непустой, точный visual intent, own echo false, action allowlisted и dispatch
-attempted true. Child вернул typed `capture/ValueError`. Это конкретнее прежнего
-NOT_EXERCISED и generic failure, но capture объединяет SDK/import preflight,
-sample/caps/buffer/NumPy/PNG и cleanup проверки. Ни один отдельный guard ещё не
-доказан. Минимальный следующий checkpoint — фиксированные capture_* подэтапы
-только в двух exact helper-файлах; Agent/intent/STT и guard/TTL не меняются:
-[capture-step-diagnostics.md](../../deploy/patches/capture-step-diagnostics.md).
-После ограниченной конкретной evidence исправляется доказанный source; нового
-human retry автоматически нет. Реальная scene/spoken camera приёмка открыта.
+attempted true. Установленная fixed-stage диагностика сузила отказ до
+`capture_sample/ValueError` после camera.open. Exact SDK1.11 не содержит фонового
+потребителя sample; переход на read() и увеличение ожидания не доказаны как fix.
+Read-only actual проверка установила причину: `PrivateTmp=yes`, host/factory видят
+один Unix camera IPC socket, а в mount namespace Agent этот путь отсутствует.
+Подготовлен минимальный unit/drop-in `BindReadOnlyPaths` только для этого сокета,
+с сохранением PrivateTmp и всех прежних ограничений:
+[agent-camera-ipc-bind.md](../../deploy/patches/agent-camera-ipc-bind.md).
+Следующий шаг — runner установит exact drop-in после review, один Agent restart,
+сверит тот же socket inode в Agent/factory/host; затем один bounded human запрос
+должен дать свежий кадр, local FINAL и верное spoken описание. Camera/context PASS
+до этого не заявлен. Producer socket replacement требует fail-closed проверки
+и отдельного guarded Agent refresh; широкого /tmp bind и auto media acquire нет.
 
 Реальный streaming rollout под `ad7c59b` завершился **lifecycle failure**, а не
 голосовой приёмкой. На Docker Engine 29.7.2 / API 1.55 собственный candidate был
