@@ -83,6 +83,13 @@ reviewable maintenance decision не выполнять новые PC mutations/
 gate0033/e7d source-frozen, actual gate/long dialogue/streaming PASS отсутствуют.
 Это не доказательство длительного диалога или meaningful streaming.
 
+Подготовлено [публичное предложение explicit maintenance recovery](docker-maintenance-recovery-proposal.md)
+после RO impact inventory: Docker17/1running/16stopped, running только Reachy
+worker, live-restore=false, Docker Desktop/WSL. Native model continuity и полное
+исключение будущих submitters пока UNKNOWN. Документ не разрешает исполнение:
+нужны reviewed Docker-only boundary, same-slot manual supersession с сохранением
+истории UNKNOWN и конкретное согласование disruptive scope координатором.
+
 Обновлено 2026-10-17. Владелец плана — координатор Reachy Mini; writer ведёт код,
 проверки и этот документ; единственный runner выполняет изменения и проверки на
 Reachy, Hub, PC и VPS. Независимый reviewer проверяет исходники и доказательства.
