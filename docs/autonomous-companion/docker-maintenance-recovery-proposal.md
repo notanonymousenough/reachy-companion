@@ -274,7 +274,9 @@ heartbeat восстанавливается прежде task enable. Возм�
 сохраняется в диагностике: общий тезис «при любой ошибке всё остаётся paused»
 неверен после уже завершённого изменения. Никакого автоматического повтора.
 
-Ещё нужны итоговый independent composition verdict, fresh exact private context
-и согласование готового обслуживания человеком. Private bindings остаются
+Independent reviewer rev131 выдал SOURCE COMPOSITION GO exact manifest089d6f35;
+он также независимо повторил provider4/adapters9/assembly1/JS/UTF8 PASS.
+Ещё нужны fresh exact private context и согласование готового обслуживания
+человеком. Private bindings остаются
 sole runner; проверка safe source не является проверкой их значений. На этом
 этапе actual automation/Docker/WSL/task/slot/runtime mutations **0**.

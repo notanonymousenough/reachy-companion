@@ -101,8 +101,9 @@ maintenance approval и фактическое восстановление ещ
 10source/4test pins match; provider4/adapters9/assembly1/JS2+UTF8 syntheticPASS.
 Actual canonical factory/native namespace и durable managed-HOLD evidence
 согласованы; HOST bridge использует existing finite READY/own receipts.
-Это fake-native source checks, не runtime acceptance. Independent final verdict,
-fresh private context и конкретное maintenance approval ещё нужны; mutations0.
+Это fake-native source checks, не runtime acceptance. Independent reviewer rev131
+также выдал SOURCE COMPOSITION GO и повторил focused checks PASS. Fresh private
+context и конкретное maintenance approval ещё нужны; mutations0.
 
 Обновлено 2026-10-17. Владелец плана — координатор Reachy Mini; writer ведёт код,
 проверки и этот документ; единственный runner выполняет изменения и проверки на
