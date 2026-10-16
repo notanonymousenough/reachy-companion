@@ -500,7 +500,7 @@ def serve(hub):
                     return
                 try:
                     value = hub.agent('/status')
-                    self.reply(200, {key: value.get(key) for key in ('microphone_enabled', 'capture_active', 'phase', 'expression', 'expression_error', 'volume_percent', 'volume_control_enabled', 'resumable_reply', 'motion_actor', 'agent_boot_id', 'microphone_epoch', 'motion_policy')})
+                    self.reply(200, {key: value.get(key) for key in ('microphone_enabled', 'capture_active', 'phase', 'expression', 'expression_error', 'volume_percent', 'volume_control_enabled', 'resumable_reply', 'motion_actor', 'agent_boot_id', 'microphone_epoch', 'motion_policy', 'turns')})
                 except Exception:
                     self.reply(503, {'error': 'Robot agent unavailable'})
                 return
@@ -550,8 +550,8 @@ def serve(hub):
                     elif self.path == '/control/motion-policy':
                         value=hub.agent('/motion-policy',payload)
                     elif self.path == '/control/microphone':
-                        if set(payload) != {'enabled'} or not isinstance(payload['enabled'], bool):
-                            raise ValueError('enabled must be boolean')
+                        from .microphone import validate_control
+                        validate_control(payload)
                         value = hub.agent('/microphone', payload)
                     else:
                         value = hub.expression(payload)

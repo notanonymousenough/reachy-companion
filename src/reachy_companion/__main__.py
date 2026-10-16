@@ -9,6 +9,9 @@ def main():
     parser = argparse.ArgumentParser(prog='companion')
     parser.add_argument('--config', help='JSON configuration; defaults to config.local.json or REACHY_COMPANION_CONFIG')
     commands = parser.add_subparsers(dest='group', required=True)
+    demo = commands.add_parser('demo')
+    demo.add_argument('--turns', type=int, default=3)
+    demo.add_argument('--seconds', type=int, default=180)
     setup = commands.add_parser('config')
     setup.add_argument('action', choices=('init', 'validate', 'value'))
     setup.add_argument('key', nargs='?')
@@ -52,6 +55,9 @@ def main():
         print(initialize(Path.cwd()))
         return 0
     config = Config(args.config, require_token=args.group not in ('config', 'firewall', 'ssh'))
+    if args.group == 'demo':
+        from .client import demo as run_demo
+        return run_demo(config, turns=args.turns, seconds=args.seconds)
     if args.group == 'config':
         if args.action == 'validate':
             print('Configuration is valid: ' + str(config.filename))

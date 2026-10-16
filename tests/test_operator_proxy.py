@@ -52,12 +52,34 @@ class OperatorProxyTests(unittest.TestCase):
         self.server.shutdown();self.server.server_close();self.thread.join(2)
         self.agent_server.shutdown();self.agent_server.server_close();self.agent_thread.join(2)
 
-    def call(self,token=None,path='/control/operator'):
+    def call(self,token=None,path='/control/operator',payload=None):
         request=Request('http://127.0.0.1:'+str(self.server.server_port)+path,
+            data=None if payload is None else json.dumps(payload).encode(),
             headers={'Authorization':'Bearer '+(self.config.token if token is None else token)})
         try:response=self.opener.open(request,timeout=2)
         except HTTPError as exc:response=exc
         with response:return response.code,json.load(response),response.headers
+
+    def test_microphone_authenticated_exact_cas_forwarding_and_invalid_denial(self):
+        payload=dict(enabled=True,listen=True,expected_boot_id='current-agent',expected_epoch=110,
+            owner_id='demo',expected_owner_id='previous')
+        with patch.object(self.hub,'agent',return_value=dict(ok=True)) as upstream:
+            self.assertEqual(self.call(token='wrong',path='/control/microphone',payload=payload)[0],401)
+            upstream.assert_not_called()
+            self.assertEqual(self.call(path='/control/microphone',payload=payload)[0],200)
+            upstream.assert_called_once_with('/microphone',payload)
+            upstream.reset_mock()
+            for changes in (dict(listen=1),dict(owner_id=None),dict(expected_epoch=True),dict(extra='deny')):
+                self.assertEqual(self.call(path='/control/microphone',payload=dict(payload,**changes))[0],400)
+            upstream.assert_not_called()
+        with patch.object(self.hub,'agent',side_effect=RuntimeError('Microphone authority changed')):
+            self.assertEqual(self.call(path='/control/microphone',payload=payload)[0],409)
+
+    def test_status_exposes_only_completed_turn_counter_not_transcripts(self):
+        with patch.object(self.hub,'agent',return_value=dict(turns=3,last_transcript='private')):
+            code,value,_=self.call(path='/control/status')
+            self.assertEqual(code,200);self.assertEqual(value['turns'],3)
+            self.assertNotIn('last_transcript',value)
 
     def test_bad_auth_never_calls_upstream_and_fixed_route_is_not_arbitrary_proxy(self):
         for token in ('wrong','é',''):

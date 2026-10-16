@@ -88,6 +88,20 @@ class AliceSpeechAddressTests(unittest.TestCase):
         self.assertEqual(reply['spoken_text'],'Алиса, Да. Это подходит.')
         self.assertEqual(self.pipeline.sessions['s']['messages'][-1]['content'],'Да. Это подходит.')
 
+    def test_same_live_turn_session_passes_prior_user_and_final_to_next_model_call(self):
+        self.pipeline.transcribe.side_effect=['Мой маркер — клён.', 'Какой мой маркер?']
+        captured=[]
+        def answer(config,messages,*args,**kwargs):
+            captured.append(copy.deepcopy(messages))
+            return 'Запомнил клён.' if len(captured)==1 else 'Клён.'
+        with patch('reachy_companion.brains.answer',side_effect=answer):
+            for _ in range(2):
+                list(self.pipeline.stream(dict(pcm_base64=base64.b64encode(b'pcm').decode(),session='same-live-session'),'/turn'))
+        self.assertEqual(captured[1][-3:],[
+            dict(role='user',content='Мой маркер — клён.'),
+            dict(role='assistant',content='Запомнил клён.'),
+            dict(role='user',content='Какой мой маркер?')])
+
     def test_existing_alice_no_duplicate_and_default_human_voice_unchanged(self):
         list(self.pipeline.stream(dict(text='Алиса, что ты думаешь?'),'/say'))
         self.assertEqual(self.spoken,['Алиса, что ты думаешь?'])

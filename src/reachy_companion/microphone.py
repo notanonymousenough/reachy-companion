@@ -5,6 +5,24 @@ from pathlib import Path
 import tempfile
 
 
+def validate_control(payload):
+    """Validate the existing Agent microphone API without importing audio code."""
+    allowed = {'enabled', 'listen', 'expected_boot_id', 'expected_epoch', 'owner_id', 'expected_owner_id'}
+    if type(payload) is not dict or set(payload) - allowed or type(payload.get('enabled')) is not bool:
+        raise ValueError('Expected enabled boolean and supported microphone fields')
+    if 'listen' in payload and type(payload['listen']) is not bool:
+        raise ValueError('listen must be boolean')
+    authority = 'expected_boot_id' in payload or 'expected_epoch' in payload
+    if authority and (type(payload.get('expected_boot_id')) is not str
+            or not 1 <= len(payload['expected_boot_id']) <= 256
+            or type(payload.get('expected_epoch')) is not int
+            or not 0 <= payload['expected_epoch'] < 2**63):
+        raise ValueError('Complete microphone authority required')
+    for key in ('owner_id', 'expected_owner_id'):
+        if key in payload and (not authority or type(payload[key]) is not str or not 1 <= len(payload[key]) <= 128):
+            raise ValueError('Bounded microphone owner requires authority')
+
+
 class MicrophoneState:
     def __init__(self, path, default=True):
         self.path = Path(path)
