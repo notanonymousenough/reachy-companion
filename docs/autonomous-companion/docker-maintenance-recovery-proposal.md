@@ -34,6 +34,27 @@ Read-only inventory runner установил следующие агрегат�
 принять архитектор и runner. В документе намеренно нет исполняемых команд:
 доказательства завершения домена пока недостаточны.
 
+Архитектор предложил один кандидат: штатно остановить Docker Desktop, завершить
+**только** соответствующую Desktop WSL distro, подтвердить завершение старых
+Windows request/backend/proxy, недоступность прежнего API и отсутствие
+автоматического возобновления; затем выполнить fresh start. Это кандидат для
+review, **не maintenance GO**. Runner ещё проверяет RO CLI version/help и
+соответствие endpoint конкретному домену. Имена distro/процессов и endpoint
+остаются в приватном inventory; угадывать их по типовой установке нельзя.
+
+Docker документирует [Desktop stop](https://docs.docker.com/reference/cli/docker/desktop/stop/),
+Microsoft — [завершение отдельной WSL distribution](https://learn.microsoft.com/en-us/windows/wsl/basic-commands#terminate).
+Эти описания подтверждают назначение средств управления, но не наличие нужной
+версии на PC, отсутствие durable replay или завершение конкретного запроса.
+Общий WSL shutdown и перезагрузка PC не входят в этот кандидат.
+
+Для submitters требуется проверяемый maintenance hold всех управляемых launcher,
+scheduler и retry paths на время границы. Координатор уже поставил управляемые
+чаты на HOLD PC mutations; это не доказывает hold всех внешних submitters.
+Требуется установить фактический scope и контроль доступа к endpoint. Нельзя
+выдавать отсутствие известных процессов за доказательство отсутствия всех
+будущих пользователей или акторов.
+
 1. Зафиксировать свежие operator state/STOP/epochs и RO inventory. Сохранить
    приватные exact baseline/spec/image/source/profile/FI receipts у runner.
    Проверить recoverability baseline и возможность вернуть штатные службы.
