@@ -67,6 +67,20 @@ StrictSlot, enrollment до START, exclusive8082, START204 witness и UNKNOWN/no
 Source algorithm review выполнен по operational-independent копии; значения
 проверяются локально sole runner. Actual установка gate и короткий runtime turn
 ещё не приняты.
+
+**HARD DEPLOY BLOCKER:** после начала create-stopped не получен достоверный
+CREATE completion/NoSubmission witness; StrictSlot сохраняет mutation_pending UNKNOWN.
+Read-only exact-plan проверка: кандидат отсутствует, исходный worker работает тем
+же процессом, профиль не изменён. Отсутствие кандидата не разрешает clear/retry.
+Прежние transport/preflight failures сохранены отдельно. Recovery refusal не
+является причиной исходного CREATE failure; первичная причина UNKNOWN, поскольку
+secondary recovery exception заменила её telemetry. Future-only исправление
+сохраняет primary fixed class/function/line до recovery и secondary отдельно;
+оно не выполняет повторную операцию и не разрешает очистку текущего UNKNOWN.
+Существующего reviewed CREATE-only reconciliation механизма не найдено. До
+reviewable maintenance decision не выполнять новые PC mutations/live trials,
+не создавать второй slot namespace и не переигрывать CREATE. Baseline сохранён,
+gate0033/e7d source-frozen, actual gate/long dialogue/streaming PASS отсутствуют.
 Это не доказательство длительного диалога или meaningful streaming.
 
 Обновлено 2026-10-17. Владелец плана — координатор Reachy Mini; writer ведёт код,
@@ -264,6 +278,34 @@ interrupt/ownership. Semantic false разрешает продолжить то
 Unknown, native failure, interruption или operator drift по-прежнему останавливают
 серии. Это явное изменение критерия следующего прогона, не пересчёт первого
 неуспешного soak и не полный MVP/context/coherence PASS. Предел1800 s сохраняется.
+
+### Следующий source путь после разрешения CREATE UNKNOWN
+
+Это dependency plan без нового deploy или live trial. Сначала принять short gate
+и длительную короткую Alice беседу. Streaming не является обходом заблокированного
+слота или поводом забыть working baseline.
+
+| Шов | Существующий frozen source | Что проверить до будущего применения |
+|---|---|---|
+| RAW token → Piper | `prepare_content_stream.py`: Brains9c69→020e435e, Voice92cf→bbdb7be5, helper token_stream a4aa26d3 | Прежний overlay не применяется поверх gate Voice0033. Нужен точный совместимый preimage с сохранением whole-candidate gate и explicit-details policy; endpoints/model identity прежние |
+| Capture/control | Installed S1 cf50-derived Agent4e2, capture_pump b7b1; flag OFF | Не возвращать прежний cf50 с unbound pause/resume. Сохранять explicit expected owner None/finite paired owners, обе epochs, TTL и новый STOP; один владелец существующего capture |
+| Partial STT | `prepare_provisional_stt.py` ожидает cf50, Voicebbdb, Recognition6211 и прежний capture b7b1 | Все несовпадающие preimages перепроверить и rebase source-only. S2 source acceptance не означает partial/continuous hardware PASS; no stale partial after OFF/new epoch |
+| Motion/audio admission | Existing Expression7a5 completion gate; local-armed proposal отдельно source-reviewed | Producer PCM/token overlap не доказывает meaningful audio. Local scheduler-ready не означает remote/physical admission; не менять timing/torque/UART вслепую |
+| AEC/barge/STOP | Existing VAD/barge thresholds, playback cancellation, SoundMonitor, epoch fences | Пороговая реакция не доказывает AEC. Нужны фактические source/DSP capabilities и near/far/music/own-speech cases на одном owned stream; отсутствие новых слов после STOP и свежий следующий turn |
+
+Whole-candidate Alice gate намеренно ждёт complete model answer до TTS. Нельзя
+выключить его и назвать это успешным безопасным Alice streaming. Для будущего
+совмещения понадобится отдельно reviewable bounded generation contract; до него
+первый proof meaningful speech до model completion допустим только в явно
+обозначенном режиме/запросе, например requested detailed human reply. Это не
+приёмка streaming для обычной короткой Alice реплики.
+
+Физическая приёмка требует одинакового attempt/boot/epochs и доказательства
+meaningful playback до окончания именно его model generation. Сравнивать только
+согласованные clocks либо причинную последовательность; не вычитать PC и Robot
+timestamps без offset proof. Непустой SDK chunk, queue/PCM yield, ACK, motion task
+или sampled APLAY lower bound по отдельности этого не доказывают. Acoustic onset,
+полный speech-end E2E и speaker identity остаются отдельными UNKNOWN до измерения.
 
 После smoke runner выполняет 20–30-минутную сессию из последовательных bounded
 циклов с >=10 связанными ходами в той же реальной conversation session. Граница
