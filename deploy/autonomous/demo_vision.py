@@ -151,10 +151,24 @@ def caption(m, io, plan, question):
     capability=io.req(m.AGENT,'/vision-capabilities')
     need(type(capability) is dict and type(capability.get('bound_snapshot_say')) is int
          and capability==dict(bound_snapshot_say=1,agent_boot_id=plan['boot']))
+    def check():
+        current_baseline(m,io,plan)
+        return io.operator_begin_by_thread[threading.get_ident()]
+    return caption_checked(config,plan['deadline'],question,check)
+
+
+def caption_checked(config, deadline, question, check):
+    """Shared camera/native path; check returns start of a fresh authority read.
+
+    The explicit demo retains its OFF/watch guard. The spoken child supplies
+    its exact ON/listening owner binding instead. Neither callback grants ON.
+    """
+    global PHASE
+    need(type(question) is str and 1<=len(question)<=256)
     PHASE='model_inventory'
     address=native_address(config)
     model,instance=select_model(get_models(address),config['llm']['model'])
-    current_baseline(m,io,plan)
+    check()
     png=body=response_data=payload=reply=None
     try:
         PHASE='capture'
@@ -172,9 +186,8 @@ def caption(m, io, plan, question):
         try:
             connection.connect()
             PHASE='image_admission'
-            current_baseline(m,io,plan)
-            began=io.operator_begin_by_thread[threading.get_ident()]
-            expires=min(dequeued+2,began+.3,plan['deadline'])
+            began=check()
+            expires=min(dequeued+2,began+.3,deadline)
             sock=connection.sock
             class Fresh:
                 def sendall(self,data,*args):
@@ -197,7 +210,7 @@ def caption(m, io, plan, question):
         PHASE='post_guards'
         _,after_instance=select_model(get_models(address),config['llm']['model'])
         need(after_instance==instance)
-        current_baseline(m,io,plan)
+        check()
         need(time.monotonic()<dequeued+60)
         PHASE='complete'
         return dict(kind='companion-vision-snapshot',final_text=answer,expires_at_monotonic=dequeued+60,

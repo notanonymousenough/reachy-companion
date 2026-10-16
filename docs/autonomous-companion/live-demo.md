@@ -8,6 +8,16 @@ From the Mac with the existing working SSH access and local private configuratio
 ./scripts/companion-demo --robot-known-hosts /path/to/existing-known-hosts --turns 3 --seconds 180
 ```
 
+The optional exact `53a` spoken-snapshot overlay is described in
+`deploy/patches/agent-53a-spoken-vision.md`. Once installed and verified by the
+sole runner, the normal demo accepts «Что перед тобой?» / «Что ты видишь?» from
+a fresh normal STT turn. It reuses the same camera/native FINAL and speaker
+path. This new dispatcher still needs real device acceptance; the preceding
+explicit snapshot checkpoint has already passed human scene verification,
+spoken output, stock motion and STOP. Ordinary session context is retained;
+visual question/answer history is not added. The overlay adds a separate STT
+request and classification pass to normal fresh turns.
+
 For one explicit camera snapshot and a spoken description:
 
 ```sh
@@ -16,8 +26,7 @@ For one explicit camera snapshot and a spoken description:
 ```
 
 Show the scene before requesting the snapshot. This is a command-triggered turn;
-it does not claim to recognize a spoken camera request. The regular voice demo
-and its short conversation history remain unchanged. The snapshot caption is
+it does not listen for a spoken camera request. The snapshot caption is
 not added to that conversation history in this increment.
 
 This mode requires the separately reviewed exact Agent speech-binding overlay

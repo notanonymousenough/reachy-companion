@@ -1,0 +1,55 @@
+--- a/src/reachy_companion/agent.py
++++ b/src/reachy_companion/agent.py
+@@ -615,6 +615,9 @@
+                     if not self.listening.is_set() or epoch != self.microphone_epoch:
+                         continue
+                     interrupted_input = False
++                    snapshot_turn = False
++                    from .spoken_vision import binding
++                    captured_operator = binding(self.operator_status())
+                     pending, self.pending_pcm = self.pending_pcm, None
+                     if pending is not None and pending[0] == epoch:
+                         pcm = pending[1]
+@@ -660,12 +663,39 @@
+                                                        'previous_reply_interrupted': True}, expected_epoch=epoch)
+                         response['transcript'] = text
+                     else:
+-                        response = self.voice('/turn', {'pcm_base64': base64.b64encode(pcm).decode(),
+-                                                       'session': self.config['conversation']['session']}, expected_epoch=epoch)
++                        from .spoken_vision import matches, dispatch
++                        recognized = self.request(self.config['network']['voice_url'], '/transcribe',
++                                                  {'pcm_base64': base64.b64encode(pcm).decode()})
++                        text = recognized['transcript']
++                        if (recognized.get('ok') is not True or type(text) is not str
++                                or len(text) > self.config['limits']['max_text_chars']):
++                            raise ValueError('Invalid transcription result')
++                        if not self.listening.is_set() or epoch != self.microphone_epoch:
++                            continue
++                        action = recognized['decision']['action']
++                        if action in ('stop', 'pause'):
++                            response = {'transcript': text, 'command': action}
++                        elif action == 'reset':
++                            self.resume_audio = None
++                            self.request(self.config['network']['voice_url'], '/reset',
++                                         {'session': self.config['conversation']['session']})
++                            response = self.voice('/say', {'text': self.config['conversation']['reset_reply'],
++                                                          'session': self.config['conversation']['session']}, expected_epoch=epoch)
++                            response['transcript'] = text
++                        elif action == 'answer' and matches(text, self.current_reply_text):
++                            snapshot_turn = True
++                            response = dispatch(self, text, epoch, captured_operator)
++                        elif text:
++                            response = self.voice('/text', {'text': text,
++                                                           'session': self.config['conversation']['session'],
++                                                           'previous_reply_interrupted': False}, expected_epoch=epoch)
++                            response['transcript'] = text
++                        else:
++                            continue
+                     self.last_transcript = response.get('transcript', '')
+                     if self.last_transcript:
+                         self.turns += 1
+-                        if self.config['logging']['log_transcripts']:
++                        if self.config['logging']['log_transcripts'] and not snapshot_turn:
+                             LOG.info('turn transcript=%r reply=%r', self.last_transcript, response.get('reply'))
+                     if response.get('command') == 'stop':
+                         self.resume_audio = None
