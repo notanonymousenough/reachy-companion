@@ -1,0 +1,37 @@
+--- a/reachy_mini/daemon/app/routers/move.py
++++ b/reachy_mini/daemon/app/routers/move.py
+@@ -108,10 +108,14 @@
+     return MoveUUID(uuid=uuid)
+ 
+ 
+-async def stop_move_task(uuid: UUID) -> dict[str, str]:
++async def stop_move_task(uuid: UUID) -> dict[str, str | bool]:
+     """Stop a running move task by cancelling it."""
+     if uuid not in move_tasks:
+-        raise KeyError(f"Running move with UUID {uuid} not found")
++        return {
++            "message": f"Move with UUID {uuid} is already absent",
++            "uuid": str(uuid),
++            "already_absent": True,
++        }
+ 
+     task = move_tasks.pop(uuid, None)
+     assert task is not None
+@@ -125,6 +129,8 @@
+ 
+     return {
+         "message": f"Stopped move with UUID: {uuid}",
++        "uuid": str(uuid),
++        "already_absent": False,
+     }
+ 
+ 
+@@ -193,7 +199,7 @@
+ 
+ 
+ @router.post("/stop")
+-async def stop_move(uuid: MoveUUID) -> dict[str, str]:
++async def stop_move(uuid: MoveUUID) -> dict[str, str | bool]:
+     """Stop a running move task."""
+     return await stop_move_task(uuid.uuid)
+ 
