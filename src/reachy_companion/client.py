@@ -107,7 +107,7 @@ def guarded_control(config, base, path, payload, expected, *, deadline=None):
         connection.close()
 
 
-def demo(config, *, turns=3, seconds=180, owner_id=None):
+def demo(config, *, turns=3, seconds=180, owner_id=None, operator_binding=None):
     """Run the existing live Agent, releasing only our unchanged CAS claims."""
     if type(turns) is not int or not 1 <= turns <= 3 or type(seconds) is not int or not 10 <= seconds <= 300:
         raise ValueError('Demo requires 1..3 turns and 10..300 seconds')
@@ -117,6 +117,16 @@ def demo(config, *, turns=3, seconds=180, owner_id=None):
         parsed_owner = uuid.UUID(owner_id)
         if str(parsed_owner) != owner_id or parsed_owner.int == 0:
             raise ValueError('Demo owner must be a canonical nonzero UUID')
+    expected_binding = None
+    if operator_binding is not None:
+        if (type(operator_binding) is not dict
+                or set(operator_binding) != {'agent_boot_id', 'microphone_epoch', 'policy_epoch'}
+                or type(operator_binding['agent_boot_id']) is not str
+                or not 1 <= len(operator_binding['agent_boot_id']) <= 256
+                or any(type(operator_binding[k]) is not int or not 0 <= operator_binding[k] < 2**63
+                       for k in ('microphone_epoch', 'policy_epoch'))):
+            raise ValueError('Exact typed demo operator binding required')
+        expected_binding = tuple(operator_binding[k] for k in ('agent_boot_id', 'microphone_epoch', 'policy_epoch'))
     base = config['network']['hub_url']
     deadline = time.monotonic() + seconds
     cleaning_up = False
@@ -148,6 +158,9 @@ def demo(config, *, turns=3, seconds=180, owner_id=None):
         initial = call('/control/operator')
         control_authority(initial)
         policy = initial['motion_policy']
+        if expected_binding is not None and expected_binding != (
+                initial['agent_boot_id'], initial['microphone_epoch'], policy['epoch']):
+            raise ValueError('Operator changed after watchdog was armed')
         hardware = call('/status')
         stock = hardware['stock_motion']
         if (initial['microphone_enabled'] or initial['capture_active'] or initial['listening']

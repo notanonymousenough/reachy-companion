@@ -101,6 +101,36 @@ class DemoTests(unittest.TestCase):
                 with self.assertRaises(ValueError):demo({},owner_id=owner)
                 io.assert_not_called()
 
+    def test_prearmed_watch_baseline_matches_initial_operator(self):
+        self.assertEqual(self.run_demo(owner_id='00112233-4455-4677-8899-aabbccddeeff',
+            operator_binding=dict(agent_boot_id='boot',microphone_epoch=4,policy_epoch=8)),0)
+        self.assertEqual(len(self.posts),4)
+
+    def test_changed_prearmed_baseline_denies_before_hardware_reads_or_claims(self):
+        binding=dict(agent_boot_id='boot',microphone_epoch=4,policy_epoch=8)
+        for change in (dict(agent_boot_id='old'),dict(microphone_epoch=3),dict(policy_epoch=7)):
+            reads=[]
+            def initial_only(config,url,**kwargs):
+                reads.append(url)
+                self.assertEqual(url,'http://fixture/control/operator')
+                return copy.deepcopy(self.operator)
+            with self.subTest(change=change),patch('reachy_companion.client.request',side_effect=initial_only), \
+                    patch('builtins.print'):
+                self.assertEqual(demo({'network':{'hub_url':'http://fixture'}},
+                    operator_binding=dict(binding,**change)),1)
+            self.assertEqual(len(reads),1);self.assertEqual(self.posts,[])
+
+    def test_invalid_watch_baseline_denied_before_any_io(self):
+        binding=dict(agent_boot_id='boot',microphone_epoch=4,policy_epoch=8)
+        values=[False,[],{},dict(binding,extra=1),dict(binding,agent_boot_id=''),
+            dict(binding,agent_boot_id='a'*257),dict(binding,microphone_epoch=True),
+            dict(binding,microphone_epoch=-1),dict(binding,policy_epoch=2**63),
+            dict(binding,policy_epoch=None)]
+        for value in values:
+            with self.subTest(value=value),patch('reachy_companion.client.request') as io:
+                with self.assertRaises(ValueError):demo({},operator_binding=value)
+                io.assert_not_called()
+
     def test_idle_expression_counter_changes_do_not_deny_admission_or_release(self):
         original=self.request
         def changing(*args,**kwargs):

@@ -48,6 +48,12 @@ UUID. The default remains a freshly generated UUID. This internal argument does
 not arm a watch or verify readiness by itself; it supplies neither a new CLI flag
 nor a file/environment handoff protocol. A self-contained user wrapper must reuse
 the actual installed watch launcher's arm/readiness-to-child path.
+That launcher must also pass its initial `operator_binding` containing exactly
+`agent_boot_id`, `microphone_epoch` and `policy_epoch`. `demo()` validates this
+optional internal argument before I/O and compares it with its own first operator
+read before any claims. A changed baseline denies admission, so the watch's exact
+epoch cleanup cannot silently cover a different run. Subsequent reads and writes
+retain the existing fresh authority and CAS checks.
 
 Wait for `Microphone capture active` before speaking. An existing startup greeting
 is not a model answer and does not count as a completed turn. Use a harmless
