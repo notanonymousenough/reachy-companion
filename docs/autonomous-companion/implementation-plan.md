@@ -54,6 +54,19 @@ same-image strict-slot overlay с двумя individual read-only binds Voice/Co
 единственным worker на8082, recoverable baseline и exact private-profile restore.
 В Alice audio mode отсутствие загруженной SoundEvents session отклоняется до STT
 и модели; fallback kind=speech/scores0 не используется как verified speech.
+Actual alias audit исключил overwrite прежних файлов: Config имеет8 parked aliases,
+оба источника связаны с frozen plans. Pure builder
+`prepare_question_gate_container.py` принят independently/8 focused tests: заменить
+Source двух уже существующих RO mounts, сохранить mount count5, прочие Config,
+HostConfig, restart policy, сеть/security/ports. Сохраняется только ранее принятый
+явный Engine typed case OomKillDisable null→false и immutable image pin. Ни Docker,
+ни filesystem/network/model операций этот builder не выполняет. Profile activation
+добавляет один bool к exact preimage; rollback возвращает исходные bytes/FI прежде
+чем запускать старый Config. Исполняющий caller сохраняет прежние SourceFences,
+StrictSlot, enrollment до START, exclusive8082, START204 witness и UNKNOWN/no retry.
+Source algorithm review выполнен по operational-independent копии; значения
+проверяются локально sole runner. Actual установка gate и короткий runtime turn
+ещё не приняты.
 Это не доказательство длительного диалога или meaningful streaming.
 
 Обновлено 2026-10-17. Владелец плана — координатор Reachy Mini; writer ведёт код,
