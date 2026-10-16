@@ -22,7 +22,8 @@ own private source/plan; it never imports an old `/run` trial. The device deadli
 is child seconds plus 20 seconds, with a separate systemd lifetime bound. Child
 exit, failure or Ctrl-C requests owned cleanup immediately. A lost Mac/SSH leaves
 the independent device watch active until its deadline. Cleanup must be verified
-OFF with no playback/factory task and volume 50; unknown remains a nonzero result.
+OFF with no playback/factory task and the operator's starting volume preserved;
+unknown remains a nonzero result.
 No new service installation, model, microphone capture process or UART owner is
 created. The existing sudo command on the robot arms the transient watch; the
 user does not manually arm it. Source review and actual runner acceptance of
@@ -65,8 +66,11 @@ already armed and the existing private configuration available locally:
 
 Before starting: Agent paused, microphone/capture/listening OFF and unowned;
 policy unowned, quiet/privacy OFF; stock selected, known, free and motors enabled.
-Set volume to 50 with the existing control page. The launcher requires an audible
-volume at most 50 and preserves it. It does not wake sleeping motors or alter
+Set the desired volume with the existing control page; 100% is supported. The
+launcher accepts audible volume 1–100 and never sets or restores volume itself.
+The watch records the current starting volume and reports `volume_preserved`
+after cleanup. A later operator volume change is retained, with a mismatch
+reported instead of being overwritten. It does not wake sleeping motors or alter
 configuration. Admission failures stop before listening is granted.
 
 The sole runner must arm the existing independent device stopwatch before
@@ -127,7 +131,7 @@ is a task receipt, not proof of physical movement. `physical_motion_verified`
 and `context_verified` intentionally remain false: the runner must separately
 record actual visible bounded motion, audible final replies, correct second-turn
 marker recall, STOP during audible speech, microphone/capture OFF afterward,
-policy OFF/released and volume 50. Summary `completed_turns` is the last delta
+policy OFF/released and the operator-selected volume. Summary `completed_turns` is the last delta
 observed by the client, not the final post-cleanup Agent delta or proof of an
 exact per-run turn count. A CLI zero exit means the observed threshold was
 reached and cleanup succeeded; it does not certify those physical acceptance

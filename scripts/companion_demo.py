@@ -144,7 +144,8 @@ def launch(config, known_hosts, *, turns, seconds):
     verified = (type(cleanup) is dict and cleanup.get('final_OFF') is True
         and cleanup.get('admission_retired') is True
         and cleanup.get('factory_running_empty') is True and cleanup.get('aplay_absent') is True
-        and cleanup.get('volume_percent') == 50 and cleanup.get('stock_unknown') is False)
+        and type(cleanup.get('volume_percent')) is int and 1 <= cleanup['volume_percent'] <= 100
+        and cleanup.get('volume_preserved') is True and cleanup.get('stock_unknown') is False)
     print(json.dumps(dict(kind='companion-demo-terminal', child_returncode=code,
         cleanup_verified=verified, physical_motion_verified=False, context_verified=False)), flush=True)
     return code if verified else 1

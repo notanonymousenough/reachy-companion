@@ -142,8 +142,8 @@ def demo(config, *, turns=3, seconds=180, owner_id=None, operator_binding=None):
         value = call('/control/status')
         if type(value.get('turns')) is not int or value['turns'] < 0:
             raise ValueError('Agent completed-turn counter unavailable')
-        if type(value.get('volume_percent')) is not int or not 0 < value['volume_percent'] <= 50:
-            raise ValueError('Set audible volume to at most 50 before demo')
+        if type(value.get('volume_percent')) is not int or not 0 < value['volume_percent'] <= 100:
+            raise ValueError('Audible volume from 1 to 100 required before demo')
         return value
     owner = str(uuid.uuid4()) if owner_id is None else owner_id
     claims = {}

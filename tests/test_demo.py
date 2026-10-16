@@ -16,6 +16,7 @@ class DemoTests(unittest.TestCase):
             expression_version=1,microphone_state_error=None)
         self.posts = []
         self.completed = 0
+        self.volume = 100
         self.fail_after_microphone = False
         self.foreign = False
         def guarded(config,base,path,payload,expected,**kwargs):
@@ -63,7 +64,7 @@ class DemoTests(unittest.TestCase):
         if path == '/control/status':
             if self.operator['microphone_enabled']:
                 self.completed += 1
-            return dict(turns=self.completed, volume_percent=50)
+            return dict(turns=self.completed, volume_percent=self.volume)
         if path == '/status':
             return dict(stock_motion=dict(selected=True, unknown=False,
                 owned_uuid='task' if self.completed and self.operator['microphone_enabled'] else None,
@@ -87,6 +88,12 @@ class DemoTests(unittest.TestCase):
         self.assertIsNone(self.operator['motion_policy_owner_id'])
         self.assertEqual(len(self.posts), 4)
         self.assertNotIn('owner_id', self.posts[-1][1])
+
+    def test_inaudible_or_invalid_volume_denies_without_changing_it(self):
+        for volume in (0,101,True):
+            self.volume=volume
+            with self.subTest(volume=volume):self.assertEqual(self.run_demo(),1)
+        self.assertEqual(self.posts,[])
 
     def test_turn_limit_during_recording_cleans_up_without_a_fourth_loop(self):
         original=self.request;status_reads=[]

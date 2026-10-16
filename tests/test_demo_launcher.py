@@ -32,7 +32,8 @@ class LauncherTests(unittest.TestCase):
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
         self.hosts=Path(self.tmp.name)/'known_hosts';self.hosts.write_text('fixture public key')
         self.binding=dict(agent_boot_id='boot',microphone_epoch=130,policy_epoch=41)
-        self.cleaned=dict(final_OFF=True,admission_retired=True,factory_running_empty=True,aplay_absent=True,volume_percent=50,stock_unknown=False)
+        self.cleaned=dict(final_OFF=True,admission_retired=True,factory_running_empty=True,aplay_absent=True,
+            volume_percent=100,volume_preserved=True,stock_unknown=False)
 
     def robot(self,config,hosts,payload):
         self.events.append(payload['action'])
@@ -83,6 +84,8 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual(self.run_launch(robot=lost),1)
         self.cleaned['stock_unknown']=False;self.cleaned['admission_retired']=False
         self.assertEqual(self.run_launch(),1)
+        self.cleaned['admission_retired']=True;self.cleaned['volume_preserved']=False
+        self.assertEqual(self.run_launch(),1)
 
     def test_owned_mux_255_requires_validated_transfer_explicit_close_and_natural_reap(self):
         cfg=dict(deployment=dict(robot=dict(user='pollen',host='robot',root='/home/pollen/reachy-companion'),
@@ -119,7 +122,7 @@ class WatchTests(unittest.TestCase):
             microphone_state_error=None,expression_version=1)
         self.owner='00112233-4455-4677-8899-aabbccddeeff'
         self.io=Mock();self.io.op.side_effect=lambda:copy.deepcopy(self.value)
-        self.io.status.return_value=dict(volume_percent=50,turns=2)
+        self.io.status.return_value=dict(volume_percent=100,turns=2)
         hub=dict(stock_motion=dict(selected=True,unknown=False,owned_uuid=None),ownership=dict(state='free'),
             action_running=False,robot=dict(control_mode='enabled'))
         self.io.req.side_effect=lambda where,path:[] if path=='/api/move/running' else hub
@@ -145,6 +148,7 @@ class WatchTests(unittest.TestCase):
         with patch.object(watch,'RUN_BASE',self.base):
             run,plan=watch.load_plan(ready['run_id'],ready['plan_sha256'],self.owner)
             self.assertEqual(plan['mic_epoch'],130);self.assertEqual(plan['policy_epoch'],41)
+            self.assertEqual(plan['volume_percent'],100)
             with self.assertRaises(watch.GuardDenied):
                 watch.finish(dict(action='finish',owner='11112233-4455-4677-8899-aabbccddeeff',
                     run_id=ready['run_id'],plan_sha256=ready['plan_sha256']))
@@ -156,7 +160,7 @@ class WatchTests(unittest.TestCase):
     def test_cleanup_never_posts_for_newer_owner(self):
         self.value.update(microphone_owner_id='human',motion_policy_owner_id='human')
         self.value['microphone_epoch']+=2;self.value['motion_policy']['epoch']+=2
-        plan=dict(boot='current',mic_epoch=130,policy_epoch=41,owner=self.owner,agent_pid=10)
+        plan=dict(boot='current',mic_epoch=130,policy_epoch=41,owner=self.owner,agent_pid=10,volume_percent=100)
         with patch.object(watch,'playbacks',return_value=[]),patch.object(watch.time,'monotonic',side_effect=[0,0,5]), \
                 patch.object(watch.time,'sleep'):
             result=watch.cleanup(self.io,plan)
@@ -164,7 +168,7 @@ class WatchTests(unittest.TestCase):
         self.assertFalse(result['mic_OFF_POST']);self.assertFalse(result['policy_OFF_POST'])
         self.assertTrue(all(len(call.args)==2 for call in self.io.req.call_args_list))
 
-    def cleanup_state(self,lose_mic_ack=False):
+    def cleanup_state(self,lose_mic_ack=False,start_volume=100):
         self.posts=[]
         def request(where,path,payload=None,expected=None,timeout=2):
             if payload is not None:
@@ -183,7 +187,7 @@ class WatchTests(unittest.TestCase):
                 return {}
             return [] if path=='/api/move/running' else dict(stock_motion=dict(unknown=False))
         self.io.req.side_effect=request
-        plan=dict(boot='current',mic_epoch=130,policy_epoch=41,owner=self.owner,agent_pid=10)
+        plan=dict(boot='current',mic_epoch=130,policy_epoch=41,owner=self.owner,agent_pid=10,volume_percent=start_volume)
         with patch.object(watch,'playbacks',return_value=[]):result=watch.cleanup(self.io,plan)
         return result
 
@@ -219,6 +223,16 @@ class WatchTests(unittest.TestCase):
         self.cleanup_state()
         self.assertEqual([path for path,_ in self.posts],['/motion-policy'])
         self.assertEqual(self.value['microphone_epoch'],131)
+
+    def test_operator_selected_start_volume_is_preserved_without_volume_posts(self):
+        self.io.status.return_value['volume_percent']=73
+        result=self.cleanup_state(start_volume=73)
+        self.assertTrue(result['volume_preserved']);self.assertEqual(result['volume_percent'],73)
+        self.assertTrue(all(path in ('/microphone','/motion-policy') for path,_ in self.posts))
+        self.io.status.return_value['volume_percent']=100
+        result=self.cleanup_state(start_volume=73)
+        self.assertFalse(result['volume_preserved']);self.assertEqual(result['volume_percent'],100)
+        self.assertEqual(self.posts,[])
 
     def test_policy_fence_preserves_other_target_newer_live_owner(self):
         self.value.update(microphone_epoch=133,microphone_owner_id='human',microphone_enabled=True,

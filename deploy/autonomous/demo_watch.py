@@ -138,7 +138,9 @@ def cleanup(io,p):
     v['microphone_epoch']>p['mic_epoch'] and v['motion_policy']['epoch']>p['policy_epoch'])
   if good and retired:break
   time.sleep(.1)
- out.update(final_OFF=good,admission_retired=retired,volume_percent=s.get('volume_percent'),stock_unknown=h['stock_motion']['unknown'],factory_running_empty=running==[],aplay_absent=not playbacks(p['agent_pid']),
+ out.update(final_OFF=good,admission_retired=retired,volume_percent=s.get('volume_percent'),
+  volume_preserved=type(s.get('volume_percent')) is int and s['volume_percent']==p.get('volume_percent'),
+  stock_unknown=h['stock_motion']['unknown'],factory_running_empty=running==[],aplay_absent=not playbacks(p['agent_pid']),
   microphone_epoch=v['microphone_epoch'],policy_epoch=v['motion_policy']['epoch'],newer_owner_preserved=v['agent_boot_id']!=p['boot'] or v['microphone_owner_id'] not in (None,p['owner']) or v['motion_policy_owner_id'] not in (None,p['owner']))
  return out
 
@@ -184,7 +186,8 @@ def arm(io, request):
     need(value['phase'] == 'paused' and all(value[k] is False for k in ('microphone_enabled', 'capture_active', 'listening')), 'idle_OFF')
     need(value['microphone_owner_id'] is None and value['motion_policy_owner_id'] is None
          and all(value['motion_policy'][k] is False for k in ('motor_enabled', 'quiet', 'privacy_all')), 'unowned_policy_OFF')
-    need(status['volume_percent'] == 50 and hub['stock_motion']['selected'] is True
+    need(type(status.get('volume_percent')) is int and 1 <= status['volume_percent'] <= 100
+         and hub['stock_motion']['selected'] is True
          and hub['stock_motion']['unknown'] is False and hub['stock_motion']['owned_uuid'] is None
          and hub['ownership']['state'] == 'free' and not hub['action_running']
          and hub['robot']['control_mode'] == 'enabled' and io.req(FACTORY, '/api/move/running') == [], 'factory_idle')
@@ -200,7 +203,8 @@ def arm(io, request):
     script.chmod(0o444)
     plan = dict(boot=value['agent_boot_id'], mic_epoch=value['microphone_epoch'],
         policy_epoch=value['motion_policy']['epoch'], owner=owner, deadline=time.monotonic() + seconds + 20,
-        initial_turns=status['turns'], agent_pid=pid, agent_identity=proc(pid), run=str(run))
+        initial_turns=status['turns'], volume_percent=status['volume_percent'],
+        agent_pid=pid, agent_identity=proc(pid), run=str(run))
     path = run / 'plan.private.json'
     save(path, plan)
     pin = hashlib.sha256(raw(path)).hexdigest()
