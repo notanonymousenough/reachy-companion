@@ -1,0 +1,72 @@
+--- reachy-recognition-6211-provisional.patch.before
++++ reachy-recognition-6211-provisional.patch.after
+@@ -23,30 +23,50 @@
+             from vosk import Model, SetLogLevel
+             SetLogLevel(-1)
+             self.model = Model(str(config.path(config['models']['stt']['path'])))
++        self.loaded_backend = self.settings['backend']
+ 
+-    def transcribe(self, pcm):
++    def _validate_pcm(self, pcm):
+         audio = self.config['audio']
+         if not pcm or len(pcm) % 2 or len(pcm) > audio['max_input_seconds'] * audio['sample_rate'] * 2:
+             raise ValueError('Invalid mono 16 kHz PCM input')
++
++    def transcribe(self, pcm):
++        self._validate_pcm(pcm)
+         with self.lock:
+-            if self.settings['backend'] == 'faster_whisper':
+-                import numpy as np
+-                samples = np.frombuffer(pcm, dtype='<i2').astype(np.float32) / 32768
+-                s = self.settings
+-                segments, _ = self.model.transcribe(samples, language=s['language'], beam_size=s['beam_size'],
+-                    initial_prompt=s['initial_prompt'], vad_filter=s['vad_filter'],
+-                    condition_on_previous_text=False, temperature=0,
+-                    no_speech_threshold=s['no_speech_threshold'], log_prob_threshold=s['log_prob_threshold'])
+-                return ' '.join(seg.text.strip() for seg in segments
+-                                if seg.avg_logprob >= s['log_prob_threshold'] and seg.no_speech_prob < s['no_speech_threshold']).strip()
+-            from vosk import KaldiRecognizer
+-            recognizer = KaldiRecognizer(self.model, audio['sample_rate'])
+-            parts = []
+-            for offset in range(0, len(pcm), 8000):
+-                if recognizer.AcceptWaveform(pcm[offset:offset+8000]):
+-                    parts.append(json.loads(recognizer.Result()).get('text', ''))
+-            parts.append(json.loads(recognizer.FinalResult()).get('text', ''))
+-            return ' '.join(p for p in parts if p).strip()
++            return self._decode_pcm(pcm)
++
++    def transcribe_provisional(self, pcm):
++        self._validate_pcm(pcm)
++        if (getattr(self, 'loaded_backend', None) != 'faster_whisper'
++                or self.settings['backend'] != self.loaded_backend):
++            raise ValueError('Loaded faster Whisper required for provisional STT')
++        if not self.lock.acquire(blocking=False):
++            return None
++        try:
++            return self._decode_pcm(pcm)
++        finally:
++            self.lock.release()
++
++    def _decode_pcm(self, pcm):
++        audio = self.config['audio']
++        if self.settings['backend'] == 'faster_whisper':
++            import numpy as np
++            samples = np.frombuffer(pcm, dtype='<i2').astype(np.float32) / 32768
++            s = self.settings
++            segments, _ = self.model.transcribe(samples, language=s['language'], beam_size=s['beam_size'],
++                initial_prompt=s['initial_prompt'], vad_filter=s['vad_filter'],
++                condition_on_previous_text=False, temperature=0,
++                no_speech_threshold=s['no_speech_threshold'], log_prob_threshold=s['log_prob_threshold'])
++            return ' '.join(seg.text.strip() for seg in segments
++                            if seg.avg_logprob >= s['log_prob_threshold'] and seg.no_speech_prob < s['no_speech_threshold']).strip()
++        from vosk import KaldiRecognizer
++        recognizer = KaldiRecognizer(self.model, audio['sample_rate'])
++        parts = []
++        for offset in range(0, len(pcm), 8000):
++            if recognizer.AcceptWaveform(pcm[offset:offset+8000]):
++                parts.append(json.loads(recognizer.Result()).get('text', ''))
++        parts.append(json.loads(recognizer.FinalResult()).get('text', ''))
++        return ' '.join(p for p in parts if p).strip()
+ 
+ 
+ def prepare(config):

@@ -1,0 +1,28 @@
+--- reachy-agent-cf50-provisional.patch.before
++++ reachy-agent-cf50-provisional.patch.after
+@@ -276,6 +276,15 @@
+         except ValueError:return None
+ 
+     def status(self):
++        value = self._status_without_provisional()
++        if self.config['conversation'].get('provisional_stt_enabled', False) is True:
++            pump = getattr(self, '_capture_pump', None)
++            client = None if pump is None else pump.provisional
++            value['provisional_stt'] = None if client is None else client.metrics()
++            value['provisional_stt_unknown'] = getattr(self, '_provisional_unknown', False) is True
++        return value
++
++    def _status_without_provisional(self):
+         motion_status = self.motion_actor_status()
+         with self.microphone_lock:
+             policy = self.motion_policy.snapshot()
+@@ -350,6 +359,9 @@
+         enabled = self.config['conversation'].get('capture_pump_enabled', False)
+         if type(enabled) is not bool:
+             raise ValueError('Boolean capture pump opt-in required')
++        provisional = self.config['conversation'].get('provisional_stt_enabled', False)
++        if type(provisional) is not bool or (provisional and not enabled):
++            raise ValueError('Provisional STT requires the capture pump opt-in')
+         if enabled:
+             barge = self.config['conversation']['barge_in']
+             if (self.config['streaming']['enabled'] is not True or barge['enabled'] is not True

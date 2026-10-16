@@ -1,0 +1,92 @@
+--- reachy-capture-b7b1-provisional.patch.before
++++ reachy-capture-b7b1-provisional.patch.after
+@@ -116,6 +116,15 @@
+         self.claimed = 0
+         self.reply = False
+         self.assembler = Assembler(agent)
++        self.provisional = None
++        provisional = agent.config['conversation'].get('provisional_stt_enabled', False)
++        if type(provisional) is not bool:
++            raise ValueError('Boolean provisional STT opt-in required')
++        if provisional:
++            if agent.config['conversation'].get('capture_pump_enabled', False) is not True:
++                raise ValueError('Provisional STT requires the capture pump')
++            from .provisional_stt import ProvisionalClient
++            self.provisional = ProvisionalClient(agent, self, self.fresh_partial, clock=clock)
+ 
+     def current_binding(self):
+         a = self.agent
+@@ -136,12 +145,22 @@
+                     and packet.revision == self.assembler.revision
+                     and packet.received_end <= self.clock() <= packet.deadline)
+ 
++    def fresh_partial(self, packet):
++        with self.condition:
++            return (self.permitted() and packet.binding['boot'] == self.binding[0]
++                and packet.binding['microphone_epoch'] == self.binding[1]
++                and packet.binding['policy_epoch'] == self.binding[2]
++                and packet.binding['source_generation'] == self.generation
++                and packet.binding['utterance_id'] == self.assembler.number
++                and bool(self.assembler.frames) and packet.received_end <= self.clock() <= packet.deadline)
++
+     def start(self):
+         with self.condition:
+             if self.thread is not None:
+                 return
+             if not self.permitted():
+                 raise RuntimeError('Capture authority unavailable')
++            if self.provisional is not None: self.provisional.start()
+             self.thread = threading.Thread(target=self._read, name='reachy-aec-reader', daemon=True)
+             self.thread.start()
+ 
+@@ -152,6 +171,7 @@
+             self.latest = None
+             self.assembler.clear()
+             self.assembler.noise.clear()
++            if self.provisional is not None: self.provisional.retire()
+             self.condition.notify_all()
+ 
+     def close(self):
+@@ -177,14 +197,26 @@
+                 if self.agent.sounds.music:
+                     self.assembler.clear()
+                     self.latest = None
++                    if self.provisional is not None: self.provisional.endpoint(self.assembler.number)
+                     return
+             previous = self.assembler.number
+             result = self.assembler.feed(chunk, self.reply)
+             if self.assembler.number != previous:
+                 self.latest = None
++                if self.provisional is not None: self.provisional.begin(self.assembler.number)
+             if result is not None:
+                 number, revision, pcm, final = result
+                 self.latest = Utterance(self.binding, self.generation, number, revision, pcm, now, now+2., final)
++            if self.provisional is not None:
++                from .provisional_stt import MIN_FRAMES, WINDOW_FRAMES
++                if result is not None and result[3]:
++                    self.provisional.endpoint(result[0])
++                elif self.assembler.frames and self.provisional.due(self.assembler.number, now):
++                    total = len(self.assembler.frames) * len(chunk) // 2
++                    if total >= MIN_FRAMES:
++                        chunks = (WINDOW_FRAMES * 2 + len(chunk) - 1) // len(chunk)
++                        pcm = b''.join(self.assembler.frames[-chunks:])[-WINDOW_FRAMES*2:]
++                        self.provisional.offer(self.assembler.number, pcm, now, total-len(pcm)//2)
+             self.condition.notify_all()
+ 
+     def event(self, after=(0, 0), stop=None, idle_deadline=None, final_only=False):
+@@ -217,6 +249,7 @@
+                 self.claimed = max(self.claimed, packet.number)
+                 self.latest = None
+                 self.assembler.clear()
++                if self.provisional is not None: self.provisional.endpoint(packet.number)
+ 
+     def mode(self, reply):
+         with self.condition:
+@@ -225,6 +258,7 @@
+                 self.assembler.seen = 0
+                 self.assembler.clear()
+                 self.latest = None
++                if self.provisional is not None: self.provisional.endpoint(self.assembler.number)
+ 
+     def _read(self):
+         a = self.agent

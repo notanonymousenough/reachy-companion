@@ -1,0 +1,25 @@
+--- reachy-worker-bbdb-provisional.patch.before
++++ reachy-worker-bbdb-provisional.patch.after
+@@ -107,6 +107,9 @@
+ 
+     def transcribe_response(self,payload):
+         if not isinstance(payload,dict):raise ValueError('Typed audio request required')
++        if any(key in payload for key in ('mode', 'version', 'binding', 'provisional')):
++            from .provisional_stt import recognize_only
++            return recognize_only(self, payload)
+         requested=payload.get('diagnostics',False)
+         if type(requested) is not bool:raise ValueError('Boolean diagnostics request required')
+         pcm=base64.b64decode(payload['pcm_base64'],validate=True)
+@@ -453,7 +456,11 @@
+                     size = int(self.headers.get('Content-Length', 0))
+                     if not 0 < size <= config['limits']['max_request_bytes']:
+                         raise ValueError('Invalid audio request size')
+-                    payload = json.loads(self.rfile.read(size))
++                    raw = self.rfile.read(size)
++                    payload = json.loads(raw)
++                    if type(payload) is dict and any(key in payload for key in ('mode', 'version', 'binding', 'provisional')):
++                        from .provisional_stt import parse_request
++                        payload = parse_request(raw)
+                     self.reply(200, pipeline.transcribe_response(payload))
+                 except (ValueError, KeyError, TypeError) as exc:
+                     self.reply(400, {'error': str(exc)})
