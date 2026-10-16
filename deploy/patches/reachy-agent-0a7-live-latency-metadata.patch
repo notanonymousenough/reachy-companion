@@ -1,0 +1,186 @@
+--- a/src/reachy_companion/agent.py
++++ b/src/reachy_companion/agent.py
+@@ -29,6 +29,8 @@
+ class Agent:
+     def __init__(self, config):
+         self.config = config
++        self._live_latency_remaining = 3 if config['logging'].get('live_latency_metadata') is True else 0
++        self._live_latency_deadline = None
+         self.audio = config['audio']
+         self.http = build_opener(ProxyHandler({}))
+         self.listening = threading.Event()
+@@ -78,6 +80,47 @@
+                                         config.path(config['guarded_motion']['socket_path']),self.operator_status)
+         self.vad_bytes = self.audio['sample_rate'] * 2 * self.audio['vad_frame_ms'] // 1000
+ 
++    def _live_latency_begin(self, epoch):
++        if not self._live_latency_remaining:
++            return None
++        now = time.monotonic()
++        if self._live_latency_deadline is None:
++            self._live_latency_deadline = now + 60
++        if now >= self._live_latency_deadline:
++            return None
++        self._live_latency_remaining -= 1
++        return dict(attempt_id=uuid4().hex, started=now, deadline=self._live_latency_deadline,
++                    microphone_epoch=epoch, policy_epoch=self.motion_policy.snapshot()['epoch'],
++                    closed=False, expired=False, audio_kind=None, written_bytes=0,
++                    ack_submitted_bytes=0, final_submitted_bytes=0,
++                    final_received_offset_bytes=None, first_final_write_offset_bytes=None,
++                    marks=dict.fromkeys(('last_voiced_chunk_received', 'endpoint_decision', 'capture_return',
++                        'ack_reply', 'final_reply', 'ack_write_begin', 'ack_write_end',
++                        'final_write_begin', 'final_write_end')))
++
++    def _live_latency_mark(self, probe, name, at=None, replace=False):
++        if probe is None or probe['closed']:
++            return
++        now = time.monotonic() if at is None else at
++        if now >= probe['deadline']:
++            probe['expired'] = True
++            return
++        if replace or probe['marks'][name] is None:
++            probe['marks'][name] = round(max(0, now - probe['started']), 6)
++
++    def _live_latency_emit(self, probe, outcome, error_class=None):
++        if probe is None or probe['closed']:
++            return
++        probe['closed'] = True
++        expired = probe['expired'] or time.monotonic() >= probe['deadline']
++        record = {key: probe[key] for key in ('attempt_id', 'microphone_epoch', 'policy_epoch', 'marks',
++            'written_bytes', 'ack_submitted_bytes', 'final_submitted_bytes',
++            'final_received_offset_bytes', 'first_final_write_offset_bytes')}
++        record.update(version=1, agent_boot_id=self.agent_boot_id, outcome='expired' if expired else outcome,
++            error_class=error_class, written_frames=probe['written_bytes'] // 2,
++            speech_end_basis='vad_chunk_received', consumption_verified=False, acoustic_e2e_verified=False)
++        LOG.info('live_latency_metadata %s', json.dumps(record, separators=(',', ':'), allow_nan=False))
++
+     def stop_speaker(self, abort_stream=True):
+         process = self.playback_process
+         if process is not None and process.poll() is None:
+@@ -228,7 +271,7 @@
+         except HTTPError as exc:
+             raise RuntimeError('Hub HTTP %s: %s' % (exc.code, exc.read().decode()[:600])) from exc
+ 
+-    def capture(self, during_reply=False, on_speech=None, stop_event=None, idle_deadline=None, skip_expression=False):
++    def capture(self, during_reply=False, on_speech=None, stop_event=None, idle_deadline=None, skip_expression=False, probe=None):
+         epoch = self.microphone_epoch
+         def active():
+             return self.microphone.enabled and (during_reply or self.listening.is_set()) and not self.stopping.is_set() and epoch == self.microphone_epoch and not (stop_event and stop_event.is_set())
+@@ -266,6 +309,7 @@
+                             raise RuntimeError(process.stderr.read().decode()[:500])
+                         continue
+                     chunk = process.stdout.read(self.chunk_bytes)
++                    received_at = time.monotonic() if probe is not None else None
+                     if len(chunk) != self.chunk_bytes:
+                         raise RuntimeError('Microphone stream ended: ' + process.stderr.read().decode()[:500])
+                     chunks_seen += 1
+@@ -292,6 +336,8 @@
+                                         for i in range(0, len(chunk), self.vad_bytes))
+                     threshold = self.threshold * (barge.get('threshold_multiplier', 1) if during_reply else 1)
+                     loud = rms >= threshold and speech_frames >= self.audio['min_speech_frames']
++                    if loud:
++                        self._live_latency_mark(probe, 'last_voiced_chunk_received', at=received_at, replace=True)
+                     if during_reply and not confirmed:
+                         eligible = chunks_seen > barge.get('warmup_chunks', 9)
+                         barge_voiced = barge_voiced + 1 if loud and eligible else 0
+@@ -321,7 +367,10 @@
+                             continue
+                     if silent >= self.audio['silence_chunks'] or len(frames) >= self.audio['max_recording_seconds'] * 1000 / self.audio['chunk_ms']:
+                         if voiced >= self.audio['min_voiced_chunks'] and (not during_reply or confirmed):
+-                            return b''.join(frames) if active() else None
++                            if active():
++                                self._live_latency_mark(probe, 'endpoint_decision')
++                                return b''.join(frames)
++                            return None
+                         frames = []
+                         voiced = silent = 0
+                         if not during_reply:
+@@ -365,7 +414,7 @@
+                     process.wait()
+         time.sleep(self.audio['echo_tail_seconds'])
+ 
+-    def voice(self, path, payload, expected_epoch=None, allow_barge_in=True, replay=None):
++    def voice(self, path, payload, expected_epoch=None, allow_barge_in=True, replay=None, probe=None):
+         epoch = self.microphone_epoch if expected_epoch is None else expected_epoch
+         motor_policy_epoch=self.motion_policy.snapshot()['epoch']
+         monitor = None
+@@ -436,6 +485,11 @@
+                     event = json.loads(line)
+                     if cancelled():return cancelled_result()
+                     if event['type'] == 'reply':
++                        if probe is not None:
++                            probe['audio_kind'] = 'ack' if event.get('acknowledgement') is True else 'final'
++                            self._live_latency_mark(probe, probe['audio_kind'] + '_reply')
++                            if not probe['expired'] and probe['audio_kind'] == 'final' and probe['final_received_offset_bytes'] is None:
++                                probe['final_received_offset_bytes'] = total
+                         result = event
+                         spoken=event.get('spoken_text')
+                         if type(spoken) is not str or not spoken.strip() or len(spoken)>self.config['limits']['max_speech_chars']:
+@@ -497,7 +551,19 @@
+                                 raise RuntimeError('Streaming playback failed')
+                             if selector.select(timeout=0.2):
+                                 try:
++                                    write_started = time.monotonic() if probe is not None else None
+                                     written = os.write(process.stdin.fileno(), remaining)
++                                    if probe is not None and written > 0:
++                                        kind = probe['audio_kind']
++                                        if kind in ('ack', 'final'):
++                                            self._live_latency_mark(probe, kind + '_write_begin', at=write_started)
++                                            self._live_latency_mark(probe, kind + '_write_end')
++                                        if not probe['expired']:
++                                            if kind == 'final' and probe['first_final_write_offset_bytes'] is None:
++                                                probe['first_final_write_offset_bytes'] = probe['written_bytes']
++                                            if kind in ('ack', 'final'):
++                                                probe[kind + '_submitted_bytes'] += written
++                                            probe['written_bytes'] += written
+                                     clock.feed(written)
+                                     remaining = remaining[written:]
+                                 except BrokenPipeError:
+@@ -588,6 +654,9 @@
+                     else:
+                         self.expressions.hold()
+                 continue
++            probe = None
++            probe_outcome = 'capture_empty'
++            probe_error = None
+             try:
+                 with self.audio_lock:
+                     epoch = self.microphone_epoch
+@@ -619,7 +688,9 @@
+                         pcm = pending[1]
+                         interrupted_input = True
+                     else:
+-                        pcm = self.capture()
++                        probe = self._live_latency_begin(epoch)
++                        pcm = self.capture(probe=probe)
++                        self._live_latency_mark(probe, 'capture_return')
+                     if not pcm or not self.listening.is_set() or epoch != self.microphone_epoch:
+                         continue
+                     self.phase = 'processing'
+@@ -660,7 +731,9 @@
+                         response['transcript'] = text
+                     else:
+                         response = self.voice('/turn', {'pcm_base64': base64.b64encode(pcm).decode(),
+-                                                       'session': self.config['conversation']['session']}, expected_epoch=epoch)
++                                                       'session': self.config['conversation']['session']}, expected_epoch=epoch, probe=probe)
++                    probe_outcome = ('interrupted' if response.get('interrupted') else
++                                     'cancelled' if response.get('cancelled') else 'complete')
+                     self.last_transcript = response.get('transcript', '')
+                     if self.last_transcript:
+                         self.turns += 1
+@@ -672,10 +745,15 @@
+                         self.set_microphone(False)
+                     self.last_error = None
+             except Exception as exc:
++                probe_outcome, probe_error = 'error', type(exc).__name__[:64]
+                 self.last_error = str(exc)
+                 self.phase = 'error'
+                 LOG.exception('conversation_error')
+                 self.stopping.wait(self.config['conversation']['retry_seconds'])
++            finally:
++                if probe is not None and (probe['microphone_epoch'] != self.microphone_epoch or not self.microphone.enabled):
++                    probe_outcome = 'cancelled'
++                self._live_latency_emit(probe, probe_outcome, probe_error)
+         self.phase = 'stopped'
+ 
+     def manual(self, path, payload):
