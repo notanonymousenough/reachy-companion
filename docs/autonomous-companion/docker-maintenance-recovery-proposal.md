@@ -72,6 +72,36 @@ CREATE у клиентов, соблюдающих протокол. Общий 
 scope, а не требованием доказать отсутствие любых будущих внешних клиентов.
 Известные прежние submitters отсутствуют. Новых мутаций и supersession нет.
 
+### Последний RO topology / installed launch audit
+
+Same fixed endpoint `/info`: Engine identity совпала с прежней, Linux/WSL2
+kernel/Desktop OS подтверждены. Desktop APP/FileVersion 4.88.0.237115 отличается
+от CLI 0.4.3. Известный settings-store.json существует и является JSON object,
+но root key wslEngineEnabled отсутствует; explicit typed engine bool и
+version-valid settings schema **не подтверждены**. Значение по умолчанию не
+подставляется, широкий поиск других файлов не выполняется.
+
+Точная приватная выборка Desktop target дала unique/version2/running/storage
+association true; соседняя distro исключена из выбора. Всего registry records2
+и running WSL targets2. Это уточняет выбранную цель, но не заменяет открытый
+settings-schema proof или доказательство отсутствия воздействия на соседа.
+
+Управляемый installed audit: одна enrolled startup task, XML enrollment и
+project action/startup link совпали; enabled1/running0/restartCount3. Legacy
+bypass/watchdog references в этой task отсутствуют. Owned services0, observed
+project services0; owned-scope process metadata3, legacy bypass/watchdog refs0.
+Эти три процесса не объявляются полным списком submitters. Известный прежний
+CREATE submitter отсутствовал по предыдущей проверке.
+
+**Конкретный незакрытый admission gap:** startup task включена и имеет retries.
+Обслуживание должно включать её явный pause/disable и точное восстановление
+исходной XML/enabled state по согласованному плану. Сейчас это не выполнено.
+Известная project automation также ACTIVE: упоминание UNKNOWN в prompt не
+является enforcement; требуется явный проверяемый HOLD её mutating dispatch
+или согласованный pause с восстановлением. Координационный HOLD всех ролей
+охватывает прямые legacy entries/private callers, но не подменяет эти действия.
+Все проверки RO; runtime/task/service/slot/profile/Docker/WSL mutations0.
+
 ### Конечный source audit управляемых путей
 
 Writer проверил публичные исходники перечисленных entry points. Это не
