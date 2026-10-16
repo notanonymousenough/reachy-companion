@@ -18,9 +18,10 @@ Reachy, Hub, PC и VPS. Независимый reviewer проверяет ис�
 | Spoken snapshot | **РЕАЛЬНО РАБОТАЕТ:** после socket-only fix `7799e89` один human visual-запрос завершился успешно; человек подтвердил верность названия и описания. Exact visual STT, один turn без ошибки, CLI rc0 и независимый cleanup подтверждены | Это приёмка голосового camera → spoken description пути. Visual memory, latency target, streaming, отдельный STOP/motion прогон этим результатом не приняты; observer не дал terminal returned |
 | Prime-paused diagnostic | `73c241b`: Hub client обновлён без restart; в одном исправленном реальном прогоне cue выполнен при закрытом capture, затем подтверждены resume и свежий захват | **NOT_EXERCISED для камеры:** точный visual intent в STT отсутствовал, child не запускался. Один completed turn не доказывает vision/context. Повтора Alice vision не планируется |
 | Состояние после сбоя | После разрешённого повтора baseline/config/исходные worker-модули восстановлены и idle, content_tokens false, candidate parked, slot пустой; Robot OFF/unowned/free/100%, no camera/aplay; принятый camera bind сохранён | Это независимый конечный PASS восстановления данного повтора; не заменяет audible overlap, acoustic onset, E2E latency или длительный recovery soak |
-| Потоковый диалог | **Частичная реальная приёмка повторного `1e2d91c` прогона:** оба ответа слышны; owned STOP/cleanup и следующий turn в том же PC процессе прошли; PCM в обеих попытках выдан до последующих token READ; baseline независимо восстановлен | Содержательный audible overlap **NOT DEMONSTRATED**: первый сегмент 2 символа; APLAY впервые замечен после DONE, точный onset не измерен. Source audit завершён; S1 cf50 установлен с выключенной опцией; новый measurement прогон не проверил model route: наблюдался только `/stream/say`; baseline полностью восстановлен. Continuous capture/partial STT остаются обязательными: S1 установлен OFF, S2 source подготовлен, hardware acceptance нет |
+| Потоковый диалог | Последний human-прогон на cf50: оба ответа слышны, strict Agent21 + PC31 unique join прошёл; STOP озвучивания model response и следующий turn в том же процессе приняты, baseline независимо восстановлен | Measured timeline completion gate = 0,926774 s. Producer PCM/token overlap есть, meaningful audible overlap **NOT DEMONSTRATED**, acoustic consumption и speech-end E2E неизвестны. S1 установлен OFF; S2 source принят, не установлен. Новые expressive-прогоны удерживаются из-за incident антенн |
 | Задержка vision | Два реальных image inference заняли около 11,03 и 10,35 s | Уже один inference превышает цель 10 s; полный speech-end → meaningful audio не измерен. Не объявлять цель достигнутой |
 | Память | Обычная RAM session history существует | Snapshot `/say` не добавляет visual question/answer в worker history; долговременная память и continuity через restart не приняты |
+| Антенны | Человек сообщил об эпизодах быстрого дрожания; конечное чтение API: 23 GET за 2,93772 s, изменений сообщаемых углов нет, task lists пусты, control mode ENABLED | Причина **UNKNOWN**. Freshness/caching/resolution и реальные targets неизвестны; короткое чтение примерно 7 Hz не исключает быстрый/периодический тремор и не доказывает физическую остановку. Без новых движений, torque/limits/config changes до evidence packet |
 | Полная автономность | Есть реализованные contracts, guards, fixtures и отдельные реальные checkpoints | Непрерывное восприятие/решения, память, полезные интеграции, recovery и длительная реальная приёмка ещё не завершены |
 
 Реальные receipts и операционные идентификаторы хранятся в приватном runner
@@ -32,8 +33,9 @@ Reachy, Hub, PC и VPS. Независимый reviewer проверяет ис�
 
 | Порядок | Статус | Минимальный результат | Владелец | Реальная приёмка и доказательство |
 |---|---|---|---|---|
+| P0.0 | **Приоритетный открытый incident антенн** | Отличить покой/озвучивание и собственные targets от SDK holding/idle path по конечным безопасным данным | runner: только конечная проверка/штатный STOP собственного UUID при необходимости; writer: source-only audit | Причина UNKNOWN, человеческая классификация покой/ответ ожидается. Не воспроизводить дрожь новыми движениями и не менять torque/smoothing/limits/config без evidence |
 | P0.1 | **Spoken camera PASS для одного реального human-запроса:** socket-only fix установлен, описание подтверждено человеком, финальный cleanup проверен | Сохранить принятый camera voice path и воспроизводимый `7799e89` fix | writer: public fix/план; runner: единственные device actions; координатор: следующая приёмка | Следующий приоритет — P0.2. Отдельные camera STOP/motion/no-resume и visual follow-up memory остаются открыты; один корректный spoken ответ их не заменяет |
-| P0.2 | PCM overlap/STOP/same-process next turn приняты частично; S1 cf50 установлен OFF и независимо проверен, последний trial не проверил model route; baseline полностью восстановлен | Измерить реальный gate/start путь и доказать содержательный audible overlap; затем continuous capture/partial STT | runner: свежий finite 75+60 measurement method, exact boot/source guards, paired observer/offline join; writer: следующий behavior fix только по actual timings; координатор: review/tester | Не считать установку feature/latency/overlap PASS. После следующего реального результата выбрать минимальную коррекцию, сохраняя working camera; новых runtime работ до evidence нет |
+| P0.2 | Real cf50 measurement: strict join, producer overlap, STOP/next turn и baseline PASS; 0,926774 s completion gate измерен | После разбора incident антенн — минимальный reviewed gate fix и meaningful audible overlap; затем actual continuous capture/partial STT | writer: source audit/proposal; runner: sole physical owner; координатор: evidence/review | Новых expressive trials и behavior patches до согласованного safety/causal evidence packet нет. S1 OFF/S2 source не являются hardware streaming PASS |
 | P1.1 | Частично, не принято | Обычный контекст, затем visual context с provenance/TTL; долговременные факты и исправления | writer: существующие session/memory seams; runner + человек: смысловая проверка | Факт → vision → местоименная ссылка на прежний факт; отдельно visual follow-up из реально виденного. Restart сохраняет разрешённые факты/mute, correction/deletion работает; vision history не обещать до реализации |
 | P1.2 | Не принято | Первая полезная typed integration через существующий broker/worker | writer: маленький adapter/schema; runner: настоящий target; координатор: scope | Реальная полезная задача с intended/attempted/completed receipt; ошибки/timeout/duplicate/cancel различимы. Нет raw shell/секретов/новых grants из текста модели или OCR |
 | P1.3 | Частично guards есть, полная приёмка открыта | Recovery, ресурсы, STOP, воспроизводимая доставка Git/transfer | writer + reviewer; runner: actual failures/recovery | Сеть/worker/model/restart/перегрузка не оживляют старые речь/движения. Bounded queues/VRAM/storage, сохранившиеся mute/volume, exact source hashes, конечный deploy/readiness/rollback без конкурирующих владельцев |
@@ -46,6 +48,101 @@ patch, новый dispatcher и model/runtime migration на активный ac
 общие approval-пакеты. Текущие STOP/mute/quiet/privacy и более новый owner имеют
 приоритет над любым планом. Точечная диагностика не должна запускать новый снимок
 или inference автоматически.
+
+## Последний human measurement и incident антенн
+
+На cf50/default-off выполнен один согласованный human-цикл. Оба окна объявлены
+человеку только после actual capture-active; человек прямо подтвердил, что оба
+ответа слышны. Один уникальный content attempt прошёл общий strict Agent21 + PC31
+join с текущими boot/mic/policy. STOP применён к bound model-response APLAY после
+3,028723 s наблюдения; cleanup 0,404633 s. Это software observation, не physical
+P95 и не доказательство STOP во время ещё идущей генерации. После verified DONE /
+producer/Piper quiescence второй запрос обработан тем же candidate процессом,
+completed turn = 1. Нового дополнительного цикла не было.
+
+| Метрика одного PC POST clock | Первый ответ | Второй ответ |
+|---|---|---|
+| First semantic, s | 0,622876 | 0,505733 |
+| First PCM yield, s | 0,756479 | 0,642915 |
+| Last nonempty token READ, s | 1,010910 | 1,742262 |
+| DONE READ, s | 1,011371 | 1,742726 |
+| First segment chars / boundary | 38 / question | 49 / period |
+
+Это producer PCM/token overlap. Семантическая категория первого сегмента
+**UNKNOWN_NOT_RETAINED**: длина и punctuation не доказывают содержательное начало.
+Raw text не сохраняется в этом плане.
+
+На одном Robot monotonic clock first audio → first positive pipe write =
+0,931785 s, из них timeline wait = **0,926774 s**. Popen занял 0,001101 s,
+после Popen до write — 0,003247 s; первая запись 3200 bytes. Response open занял
+0,709614 s. Отдельно записанные консервативные clock brackets дают first write
+POST+[1,532211; 2,545095] s, позже PC DONE 1,011371 s во всём этом интервале.
+Это software-bound результат данного attempt, не глобальная сертификация часов.
+Генераторные generation/cross-clock/acoustic flags не переписываются в true.
+Actual acoustic onset/consumption, speech-end E2E и второй Agent APLAY onset
+не измерены; meaningful audible overlap и полный streaming PASS не объявляются.
+
+Независимые конечные PC/Robot/camera проверки подтвердили восстановленный baseline:
+исходные worker/config, content_tokens false, idle, пустой slot, candidate parked,
+inventory сохранён. Тот же cf50 Agent, capture pump false, OFF/paused/unowned/free,
+100%, no arecord/APLAY/camera; camera bind/helper/unit/persisted state и source
+backups/FI journal сохранены. Это конечный recovery PASS данного прогона.
+
+**Затем человек сообщил о быстром дрожании антенн.** Runner выполнил только
+конечное read-only чтение: 23 GET за 2,93772 s (порядка 7 Hz запросов); сообщаемые
+углы имели span 0, обе task lists пусты. Control mode оставался **ENABLED**.
+Agent paused/OFF/unowned и motor policy false не означают отключённый привод или
+физическую остановку. Timestamp/freshness/caching/resolution и goal/target поля
+не подтверждены; такой пакет не исключает быстрый или intermittent тремор.
+Причина UNKNOWN, аппаратная поломка не установлена. Человеческое уточнение,
+возникает ли это в покое или при ответе, пока ожидается. Новые expressive trials,
+репродукция движениями и изменения torque, smoothing, limits/config удерживаются.
+
+Source-only audit exact expression_player `7a5…` / router `f513…` показывает один
+expression consumer: явного второго собственного параллельного sender нет.
+Публичные planning helpers добавляют processing repeat, speaking/phoneme timeline,
+dance и переходы к neutral с разными antenna targets; cues меняют знак по beat, поздние cues
+сливаются в текущий target без восстановления пропущенного времени. Конкретные
+активные flags/частота/амплитуда private config не читались и не предполагаются.
+Конкуренция с SDK idle/holding path и версиям cancellation требует actual source /
+bounded state evidence. Пустой REST task list не доказывает отсутствие controller
+holding или внутренних SDK задач.
+
+В cached SDK1.11 цепочка GotoMove при antennas=None подставляет present position,
+а evaluate возвращает non-None antenna vector; play_move передаёт target на своих
+тиках, controller далее удерживает последнюю цель. Это **не гарантия отсутствия
+записей оси**. max_antenna_degrees=0 также означает посылку нулевых targets,
+а не исключение антенн. Совпадение этих cached файлов с текущей установкой нужно
+проверить перед любой правкой; это source finding, не диагноз данного робота.
+
+Минимальный доступный fallback без изменения SDK — после согласованного evidence
+packet и штатного own-stop/known-empty временно отключить **весь собственный**
+ExpressionPlayer существующим expressions.enabled=false через guarded restart,
+сохранив voice, mute/100, SDK и guards. Он отключит и собственные head gestures;
+это предложение, не выполненная настройка. Hot flip поля не останавливает уже
+созданный thread/in-flight HTTP. Избирательное head-only с настоящим исключением
+antenna writes требует проверенной SDK axis-mask/Move semantics; blind None,
+новый set_target обход или настройка torque/smoothing не предлагаются как fix.
+
+Измеренный gate не теряется: wait_timeline в `7a5…` ждёт completed, который растёт
+в finally **после** synchronous /actions/expression reply/error. Он может включать
+остаток предыдущего processing HTTP; доля этого остатка и первого cue пока
+не разделена. Это completion wait, а не доказательство remote admission: finally
+срабатывает и после отказа. Router read1/flush whole answer не ждёт. SDK task UUID
+и move_started означают регистрацию/wrapper start, не физический старт/позу.
+
+После incident review остаётся proposal: bounded typed registration/admission +
+terminal события на том же expression HTTP и том же handler/Hub lock/watchdog,
+с ticket clock/version/boot/epochs, без второго owner, повторного POST или задержки
+модели. Audio gate мог бы ждать регистрацию текущего ticket отдельно от completion;
+никакая запись/ACK не считается physical motion. Local timeline-armed ticket был бы
+ещё меньшим вариантом: exact clock/version/binding отделены от completed; он
+доказывает только готовность локального scheduler, не приём SDK, и сохраняет
+возможное ожидание старого processing. Для first cue at>0 arming не должен ждать
+продвижения ещё не запущенного SpeechClock; stale/hold не будят чужой ticket.
+Оба варианта требуют
+fresh Hub/SDK preimages, finite stale/cancel/unknown/watchdog proof и causal review;
+реализация и новые движения сейчас не выполняются.
 
 ## P0.1: причина сбоя и принятый spoken camera путь
 
@@ -343,12 +440,13 @@ Agent cf50, OFF/paused/unowned/free/100%, arecord/APLAY/camera отсутств�
 и пустой slot сохранены. Это installation/readiness, не real continuous hearing.
 Старые c2fc boot/source/consumer pins устарели. Узкое обновление bound-LLM
 measurement на текущие boot/source и canonical 21-field schema прошло review;
-следующий физический прогон ждёт fresh human ready, без включения pump.
+один такой human-прогон уже выполнен, его joined timings и recovery описаны выше;
+новые expressive trials удерживаются из-за incident антенн.
 38 focused checks прошли; два P1 закрыты: quiet/privacy withdrawal до reap и
 общий bound source-error wake для return/exception. Это source evidence, не
 continuous hardware/AEC/partial STT PASS.
-Текущий reviewed bound-LLM measurement по-прежнему идёт первым после
-fresh human ready; source S1 не блокирует и не подменяет его. Будущий S1 acceptance
+Reviewed bound-LLM measurement уже дал actual timing evidence; source S1
+не подменяет его и не считается принятой continuous hardware функцией. Будущий S1 acceptance
 потребует отдельной paired consumer привязки к новому hash/порядку monitor timing.
 
 **S1 — один capture pump текущего audio owner.** Сохранить существующий mono AEC
