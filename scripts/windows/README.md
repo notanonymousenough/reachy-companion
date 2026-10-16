@@ -27,6 +27,16 @@ in Git. Use an operator-controlled local directory/ACL; a manifest is an explici
 ownership assertion checked against current identities, not cryptographic proof
 against a malicious same-user/admin writer.
 
+Cloning Git on another PC does not transfer ownership. Do not copy a previous
+machine's stop inventory, PID/FILETIME, engine/container IDs, loaded instance IDs,
+task XML fingerprints, UNKNOWN receipts or per-user manual-stop marker as new
+authority. Collect and review local identities and enroll the new launch. An
+existing marker on the target account still blocks START until explicit review;
+bootstrap never deletes it. A reviewed immutable image can be transferred as an
+independent artifact, but its content identity does not transfer process/container
+ownership. See the clean-PC guide for source-build compatibility and preflight
+limits; Git contains the recipe, not a previous PC's frozen dependency image.
+
 ## Manual stop wins
 
 Plain run first durably creates

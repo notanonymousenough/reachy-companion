@@ -2,7 +2,8 @@
 import argparse
 import ipaddress
 import json
-from pathlib import Path
+import os
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import sys
 from urllib.parse import urlsplit
 
@@ -26,11 +27,24 @@ def check(config,repo):
     if (desktop.scheme!='http' or not desktop.hostname or desktop.username or desktop.password
             or desktop.query or desktop.fragment or desktop.path.rstrip('/')!='/v1'):
         errors.append('invalid_desktop_llm_base_url')
-    if Path(config['paths']['token_file']).is_absolute():errors.append('relative_shared_token_path_required')
-    try:
-        token=config.path(config['paths']['token_file']).read_text().strip()
-        if len(token)<32 or token!=config.token:errors.append('shared_token_file_or_environment_conflict')
-    except OSError:errors.append('shared_token_file_required')
+    token_file=config['paths']['token_file']
+    # Windows startup mounts only this checkout at /config. A host-readable
+    # external token is not a supported container token path. Check before read.
+    if (type(token_file) is not str or not token_file
+            or any(ord(c)<32 or ord(c)==127 for c in token_file)
+            or PurePosixPath(token_file).is_absolute() or PureWindowsPath(token_file).anchor
+            or '..' in PurePosixPath(token_file).parts or '..' in PureWindowsPath(token_file).parts):
+        errors.append('relative_shared_token_path_required')
+    else:
+        try:
+            token_path=config.path(token_file).resolve()
+            if config.root!=Path(repo).resolve() or not token_path.is_relative_to(Path(repo).resolve()):
+                errors.append('shared_token_inside_checkout_required')
+            else:
+                token=token_path.read_text().strip()
+                effective=os.environ.get('REACHY_COMPANION_TOKEN') or config.token or token
+                if len(token)<32 or token!=effective:errors.append('shared_token_file_or_environment_conflict')
+        except (OSError,RuntimeError):errors.append('shared_token_file_required')
     if not config['runtime']['windows']['model_key'].strip():errors.append('local_model_key_required')
     if config['brains']['provider']!='lm_studio':errors.append('clean_pc_baseline_requires_lm_studio')
     if not 1024<=config['runtime']['windows']['context_length']<=262144:errors.append('context_length_bound')
@@ -41,7 +55,7 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--config',required=True)
     args=parser.parse_args()
     try:
-        config=Config(args.config);errors=check(config,Path(__file__).resolve().parents[2])
+        config=Config(args.config,require_token=False);errors=check(config,Path(__file__).resolve().parents[2])
     except Exception:errors=['config_or_shared_token_invalid']
     print(json.dumps(dict(ok=not errors,errors=errors,read_only=True,models_loaded=False,microphone_enabled_by_preflight=False)))
     return 0 if not errors else 2

@@ -2,12 +2,14 @@
 import copy
 import importlib.util
 import json
+import io
+import os
 from pathlib import Path
 import shutil
 import sys
 import tempfile
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock,patch
 
 from reachy_companion.config import Config,initialize
 
@@ -140,6 +142,67 @@ class WindowsCleanPCTests(unittest.TestCase):
         config.data['security']['robot']['hub_source_ipv4']='192.0.2.10'
         self.assertEqual(check_pc.check(config,self.path),[])
         self.assertEqual(config.filename.read_bytes(),before);self.assertEqual(config.path(config['paths']['token_file']).read_bytes(),token)
+
+    def token_fixture(self):
+        shutil.copy(ROOT/'config.example.json',self.path);shutil.copytree(ROOT/'profiles',self.path/'profiles')
+        initialize(self.path);config=Config(self.path/'config.local.json',require_token=False)
+        config.data['security']['robot']['hub_source_ipv4']='192.0.2.10'
+        return config
+
+    def test_preflight_nested_token_and_environment_match_without_config_or_token_writes(self):
+        config=self.token_fixture();nested=self.path/'private/nested/token';nested.parent.mkdir(parents=True)
+        nested.write_text('synthetic-test-token-'+'a'*32)
+        config.data['paths']['token_file']='private/nested/token'
+        before=config.filename.read_bytes();token=nested.read_bytes()
+        with patch.dict(os.environ,{'REACHY_COMPANION_TOKEN':''}):
+            self.assertEqual(check_pc.check(config,self.path),[])
+        with patch.dict(os.environ,{'REACHY_COMPANION_TOKEN':nested.read_text()}):
+            self.assertEqual(check_pc.check(config,self.path),[])
+        with patch.dict(os.environ,{'REACHY_COMPANION_TOKEN':'different-'+'b'*32}):
+            self.assertIn('shared_token_file_or_environment_conflict',check_pc.check(config,self.path))
+        self.assertEqual(config.filename.read_bytes(),before);self.assertEqual(nested.read_bytes(),token)
+
+    def test_preflight_rejects_foreign_roots_traversal_and_invalid_token_types_before_read(self):
+        config=self.token_fixture()
+        for value in ('../outside','private/../../outside',r'private\..\outside',r'C:\private\token',
+                      'C:token',r'\private\token',r'\\server\share\token','//server/share/token','/private/token',
+                      '',None,False,[],{},'private/token\n','private/token\0'):
+            config.data['paths']['token_file']=value
+            with self.subTest(value=value),patch.object(Path,'read_text',side_effect=AssertionError('No token read allowed')):
+                self.assertIn('relative_shared_token_path_required',check_pc.check(config,self.path))
+
+    def test_preflight_symlink_outside_checkout_denies_before_external_token_read(self):
+        config=self.token_fixture()
+        outside_dir=tempfile.TemporaryDirectory();self.addCleanup(outside_dir.cleanup)
+        outside=Path(outside_dir.name)/'token';outside.write_text('synthetic-test-token-'+'c'*32)
+        link=self.path/'linked-token'
+        directory=self.path/'linked-directory'
+        try:
+            link.symlink_to(outside)
+            directory.symlink_to(Path(outside_dir.name),target_is_directory=True)
+        except OSError:self.skipTest('Symlinks unavailable')
+        for value in ('linked-token','linked-directory/token'):
+            config.data['paths']['token_file']=value
+            with patch.object(Path,'read_text',side_effect=AssertionError('No external token read allowed')):
+                self.assertIn('shared_token_inside_checkout_required',check_pc.check(config,self.path))
+
+    def test_main_does_not_let_config_read_external_token_before_containment_check(self):
+        config=self.token_fixture();value=json.loads(config.filename.read_text())
+        value['paths']['token_file']='../missing-outside-token';config.filename.write_text(json.dumps(value))
+        original=Path.read_text
+        def read(path,*args,**kwargs):
+            if path.name=='missing-outside-token':raise AssertionError('External token read')
+            return original(path,*args,**kwargs)
+        output=io.StringIO()
+        # Point only the test's repository root lookup to its temporary checkout.
+        script=self.path/'scripts/windows/check_pc.py'
+        with patch.object(check_pc,'__file__',str(script)),patch.object(Path,'read_text',read), \
+                patch.object(sys,'argv',['check_pc.py','--config',str(config.filename)]), \
+                patch.dict(os.environ,{'REACHY_COMPANION_TOKEN':''}),patch('sys.stdout',output):
+            self.assertEqual(check_pc.main(),2)
+        report=json.loads(output.getvalue())
+        self.assertIn('relative_shared_token_path_required',report['errors'])
+        self.assertNotIn('config_or_shared_token_invalid',report['errors'])
 
     def test_manual_stop_during_start_targets_only_registered_id_and_keeps_latch(self):
         enroll.enroll(self.backend,**self.args)

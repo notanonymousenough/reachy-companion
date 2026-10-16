@@ -5,9 +5,12 @@
 Это описание baseline voice-routing, а не сертификат готовности всех текущих
 устройств или будущего autonomous companion. Исторические проверки отдельной
 Windows-установки подтверждали health/Bearer и STT → LM Studio → TTS, но не
-заменяют acceptance нового ПК. Актуальный воспроизводимый путь без private ZIP:
-[новый Windows-ПК из Git checkout](windows-clean-pc.md). Код и зависимости в Git;
+заменяют acceptance нового ПК. Процедура установки без private ZIP:
+[новый Windows-ПК из Git checkout](windows-clean-pc.md). Код и списки версий зависимостей в Git;
 локальные адреса, общий токен, веса и ownership IDs создаются/проверяются отдельно.
+Mutable Docker base/apt и pip без artifact hashes не гарантируют одинаковую
+сборку на другом ПК. Frozen image предыдущего engine — внешний артефакт,
+а не восстановимая из Git зависимость публичного START.
 Автоматического fallback inference на Hub нет. OpenClaw/Hermes и будущие
 интеграции не устанавливаются baseline-скриптом автоматически.
 
@@ -52,7 +55,7 @@ Hub отдельно от широких Docker Desktop rules.
 
 ## Запуск worker в Docker на ПК
 
-Подходит для Linux или Linux-контейнеров Docker Desktop/WSL2. Образ собран и проверен локально в Linux/arm64 Docker (OrbStack); запуск на Windows ПК также подтверждён пользователем и LAN-проверкой health. Lock-файл основан на рабочем Python 3.13 окружении. Нужны Docker и Python 3.11+ для маленького launcher. При запуске Python-части под Windows использовать PowerShell вариант ниже.
+Ниже — низкоуровневый launcher для ручной Linux-установки. Исторические проверки отдельного образа/Windows health не подтверждают текущую source-build совместимость нового ПК. Нужны Docker и Python 3.11+ для host launcher; worker имеет собственный Python 3.13. Наличие version-only lock не доказывает wheel/CUDA/архитектурную совместимость или битовую воспроизводимость. Для нового Windows ПК использовать `scripts/start.ps1 -NoPull` после [clean-PC prerequisites/preflight](windows-clean-pc.md).
 
 1. Скопировать repo на ПК, вместе с **локальным конфигом и существующим файлом `secrets/token`**. Токен должен совпадать на ПК, хабе и роботе. Docker build исключает токен/конфиг/веса через `.dockerignore`; токен передаётся как файл bind mount при запуске.
 2. Проверить в конфиге PC `network.hub_url` и `network.llm_base_url`, `servers.worker`, модель/голос. Если LM Studio доступен внутри контейнера по LAN адресу ПК, дополнительных host aliases не нужно.
@@ -68,19 +71,21 @@ Hub отдельно от широких Docker Desktop rules.
 
 `prepare` скачивает веса по URL из JSON; `start` публикует порт из `servers.worker.port`, mount каталога repo делает модели/data доступными worker. Image/name/publish_address/cpu_threads задаются в `container`. Корневая FS контейнера read-only; bind-mounted каталог repo доступен для записи моделей и журналов. Windows startup повторно использует только exact registered ID с теми же image/config; при изменении нужен review и новое свободное имя, не удаление по одному имени.
 
-PowerShell из каталога repo:
-
-```powershell
-$env:PYTHONPATH = "src"
-python -m reachy_companion.worker_container build
-python -m reachy_companion.worker_container prepare
-python -m reachy_companion.worker_container start
-python -m reachy_companion.worker_container logs
-```
+Generic `worker_container` не выполняет Windows canonical manual-stop проверки
+или ownership enrollment. Его `start` не является эквивалентом поддержанного
+Windows START, а созданный им контейнер не становится автоматически целью
+`stop-reachy.ps1`. Не обходить marker/enrollment этим launcher. На Windows
+`scripts/start-worker.ps1` — только worker-часть поддержанного пути, когда LM
+Studio уже отдельно настроен/проверен; весь baseline запускает `scripts/start.ps1`.
 
 Порт worker должен быть доступен с хаба. Python launcher также умеет `command`: вывести docker run, не запуская его. Значения API-ключей не входят в командную строку: передаются по имени environment variable.
 
 ### Альтернатива: Python на Linux ПК
+
+Это отдельная ручная установка, не Windows bootstrap и не перенос готового
+окружения. Перед ней проверить наличие закреплённых зависимостей для выбранных
+Python/архитектуры; общий worker lock содержит CUDA packages даже для CPU STT.
+Успешный host preflight этого не проверяет.
 
 ```sh
 python3 -m venv .venv

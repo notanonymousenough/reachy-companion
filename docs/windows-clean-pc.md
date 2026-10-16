@@ -2,7 +2,7 @@
 
 В репозитории находятся код, Dockerfile, lock-файлы, примеры конфигурации,
 профили, скрипты запуска и ручной остановки. Приватный ZIP или файлы из временного
-каталога предыдущей установки не нужны. Это воспроизводимый путь для **baseline
+каталога предыдущей установки не нужны. Это процедура установки **baseline
 Agent voice → Hub/router → PC STT/LM Studio/TTS** после явной настройки окружения.
 Он не устанавливает автоматически Hub/Reachy, не включает микрофон/моторы и не
 доказывает готовность будущего автономного companion со всеми интеграциями.
@@ -11,6 +11,36 @@ Agent voice → Hub/router → PC STT/LM Studio/TTS** после явной на
 старым установкам. Новый ПК требует собственного native smoke ниже; локальные
 unit-тесты и `/health` не заменяют проверку настоящего голоса/модели.
 
+### Что воспроизводится из Git
+
+Reviewed commit фиксирует исходники и рецепт сборки, но не гарантирует побитово
+одинаковое окружение на другом ПК. `worker/Dockerfile` использует mutable tag
+`python:3.13-slim-bookworm`, незакреплённые версии apt-пакетов и pip lock с
+версиями без wheel hashes. Build isolation из `pyproject.toml` также допускает
+новый `setuptools>=68`. Наличие lock-файла не доказывает доступность wheel для
+новой архитектуры/Python, одинаковую ABI или CUDA-совместимость. Проверка
+`worker code-identity` ограничена Python-исходниками пакета, а не всем окружением.
+
+Локальный frozen dependency image предыдущего ПК не хранится в Git и не обязан
+существовать в Docker engine нового ПК. Замена package поверх такого base —
+отдельный способ доставки согласованного артефакта, не запасной путь, который
+публичный START автоматически восстановит. Если передаётся проверенный image,
+нужны сам артефакт/доступ к registry, provenance и ожидаемый immutable identity;
+они не дают ownership контейнерам или процессам нового ПК. Здесь не задан
+выдуманный base digest и не обещана готовая offline/binary поставка.
+
+| Данные | Действие на новом ПК |
+|---|---|
+| Код, Dockerfile, version-only locks, profiles, START/STOP helpers | Получить из Git на reviewed commit. Это входы новой сборки, не готовое окружение. |
+| Git-исключённые веса и caches | Скачать по настроенным источникам либо передать отдельно проверенные артефакты; проверить локальные пути, ревизии и доступные hashes. |
+| Общий Bearer token | Передать приватно в файл внутри нового checkout, не генерировать новый для существующего комплекта. |
+| Локальный config, model key/context/GPU, LAN/firewall/task paths | Создать из примера и явно настроить для нового ПК; не переносить старый config целиком без проверки. |
+| Stop inventory, PID/FILETIME, engine/container IDs, loaded instance IDs, task XML fingerprints, ownership/UNKNOWN receipts | Не переносить как разрешение или доказательство. Нужны свежие локальные наблюдения и enrollment нового запуска, даже при одинаковых именах/образе. |
+| Manual-stop marker | Не копировать как состояние другого ПК и не очищать автоматически. Существующий marker текущего Windows user продолжает блокировать START до явного review/resume. |
+
+Source-build на новом ПК остаётся непроверенным до отдельной сборки, проверки
+эффективного кода и зависимостей, prepare/start и конечного native smoke ниже.
+
 ## 1. Подготовить ПО и checkout
 
 Нужны Git, Python 3.11+ с `py` launcher (или явный путь к Python), PowerShell 5.1+,
@@ -18,6 +48,10 @@ Docker Desktop с Linux engine/WSL2 и LM Studio с работающим `lms`. 
 нужен совместимый NVIDIA driver/GPU support Docker Desktop; для CPU выбрать
 `conversation.recognition.device=cpu`, `compute_type=int8`, а GPU/контекст LLM
 настроить по памяти нового ПК. Веса LM Studio, Piper и STT не входят в Git.
+Python 3.11+ здесь относится к host preflight/enrollment/STOP. Worker image
+использует собственный Python 3.13 и соответствующие CUDA library paths;
+host Python не подтверждает совместимость его зависимостей. CPU-настройка STT
+не удаляет CUDA wheels из текущего общего `requirements/worker.lock`.
 
 Официальные инструкции: [Docker Desktop Windows](https://docs.docker.com/desktop/setup/install/windows-install/),
 [Docker GPU](https://docs.docker.com/desktop/features/gpu/), [LM Studio CLI](https://lmstudio.ai/docs/cli).
@@ -37,6 +71,9 @@ lms ls --json
 Эта ветка содержит текущие stock/stop изменения; для повторяемого развёртывания
 записать и использовать reviewed commit, а не предполагать, что старый `main`
 содержит их. Ничего не устанавливать поверх активного чужого checkout без review.
+Clone ветки сам по себе не фиксирует её вершину: перед настройкой выбрать и
+проверить конкретный reviewed SHA, записать `git rev-parse HEAD`, а для запуска
+этого pin использовать `-NoPull`.
 
 ## 2. Локальная конфигурация и общий токен
 
@@ -55,6 +92,12 @@ notepad .\config.local.json
 тот же токен. Не запускать независимую генерацию на каждом устройстве. Файлы
 конфига должны быть UTF-8 без BOM; PowerShell 5.1 `Set-Content -Encoding UTF8`
 добавляет BOM — использовать редактор или `.NET UTF8Encoding($false)`.
+Для Windows Docker baseline `paths.token_file` — непустой относительный путь
+внутри checkout, включая вложенные каталоги. Абсолютные/drive-relative/UNC пути,
+`..` и symlink escape за checkout не поддержаны: host-readable внешний файл
+не попадает в единственный bind mount `/config`. Preflight отклоняет такой путь
+до чтения токена. Это граница Windows bootstrap, а не изменение общего Linux
+`Config.path` или перенос существующих приватных конфигов.
 
 Проверить/задать следующие **локальные** значения, сохранив остальные поля:
 
@@ -101,10 +144,30 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\start.ps1 -NoPull
 
 Preflight только читает конфиг/токен, проверяет Python, CLI и Linux engine; он не
 скачивает веса, не запускает inference/службы и не выдаёт разрешений роботу.
+`-ConfigurationOnly` пропускает даже проверку доступности Linux engine. Ни один
+режим preflight не проверяет существование скачанного model key через `lms ls`,
+поддержку установленного LM Studio API, доступность base/wheels/apt, успешность
+сборки, GPU/CUDA, контейнерный доступ к LLM/Hub или полный голосовой тракт.
+`ok=true` означает только этот ограниченный набор проверок, не готовность ПК.
+Формат URL/IPv4 и непустой model key не доказывают существование адресата,
+доступность LAN/DNS или наличие нужной модели.
 `start.ps1` делает уже существующие LM Studio daemon/model/server + реальную
 короткую completion-проверку, затем Docker build/prepare/worker. Первая загрузка
 весов требует сети и времени. Ошибки загрузки/TLS устранять по источникам из
 конфига, не отключая проверку сертификатов.
+`-NoPull` отключает только `git pull`; build/prepare продолжаются. Они могут
+обращаться к registries, apt, PyPI и model stores при отсутствии нужного cache,
+включая повторный запуск. Offline-работа этим флагом не гарантируется.
+
+LLM скачивается отдельно в LM Studio: в Git есть пример key/identifier, а не
+сам файл весов или доказательство его наличия/версии на новом ПК. `worker prepare`
+получает STT/TTS и опциональный sound model по эффективному config/profile.
+Whisper имеет revision и ожидаемый hash `model.bin`; текущий код проверяет hash
+при reuse готового cache, а после `snapshot_download` отдельного финального
+hash-check не делает. В примере Piper и Vosk URLs используют `main`, их
+`sha256` пуст; это не полная checksum-locked поставка моделей. До acceptance
+отдельно сверить используемые артефакты/ревизии и фактическую загрузку модели;
+не объявлять одинаковость весов по имени или наличию файлов.
 
 Worker сначала создаётся **остановленным** с новым UUID launch label. Публичный
 `enroll_worker.py` проверяет full container ID, engine, image, worker command,
