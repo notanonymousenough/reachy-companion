@@ -32,7 +32,7 @@ Reachy, Hub, PC и VPS. Независимый reviewer проверяет ис�
 | Порядок | Статус | Минимальный результат | Владелец | Реальная приёмка и доказательство |
 |---|---|---|---|---|
 | P0.1 | В работе: диагностика `51f3e2c` установлена по подтверждению координатора; child cause UNKNOWN | Диагностировать и исправить selective STT-camera failure, сохранив рабочие explicit vision и ordinary voice | writer: helper diagnostic/точечный fix; reviewer + координатор: review; runner: единственные device actions | Ожидается реальный allowlisted phase/error_class, затем доказанная причина и минимальный fix. После этого real spoken intent → fresh frame → human-correct spoken FINAL, owned aplay/stock motion; отдельный STOP/no resume/final OFF100 |
-| P0.2 | Независимый source-кандидат в работе; активация закрыта | Настоящее потоковое слушание и содержательный ответ до полной генерации | writer: existing capture/STT/brains/voice seams; runner: реальная запись timings и STOP; координатор: критерии | Есть exact legacy overlays, SSE/semantic/TTS seam и локальная проверка audio до model tail. Нужны actual runtime contract/cancel recovery и реальный playback **до последнего model token**. Continuous perception/partial STT/endpointing — отдельный следующий seam, ещё не реализован |
+| P0.2 | Actual PC SSE/prefix PASS; timely-reader реализован локально, voice rollout готовится | Настоящее потоковое слушание и содержательный ответ до полной генерации | writer: existing capture/STT/brains/voice seams; runner: реальная запись timings и STOP; координатор: критерии | Один timely reader, bounded queue, DISCARD того же запроса до исходного deadline, общий lease до terminal + consumer cleanup. Предстоит реальный длинный ответ/STOP/следующий turn и повторяемая команда входа в проверенный режим. Continuous perception/partial STT/endpointing — отдельный следующий seam, ещё не реализован |
 | P1.1 | Частично, не принято | Обычный контекст, затем visual context с provenance/TTL; долговременные факты и исправления | writer: существующие session/memory seams; runner + человек: смысловая проверка | Факт → vision → местоименная ссылка на прежний факт; отдельно visual follow-up из реально виденного. Restart сохраняет разрешённые факты/mute, correction/deletion работает; vision history не обещать до реализации |
 | P1.2 | Не принято | Первая полезная typed integration через существующий broker/worker | writer: маленький adapter/schema; runner: настоящий target; координатор: scope | Реальная полезная задача с intended/attempted/completed receipt; ошибки/timeout/duplicate/cancel различимы. Нет raw shell/секретов/новых grants из текста модели или OCR |
 | P1.3 | Частично guards есть, полная приёмка открыта | Recovery, ресурсы, STOP, воспроизводимая доставка Git/transfer | writer + reviewer; runner: actual failures/recovery | Сеть/worker/model/restart/перегрузка не оживляют старые речь/движения. Bounded queues/VRAM/storage, сохранившиеся mute/volume, exact source hashes, конечный deploy/readiness/rollback без конкурирующих владельцев |
@@ -76,20 +76,33 @@ patch, новый dispatcher и model/runtime migration на активный ac
 существующий NDJSON/PCM stream — поток аудиотранспорта после готового ответа,
 а не streaming токенов локальной 9B. Это source finding, не latency measurement.
 
-Подготовлен отдельный source-only кандидат:
+Подготовлен source checkpoint и следующий implemented reader:
 [content-token-stream-source.md](../../deploy/patches/content-token-stream-source.md).
+Текущий конечный rollout:
+[content-token-stream-rollout.md](../../deploy/patches/content-token-stream-rollout.md).
 Он накладывается на exact installed worker `92cf…` и brains `9c69…`, не на
 полный HEAD worker. Brains preimage соответствует публичному `39dffa0f…`,
 worker preimage — `2865db30…`; это разные pins. Добавляется общий для обычного
-и streaming запроса admission guard только при явном opt-in. Отмена делает
-bounded discard-drain того же SSE response; только finish + DONE снимает guard.
-Неуспешный drain остаётся UNKNOWN: до доказанного recovery и actual schema этот
-кандидат нельзя включать. Read-only effective-config witness от runner уже
+и streaming запроса admission guard только при явном opt-in.
+Один PC-запрос подтвердил actual SSE schema/identity/stop+DONE и два смысловых
+сегмента: first token READ 0,4917 s, first segment 1,19314 s, last delta READ
+1,44435 s. Это не TTS и не real voice overlap. Новый reader не зависит от TTS:
+на отмене очищает очередь и продолжает DISCARD того же response до исходного
+deadline; для первого прогона явно 40 s, не 2 + 40 и не скрытая замена default240.
+Общий guard снимается лишь после finish + DONE и consumer/Piper cleanup.
+Transport error/deadline без terminal остаётся UNKNOWN, не timer reset.
+Read-only effective-config witness от runner уже
 подтвердил balanced/closed-think assistant prefix без экспорта prompt values;
 это не гарантия отсутствия немаркированного reasoning. Локальный порядок генераторов не доказывает actual
 generation/audio overlap. Agent и camera-helper этот source-инкремент не меняет.
 
-Минимальные последовательные изменения после исправления камеры:
+Ближайший реальный P0.2 прогон — implemented token-reader/TTS на длинном ответе,
+STOP и следующий turn. Список ниже описывает полное требование, а не gate на
+начало реализации: continuous hearing/partial STT следует отдельным малым seam
+после этого голосового инкремента. Когда готов camera diagnostic, его tiny fix
+сохраняет приоритет; аппаратные окна не конкурируют.
+
+Оставшиеся составляющие потокового диалога:
 
 1. Переиспользовать текущий audio owner/capture/AEC и STT backend. Проверить
    реальные возможности partial STT и endpointing установленного backend;

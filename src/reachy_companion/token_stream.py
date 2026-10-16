@@ -1,15 +1,77 @@
 """Opt-in local completion SSE → bounded semantic segments.
 
 Source candidate only; runtime schema/installed overlay must be verified before
-activation. No new endpoint, model, background thread, audio or motor owner.
+activation. One bounded model reader; no new endpoint, model, audio or motor owner.
 """
+from collections import deque
+from contextlib import contextmanager,nullcontext
+import http.client
 import json
+import logging
+import math
 import re
 import socket
 import threading
 import time
 import uuid
-from urllib.request import Request,build_opener,ProxyHandler
+from urllib.request import Request
+from urllib.parse import urlsplit
+
+LOG=logging.getLogger('reachy-content-stream')
+ENDPOINTS={}
+
+
+def prepare_endpoint(config):
+    """Resolve at opt-in readiness, before any model request/reader exists."""
+    url=config['network']['llm_base_url'].rstrip('/')+'/completions'
+    endpoint=urlsplit(url)
+    need(endpoint.scheme=='http' and endpoint.hostname and not endpoint.username and not endpoint.password
+         and not endpoint.query and not endpoint.fragment)
+    addresses=socket.getaddrinfo(endpoint.hostname,endpoint.port or 80,type=socket.SOCK_STREAM)
+    need(0<len(addresses)<=32 and (url in ENDPOINTS or len(ENDPOINTS)<16))
+    ENDPOINTS[url]=(endpoint,tuple(addresses))
+
+
+@contextmanager
+def owned_response(request,deadline,submitted=None):
+    """Absolute watchdog owns the socket before connect, headers and body."""
+    need(request.full_url in ENDPOINTS)
+    endpoint,addresses=ENDPOINTS[request.full_url]
+    remaining=deadline-time.monotonic();need(remaining>0)
+    connection=http.client.HTTPConnection(endpoint.hostname,endpoint.port or 80,timeout=remaining)
+    lock=threading.Lock();holder=[None];expired=threading.Event();response=None
+    def abort():
+        with lock:
+            expired.set();sock=holder[0]
+            if sock is not None:
+                try:sock.shutdown(socket.SHUT_RDWR)
+                except OSError:pass
+                try:sock.close()
+                except OSError:pass
+    timer=threading.Timer(remaining,abort);timer.daemon=True;timer.start()
+    try:
+        for family,kind,protocol,_,address in addresses:
+            remaining=deadline-time.monotonic();need(remaining>0 and not expired.is_set())
+            sock=socket.socket(family,kind,protocol);sock.settimeout(remaining)
+            with lock:
+                if expired.is_set() or time.monotonic()>=deadline:sock.close();raise TimeoutError('Owned request expired')
+                holder[0]=sock;connection.sock=sock
+            try:sock.connect(address);break
+            except OSError:
+                with lock:sock.close();connection.sock=None
+        else:raise OSError('Owned endpoint unavailable')
+        need(time.monotonic()<deadline and not expired.is_set())
+        if submitted is not None:submitted()
+        connection.request('POST',endpoint.path or '/',body=request.data,headers=dict(request.header_items()))
+        response=connection.getresponse()
+        need(response.status==200 and time.monotonic()<deadline and not expired.is_set())
+        yield response
+    finally:
+        timer.cancel();timer.join()
+        if response is not None:response.close()
+        connection.close()
+        with lock:sock=holder[0]
+        if sock is not None:sock.close()
 
 
 def need(value):
@@ -67,7 +129,7 @@ def sse_tokens(response,model,*,deadline,terminal,set_timeout=None):
         if choice['text']:yield choice['text']
 
 
-def completion_tokens(config,messages):
+def completion_tokens(config,messages,*,timeout=None,execution=None,deadline=None):
     """Use the current local raw-prompt API and its existing model permit."""
     from . import brains
     need(config['brains']['provider']=='lm_studio' and config['llm']['api_path']=='/completions')
@@ -75,10 +137,12 @@ def completion_tokens(config,messages):
     payload=dict(model=settings['model'],prompt=brains.raw_prompt(config,messages),
         temperature=settings['temperature'],max_tokens=settings['max_tokens'],stream=True,stop=settings['stop'])
     request=Request(identity[0]+'/completions',data=json.dumps(payload).encode(),headers={'Content-Type':'application/json'})
-    deadline=time.monotonic()+config['timeouts']['llm']
-    with brains.MODEL_EXECUTION.reserve(identity) as execution:
-        execution.submitted()
-        with build_opener(ProxyHandler({})).open(request,timeout=config['timeouts']['llm']) as response:
+    seconds=config['timeouts']['llm'] if timeout is None else timeout
+    need(type(seconds) in (int,float) and math.isfinite(seconds) and 0<seconds<=config['timeouts']['llm'])
+    deadline=time.monotonic()+seconds if deadline is None else deadline
+    need(type(deadline) in (int,float) and math.isfinite(deadline) and 0<deadline-time.monotonic()<=config['timeouts']['llm'])
+    with (brains.MODEL_EXECUTION.reserve(identity) if execution is None else nullcontext(execution)) as execution:
+        with owned_response(request,deadline,execution.submitted) as response:
             need(response.headers.get_content_type()=='text/event-stream')
             try:set_timeout=response.fp.raw._sock.settimeout
             except AttributeError:set_timeout=None
@@ -105,7 +169,129 @@ def completion_tokens(config,messages):
                 finally:
                     if timer is not None:timer.cancel();timer.join()
                 raise
-            finally:tokens.close()
+            finally:
+                tokens.close()
+
+
+class TimelyReader:
+    """One reader, same response, bounded RAM queue and terminal discard.
+
+    The queue can hold the parser's entire bounded stream. It never blocks the
+    network reader behind TTS. On consumer close it is purged atomically and
+    the same producer continues in DISCARD under its original request deadline.
+    """
+    MAX_QUEUE_EVENTS=8192
+    MAX_QUEUE_BYTES=1048576
+
+    def __init__(self,config,messages):
+        seconds=config['streaming'].get('content_request_seconds',config['timeouts']['llm'])
+        need(type(seconds) in (int,float) and math.isfinite(seconds) and 0<seconds<=config['timeouts']['llm'])
+        self.seconds=seconds;self.started=time.monotonic();self.started_unix=time.time();self.deadline=self.started+seconds
+        self.condition=threading.Condition();self.queue=deque();self.queued_bytes=0
+        self.discard=False;self.done=False;self.stream_done=False;self.failed=False;self.terminal=False;self.closed=False
+        self.consumer_done=threading.Event()
+        self.attempt_id=uuid.uuid4().hex
+        self.first_token=self.last_token=self.terminal_time=self.first_semantic=self.first_pcm=None
+        self.queue_peak=0;self.queue_bytes_peak=0;self.overflow=False;self.discarded=0
+        self.fast_grace_exceeded=False;self.close_elapsed=None
+        self.token_chunks=0;self.max_read_gap=0
+        self.post_attempted=False
+        def produce():
+            from . import brains
+            tokens=None
+            try:
+                with brains.MODEL_EXECUTION.reserve(brains.model_identity(config)) as permit:
+                    try:
+                        tokens=completion_tokens(config,messages,timeout=max(.001,self.deadline-time.monotonic()),execution=permit,deadline=self.deadline)
+                        for token in tokens:
+                            now=time.monotonic();size=len(token.encode())
+                            with self.condition:
+                                if self.first_token is None:self.first_token=now
+                                if self.last_token is not None:self.max_read_gap=max(self.max_read_gap,now-self.last_token)
+                                self.token_chunks+=1
+                                self.last_token=now
+                                if self.discard:self.discarded+=1
+                                elif len(self.queue)>=self.MAX_QUEUE_EVENTS or self.queued_bytes+size>self.MAX_QUEUE_BYTES:
+                                    self.overflow=True;self.failed=True;self.discard=True;self.queue.clear();self.queued_bytes=0
+                                else:
+                                    self.queue.append((token,size));self.queued_bytes+=size
+                                    self.queue_peak=max(self.queue_peak,len(self.queue));self.queue_bytes_peak=max(self.queue_bytes_peak,self.queued_bytes)
+                                self.condition.notify_all()
+                    except BaseException:
+                        with self.condition:self.failed=True;self.queue.clear();self.queued_bytes=0
+                    finally:
+                        if tokens is not None:
+                            try:tokens.close()
+                            except BaseException:
+                                with self.condition:self.failed=True
+                        with permit.owner.lock:terminal=permit.state['terminal'];submitted=permit.state['submitted']
+                        with self.condition:
+                            self.post_attempted=submitted
+                            self.terminal=terminal
+                            if terminal:self.terminal_time=time.monotonic()
+                            else:self.failed=True
+                            self.stream_done=True;self.condition.notify_all()
+                        # Even a verified model terminal must not admit the
+                        # next POST before this consumer/Piper has cleaned up.
+                        self.consumer_done.wait()
+            except BaseException:
+                with self.condition:self.failed=True;self.queue.clear();self.queued_bytes=0
+            finally:
+                with self.condition:self.done=True;self.condition.notify_all()
+        self.thread=threading.Thread(target=produce,name='reachy-content-reader',daemon=True)
+        self.thread.start()
+
+    def __iter__(self):return self
+
+    def check(self):
+        with self.condition:
+            if self.failed or self.discard:raise RuntimeError('Owned model stream unavailable')
+
+    def __next__(self):
+        with self.condition:
+            while True:
+                if self.failed or self.discard:raise RuntimeError('Owned model stream unavailable')
+                if self.queue:
+                    token,size=self.queue.popleft();self.queued_bytes-=size;return token
+                if self.stream_done or self.done:
+                    if not self.terminal:raise RuntimeError('Owned model terminal unverified')
+                    raise StopIteration
+                remaining=self.deadline-time.monotonic()
+                if remaining<=0:raise TimeoutError('Owned model request deadline expired')
+                self.condition.wait(min(1,remaining))
+
+    def close(self):
+        with self.condition:
+            if self.closed:return
+            self.discard=True;self.queue.clear();self.queued_bytes=0;self.condition.notify_all()
+            self.consumer_done.set()
+        # This never closes a generator from the wrong thread. The reader owns
+        # and drains it; the model permit prevents a competing next request.
+        began=time.monotonic()
+        join_deadline=self.deadline+1
+        self.thread.join(timeout=min(2,max(0,join_deadline-time.monotonic())))
+        if self.thread.is_alive():
+            self.fast_grace_exceeded=True
+            self.thread.join(timeout=max(0,join_deadline-time.monotonic()))
+        with self.condition:
+            self.close_elapsed=time.monotonic()-began
+            self.closed=not self.thread.is_alive()
+            if not self.closed:raise RuntimeError('Owned model reader did not quiesce')
+
+    def metadata(self):
+        with self.condition:
+            def elapsed(value):return None if value is None else round(value-self.started,6)
+            return dict(attempt_id=self.attempt_id,request_seconds=self.seconds,
+                request_started_monotonic=self.started,request_started_unix=self.started_unix,
+                token_chunks=self.token_chunks,max_read_gap_seconds=round(self.max_read_gap,6),
+                first_token_read_seconds=elapsed(self.first_token),last_token_read_seconds=elapsed(self.last_token),
+                terminal_read_seconds=elapsed(self.terminal_time),first_semantic_seconds=elapsed(self.first_semantic),
+                first_pcm_yield_seconds=elapsed(self.first_pcm),queue_peak=self.queue_peak,queue_bytes_peak=self.queue_bytes_peak,
+                queue_overflow=self.overflow,queue_backpressure=False,discarded_chunks=self.discarded,
+                terminal_verified=self.terminal,producer_quiesced=not self.thread.is_alive(),failed=self.failed,
+                model_post_attempted=self.post_attempted,
+                fast_grace_exceeded=self.fast_grace_exceeded,close_wait_seconds=self.close_elapsed,
+                generation_clock_verified=False,cross_host_clock_verified=False,acoustic_consumption_verified=False)
 
 
 class Segments:
@@ -170,12 +356,13 @@ def semantic_segments(tokens,maximum):
         if close is not None:close()
 
 
-def incremental_audio(pipeline,segments,prefix):
+def incremental_audio(pipeline,segments,prefix,*,valid=None):
     """Reuse existing TTS, clock offsets and output bounds across all segments."""
     total=cue_count=characters=0;first=True
     maximum=pipeline.config['conversation']['expressions']['speech_sync']['max_cues']
     try:
         for segment in segments:
+            if valid is not None:valid()
             text=segment['text'];actual_prefix=prefix if first else ''
             characters+=len(pipeline.address_speech(text,actual_prefix))+(0 if first else 1)
             need(characters<=pipeline.config['limits']['max_speech_chars'])
@@ -191,6 +378,7 @@ def incremental_audio(pipeline,segments,prefix):
                         cues=event['cues'][:max(0,maximum-cue_count)];cue_count+=len(cues)
                         if not cues:continue
                         event=dict(event,cues=cues)
+                    if valid is not None:valid()
                     yield event
             finally:
                 close=getattr(events,'close',None)
@@ -239,22 +427,31 @@ def content_events(pipeline,payload,path):
     if payload.get('previous_reply_interrupted',False):
         messages.append(dict(role='system',content='Предыдущий ответ был прерван и не прозвучал полностью. Отвечай на новую реплику пользователя, не продолжай старый ответ без просьбы.'))
     messages.append(dict(role='user',content=text));p.agent_sessions.setdefault(session,uuid.uuid4().hex)
-    collected=[]
+    collected=[];reader=TimelyReader(cfg,messages)
     def collect():
-        for segment in semantic_segments(completion_tokens(cfg,messages),cfg['limits']['max_speech_chars']):
+        for segment in semantic_segments(reader,cfg['limits']['max_speech_chars']):
             collected.append(segment)
             yield segment
-    events=incremental_audio(p,collect(),prefix)
+    events=incremental_audio(p,collect(),prefix,valid=reader.check)
     try:
         p.phase='thinking'
         for event in events:
             if event['type']=='reply':
-                event=dict(event,transcript=text)
-            if event['type']=='audio':p.phase='speaking'
+                with reader.condition:
+                    if reader.first_semantic is None:reader.first_semantic=time.monotonic()
+                event=dict(event,transcript=text,content_attempt_id=reader.attempt_id)
+            if event['type']=='audio':
+                p.phase='speaking'
+                with reader.condition:
+                    if reader.first_pcm is None:reader.first_pcm=time.monotonic()
             yield event
-    finally:events.close()
+    finally:
+        try:events.close()
+        finally:
+            try:reader.close()
+            finally:LOG.info('content_stream_metadata %s',json.dumps(reader.metadata(),separators=(',',':')))
     reply=' '.join(s['text'] for s in collected);need(reply)
     result=dict(transcript=text,reply=reply,command=None,emotion=collected[0]['emotion'],decision=decision,
-        segments=collected,**p.speech_address_metadata(reply,prefix))
+        segments=collected,content_stream=reader.metadata(),**p.speech_address_metadata(reply,prefix))
     pending=dict(used=now,messages=(entry['messages']+[dict(role='user',content=text),dict(role='assistant',content=reply)])[-cfg['llm']['history_messages']:])
     return dict(type='done',ok=True,**p.completed(result,session,pending,started))

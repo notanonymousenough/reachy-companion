@@ -1,4 +1,11 @@
-# True content streaming: source candidate, activation blocked
+# True content streaming: original source checkpoint b90d40b
+
+This page records the original review-only checkpoint and its helper hash.
+The actual PC SSE/prefix contract has since passed. The implemented timely
+reader and the current finite lifecycle are in
+[content-token-stream-rollout.md](content-token-stream-rollout.md); use that
+page's bundle/helper pin, not this historical helper pin. The two exact legacy
+brains/voice overlay outputs remain unchanged. Real voice acceptance is open.
 
 This is an independent source increment while the spoken camera failure remains
 P0. It changes no deployed service, Agent or camera helper. It is not a full HEAD

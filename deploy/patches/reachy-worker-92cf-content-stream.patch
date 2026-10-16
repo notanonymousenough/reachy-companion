@@ -1,6 +1,18 @@
 --- a/src/reachy_companion/voice.py
 +++ b/src/reachy_companion/voice.py
-@@ -322,42 +322,48 @@
+@@ -38,6 +38,11 @@
+ class Pipeline:
+     def __init__(self, config):
+         self.config = config
++        mode=config['streaming'].get('content_tokens', False)
++        if type(mode) is not bool:raise ValueError('Boolean content stream mode required')
++        if mode:
++            from .token_stream import prepare_endpoint
++            prepare_endpoint(config)
+         self.http = build_opener(ProxyHandler({}))
+         self.lock = threading.Lock()
+         self.sessions = {}
+@@ -322,42 +327,48 @@
          started = time.monotonic()
          future = executor = None
          try:
