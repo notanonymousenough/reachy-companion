@@ -206,6 +206,26 @@ same-clock timestamps, без экспорта приватного ответа
 искусственного delay или ACK. Continuous capture/partial STT — обязательный
 последующий seamless этап; он не считается готовым по этому повтору.
 
+
+Source audit exact Agent289 и установленных expression_player/speech_clock/router
+подтвердил: перед APLAY есть wait_timeline gate до завершения обработки expression
+HTTP-запроса; router read1/flush не ждёт целого ответа; SpeechClock остаётся wall-time
+оценкой после pipe write, не actual consumption. Синтетически существующий parser
+выдаёт 2-char segment для сокращения/номера списка, но реальная приватная категория
+первого сегмента неизвестна. Удалять gate или менять сегментацию по догадке нельзя.
+
+Подготовлен следующий узкий измерительный source checkpoint — exact Agent289
+single-file overlay с одним first-only 21-field status record и общей схемой,
+извлекаемой finite consumer из того же hash-pinned Agent без app imports:
+[agent-stream-timing-rollout.md](../../deploy/patches/agent-stream-timing-rollout.md).
+Он измеряет response open/reply/motion/audio line, timeline wait, APLAY Popen,
+monitor start return и первую положительную запись в pipe; bind по PC content ID
+и boot/mic/policy, nullable отсутствующие этапы, без текста/PCM/ошибок. Порядок
+motion/audio/cancel/queue и все guards сохранены. 50 focused source checks прошли;
+установка, paired private consumer integration и следующий реальный результат
+ещё не приняты. Agent HEAD, камера/worker/profile, ALSA capture и сегментация
+не менялись; continuous capture/partial STT остаются обязательными последующими.
+
 Реальный streaming rollout под `ad7c59b` завершился **lifecycle failure**, а не
 голосовой приёмкой. На Docker Engine 29.7.2 / API 1.55 собственный candidate был
 создан с `HostConfig.OomKillDisable=false`; после запуска inspect вернул `null`.

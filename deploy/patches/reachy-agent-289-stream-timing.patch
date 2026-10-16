@@ -1,0 +1,114 @@
+--- a/src/reachy_companion/agent.py
++++ b/src/reachy_companion/agent.py
+@@ -26,0 +27,40 @@
++
++
++STREAM_TIMING_MARKS = ('response_open_begin','response_open_end','first_reply_received',
++    'first_motion_enqueued','first_audio_line_received','timeline_wait_begin','timeline_wait_end',
++    'aplay_popen_begin','aplay_popen_end','monitor_start_return','first_positive_write')
++STREAM_TIMING_FIELDS = frozenset(STREAM_TIMING_MARKS) | {
++    'version','agent_boot_id','microphone_epoch','policy_epoch','content_attempt_id',
++    'content_binding','started_monotonic','first_positive_write_bytes',
++    'consumption_verified','acoustic_verified'}
++
++
++def validate_stream_timing(value):
++    """Exact shared status/finite-consumer contract; no raw content or coercion."""
++    def require(good):
++        if not good:raise ValueError('Invalid bounded Agent stream timing')
++    def number(item, maximum):
++        return type(item) in (int,float) and 0<=item<=maximum and math.isfinite(item)
++    def identity(item):
++        return type(item) is str and len(item)==32 and all(c in '0123456789abcdef' for c in item)
++    require(type(value) is dict and set(value)==STREAM_TIMING_FIELDS)
++    require(type(value['version']) is int and value['version']==1)
++    require(type(value['agent_boot_id']) is str and 1<=len(value['agent_boot_id'])<=128)
++    for key in ('microphone_epoch','policy_epoch'):
++        require(type(value[key]) is int and 0<=value[key]<2**63)
++    require(number(value['started_monotonic'],1e15))
++    require(type(value['content_binding']) is str and value['content_binding'] in ('pending','bound','invalid'))
++    attempt=value['content_attempt_id']
++    require(attempt is None or identity(attempt))
++    require(value['content_binding']!='bound' or identity(attempt))
++    require(value['content_binding']!='pending' or attempt is None)
++    for key in STREAM_TIMING_MARKS:
++        require(value[key] is None or number(value[key],86400))
++    for begin,end in (('response_open_begin','response_open_end'),('timeline_wait_begin','timeline_wait_end'),
++                      ('aplay_popen_begin','aplay_popen_end')):
++        require(value[end] is None or (value[begin] is not None and value[end]>=value[begin]))
++    count=value['first_positive_write_bytes']
++    require((count is None and value['first_positive_write'] is None) or
++            (type(count) is int and 0<count<2**31 and value['first_positive_write'] is not None))
++    require(value['consumption_verified'] is False and value['acoustic_verified'] is False)
++    return dict(value)
+@@ -184,0 +225,38 @@
++    def _stream_timing_begin(self, epoch, policy_epoch):
++        row=dict.fromkeys(STREAM_TIMING_MARKS)
++        row.update(version=1,agent_boot_id=self.agent_boot_id,microphone_epoch=epoch,policy_epoch=policy_epoch,
++                   content_attempt_id=None,content_binding='pending',started_monotonic=time.monotonic(),
++                   first_positive_write_bytes=None,consumption_verified=False,acoustic_verified=False)
++        probe=[row]
++        self._stream_timing=probe
++        return probe
++
++    def _stream_timing_mark(self, probe, name, count=None):
++        if (probe is None or getattr(self,'_stream_timing',None) is not probe
++                or name not in STREAM_TIMING_MARKS or probe[0][name] is not None):return
++        elapsed=time.monotonic()-probe[0]['started_monotonic']
++        if not math.isfinite(elapsed) or not 0<=elapsed<=86400:return
++        if name=='first_positive_write' and (type(count) is not int or not 0<count<2**31):return
++        row=dict(probe[0]);row[name]=round(elapsed,6)
++        if name=='first_positive_write':row['first_positive_write_bytes']=count
++        probe[0]=row
++
++    def _stream_timing_bind(self, probe, attempt):
++        if probe is None or getattr(self,'_stream_timing',None) is not probe or attempt is None:return
++        row=probe[0]
++        valid=type(attempt) is str and len(attempt)==32 and all(c in '0123456789abcdef' for c in attempt)
++        if row['content_binding']=='invalid':return
++        if not valid or (row['content_attempt_id'] is not None and row['content_attempt_id']!=attempt):
++            probe[0]=dict(row,content_binding='invalid')
++        elif row['content_attempt_id'] is None:
++            probe[0]=dict(row,content_attempt_id=attempt,content_binding='bound')
++
++    def stream_timing_status(self, policy):
++        probe=getattr(self,'_stream_timing',None)
++        if probe is None:return None
++        row=probe[0]
++        if (row['agent_boot_id']!=self.agent_boot_id or row['microphone_epoch']!=self.microphone_epoch
++                or row['policy_epoch']!=policy['epoch']):return None
++        try:return validate_stream_timing(row)
++        except ValueError:return None
++
+@@ -189 +267 @@
+-            return {'vision_route': self.vision_route_status(policy), 'listening': self.listening.is_set(), 'phase': self.phase,
++            return {'stream_timing': self.stream_timing_status(policy), 'vision_route': self.vision_route_status(policy), 'listening': self.listening.is_set(), 'phase': self.phase,
+@@ -396,0 +475,2 @@
++        timing = None
++        self._stream_timing = None
+@@ -429,0 +510,2 @@
++        if path in ('/text','/turn') and replay is None:
++            timing = self._stream_timing_begin(epoch,motor_policy_epoch)
+@@ -447,0 +530 @@
++        self._stream_timing_mark(timing,'response_open_begin')
+@@ -448,0 +532 @@
++        self._stream_timing_mark(timing,'response_open_end')
+@@ -464,0 +549,2 @@
++                        self._stream_timing_mark(timing,'first_reply_received')
++                        self._stream_timing_bind(timing,event.get('content_attempt_id'))
+@@ -475,0 +562 @@
++                            self._stream_timing_mark(timing,'first_motion_enqueued')
+@@ -476,0 +564 @@
++                        self._stream_timing_mark(timing,'first_audio_line_received')
+@@ -491,0 +580 @@
++                                self._stream_timing_mark(timing,'timeline_wait_begin')
+@@ -492,0 +582 @@
++                                self._stream_timing_mark(timing,'timeline_wait_end')
+@@ -496,0 +587 @@
++                            self._stream_timing_mark(timing,'aplay_popen_begin')
+@@ -500,0 +592 @@
++                            self._stream_timing_mark(timing,'aplay_popen_end')
+@@ -505,0 +598 @@
++                                self._stream_timing_mark(timing,'monitor_start_return')
+@@ -526,0 +620 @@
++                                    if written>0:self._stream_timing_mark(timing,'first_positive_write',written)
