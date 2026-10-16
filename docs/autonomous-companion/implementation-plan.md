@@ -18,7 +18,7 @@ Reachy, Hub, PC и VPS. Независимый reviewer проверяет ис�
 | Spoken snapshot | **РЕАЛЬНО РАБОТАЕТ:** после socket-only fix `7799e89` один human visual-запрос завершился успешно; человек подтвердил верность названия и описания. Exact visual STT, один turn без ошибки, CLI rc0 и независимый cleanup подтверждены | Это приёмка голосового camera → spoken description пути. Visual memory, latency target, streaming, отдельный STOP/motion прогон этим результатом не приняты; observer не дал terminal returned |
 | Prime-paused diagnostic | `73c241b`: Hub client обновлён без restart; в одном исправленном реальном прогоне cue выполнен при закрытом capture, затем подтверждены resume и свежий захват | **NOT_EXERCISED для камеры:** точный visual intent в STT отсутствовал, child не запускался. Один completed turn не доказывает vision/context. Повтора Alice vision не планируется |
 | Состояние после сбоя | После разрешённого повтора baseline/config/исходные worker-модули восстановлены и idle, content_tokens false, candidate parked, slot пустой; Robot OFF/unowned/free/100%, no camera/aplay; принятый camera bind сохранён | Это независимый конечный PASS восстановления данного повтора; не заменяет audible overlap, acoustic onset, E2E latency или длительный recovery soak |
-| Потоковый диалог | **Частичная реальная приёмка повторного `1e2d91c` прогона:** оба ответа слышны; owned STOP/cleanup и следующий turn в том же PC процессе прошли; PCM в обеих попытках выдан до последующих token READ; baseline независимо восстановлен | Содержательный audible overlap **NOT DEMONSTRATED**: первый сегмент 2 символа; APLAY впервые замечен после DONE, точный onset не измерен. Source audit завершён, telemetry `2cacfbf` установлена; голосового прогона с ней ещё нет. Continuous capture/partial STT остаются обязательными и не реализованы |
+| Потоковый диалог | **Частичная реальная приёмка повторного `1e2d91c` прогона:** оба ответа слышны; owned STOP/cleanup и следующий turn в том же PC процессе прошли; PCM в обеих попытках выдан до последующих token READ; baseline независимо восстановлен | Содержательный audible overlap **NOT DEMONSTRATED**: первый сегмент 2 символа; APLAY впервые замечен после DONE, точный onset не измерен. Source audit завершён, telemetry `2cacfbf` установлена; новый measurement прогон не проверил model route: наблюдался только `/stream/say`; baseline полностью восстановлен. Continuous capture/partial STT остаются обязательными и не реализованы |
 | Задержка vision | Два реальных image inference заняли около 11,03 и 10,35 s | Уже один inference превышает цель 10 s; полный speech-end → meaningful audio не измерен. Не объявлять цель достигнутой |
 | Память | Обычная RAM session history существует | Snapshot `/say` не добавляет visual question/answer в worker history; долговременная память и continuity через restart не приняты |
 | Полная автономность | Есть реализованные contracts, guards, fixtures и отдельные реальные checkpoints | Непрерывное восприятие/решения, память, полезные интеграции, recovery и длительная реальная приёмка ещё не завершены |
@@ -33,7 +33,7 @@ Reachy, Hub, PC и VPS. Независимый reviewer проверяет ис�
 | Порядок | Статус | Минимальный результат | Владелец | Реальная приёмка и доказательство |
 |---|---|---|---|---|
 | P0.1 | **Spoken camera PASS для одного реального human-запроса:** socket-only fix установлен, описание подтверждено человеком, финальный cleanup проверен | Сохранить принятый camera voice path и воспроизводимый `7799e89` fix | writer: public fix/план; runner: единственные device actions; координатор: следующая приёмка | Следующий приоритет — P0.2. Отдельные camera STOP/motion/no-resume и visual follow-up memory остаются открыты; один корректный spoken ответ их не заменяет |
-| P0.2 | PCM overlap/STOP/same-process next turn приняты частично; exact Agent telemetry `2cacfbf` установлена и независимо проверена, voice trial ещё не было | Измерить реальный gate/start путь и доказать содержательный audible overlap; затем continuous capture/partial STT | runner: свежий finite 75+60 measurement method, exact boot/source guards, paired observer/offline join; writer: следующий behavior fix только по actual timings; координатор: review/tester | Не считать установку feature/latency/overlap PASS. После следующего реального результата выбрать минимальную коррекцию, сохраняя working camera; новых runtime работ до evidence нет |
+| P0.2 | PCM overlap/STOP/same-process next turn приняты частично; exact Agent telemetry `2cacfbf` установлена и независимо проверена, последний trial не проверил model route; baseline полностью восстановлен | Измерить реальный gate/start путь и доказать содержательный audible overlap; затем continuous capture/partial STT | runner: свежий finite 75+60 measurement method, exact boot/source guards, paired observer/offline join; writer: следующий behavior fix только по actual timings; координатор: review/tester | Не считать установку feature/latency/overlap PASS. После следующего реального результата выбрать минимальную коррекцию, сохраняя working camera; новых runtime работ до evidence нет |
 | P1.1 | Частично, не принято | Обычный контекст, затем visual context с provenance/TTL; долговременные факты и исправления | writer: существующие session/memory seams; runner + человек: смысловая проверка | Факт → vision → местоименная ссылка на прежний факт; отдельно visual follow-up из реально виденного. Restart сохраняет разрешённые факты/mute, correction/deletion работает; vision history не обещать до реализации |
 | P1.2 | Не принято | Первая полезная typed integration через существующий broker/worker | writer: маленький adapter/schema; runner: настоящий target; координатор: scope | Реальная полезная задача с intended/attempted/completed receipt; ошибки/timeout/duplicate/cancel различимы. Нет raw shell/секретов/новых grants из текста модели или OCR |
 | P1.3 | Частично guards есть, полная приёмка открыта | Recovery, ресурсы, STOP, воспроизводимая доставка Git/transfer | writer + reviewer; runner: actual failures/recovery | Сеть/worker/model/restart/перегрузка не оживляют старые речь/движения. Bounded queues/VRAM/storage, сохранившиеся mute/volume, exact source hashes, конечный deploy/readiness/rollback без конкурирующих владельцев |
@@ -230,18 +230,41 @@ Spoken/snapshot helpers, unit/config/profile/token/persisted state и factory
 не менялись. Camera socket bind сохранён: PrivateTmp=yes, read-only mount и тот
 же текущий socket inode в Agent/factory/host. PC baseline/config/исходные модули,
 content_tokens false, idle, пустой slot и inventory сохранены. Это installation/
-readiness PASS; **не feature/latency/overlap acceptance**. Голосового прогона с
-новым Agent пока нет; старые boot-bound trial guards намеренно устарели.
+readiness PASS; **не feature/latency/overlap acceptance**. Старые boot-bound trial
+pins не используются для нового запуска.
 
-Runner готовит следующий существующий finite measurement method с окнами 75+60 s,
-обновлёнными exact boot/source guards и paired observer. Offline join correction
-и семь paired fixtures прошли только offline/source checks; joined hardware
-acceptance ещё нет. Нужен готовый tester и отдельный согласованный реальный
-результат, а не автоматический запуск после установки. До next actual timings
-новых runtime работ не требуется. Затем выбирается минимальный behavior fix по
-доказанному gate/start path; continuous capture/partial STT остаются обязательным
-последующим seamless этапом и не объявляются готовыми. Agent HEAD, камера/worker/
-profile, ALSA capture и сегментация не менялись.
+**Последний реальный measurement на c2fc:** человеку немедленно сообщили о
+подтверждённом capture active в проверенном 75-секундном окне. Наблюдался один
+`/stream/say` и ни одного model reply route; строгих PC model metadata нет.
+Это **NOT EXERCISED для генерации ответа/LLM streaming**, а не установленный
+дефект telemetry. При owned APLAY observer выполнил STOP: hold 3,0708 s,
+cleanup около 0,390 s. Это STOP подготовленной речи, не STOP во время LLM-ответа.
+После STOP read-only обращение к Hub завершилось transport error, второе окно
+не открылось; guard восстановления сначала отклонил отсутствие model metadata.
+Missing timing и отсутствие второго turn не превращаются в latency/overlap PASS.
+
+**Scoped recovery полностью принят независимыми проверками PC, Robot и камеры:**
+исходный процесс running/idle, protected config и исходные модули восстановлены,
+content_tokens false, slot пустой, candidate parked, inventory сохранён.
+Agent c2fc сохранён; OFF/paused/unowned/free, 100%, no APLAY/camera, factory empty.
+Camera bind read-only, PrivateTmp и прежний socket сохранены. Recovery не вызывал
+модель и не открывал новое окно. Ранее принятые producer PCM/token overlap,
+реальный STOP LLM-ответа и следующий turn в том же процессе остаются отдельными
+доказательствами предыдущего успешного цикла; содержательный acoustic overlap и
+speech-end E2E по-прежнему не измерены.
+
+Source audit и синтетический exact-c2fc fixture подтвердили: одинаковый audio
+stream даёт timing для `/text` и `/turn`, а `/say` намеренно не создаёт model
+probe. Конкретная причина выбора `/say` по одному route count не установлена;
+приватный текст не нужен и не публикуется. Доказана ложная eligibility тестового
+STOP observer: один APLAY допускал остановку до model reply. Узкий observer fix
+SOURCE ACCEPTABLE после шести fixtures: перед началом прежнего 3-секундного hold
+нужны current owned generation, валидный bound content ID, first audio и positive
+write. Null/pending/invalid/noncontent игнорируются внутри прежнего окна.
+User STOP и Agent не меняются; итоговая приёмка всё ещё требует строгого PC join.
+Offline join и measurement method также SOURCE ACCEPTABLE; это не actual join.
+Следующий реальный запуск ждёт свежего human ready и согласованного одного окна.
+Нового runtime patch или автоматического повтора нет.
 
 Реальный streaming rollout под `ad7c59b` завершился **lifecycle failure**, а не
 голосовой приёмкой. На Docker Engine 29.7.2 / API 1.55 собственный candidate был
@@ -300,6 +323,49 @@ STOP и следующий turn. Список ниже описывает пол
 начало реализации: continuous hearing/partial STT следует отдельным малым seam
 после этого голосового инкремента. Когда готов camera diagnostic, его tiny fix
 сохраняет приоритет; аппаратные окна не конкурируют.
+
+Ближайший обязательный continuous input инкремент разделён на два подэтапа.
+База для coding freeze — exact установленный c2fc, не Agent HEAD; свежие installed
+preimages recognition/barge-in и выбранного worker pin нужны до правки. Сейчас
+экспортов устройств и runtime изменений нет.
+
+**S1 — один capture pump текущего audio owner.** Сохранить существующий mono AEC
+`arecord` через обычные idle → capture → STT/inference → playback: один reader,
+один VAD/utterance assembler, один final claim для main/barge-in. `capture()`
+становится consumer facade; barge-in подписывается на тот же поток уже во время
+inference. Reader только читает/собирает bounded PCM и события; STT, classify HTTP
+и синхронный `BargeIn.trigger` выполняет bounded control worker с прежними
+AEC/echo/STT confirmation/permit guards. Active STT 1, pending latest 1; original
+receipt/end/deadline, source generation, utterance/revision и boot/mic/policy
+сохраняются без переомоложения копированием или завершением модели. Старый PCM
+после длительного drain истекает; неизвестная continuity сбрасывает generation.
+Receipt clock `arecord` не доказывает hardware capture time. OFF/STOP сразу
+отзывает очередь и очищает PCM, затем reap reader вне удерживаемого mic lock;
+listen=false не открывает capture. Stereo autonomous ALSA backend, второй PCM
+owner и новый framework сюда не импортируются.
+
+Принятый spoken camera guard требует честного capture_active=false: перед visual
+child bounded quiesce/reap/clear pump, после child resume только по текущему grant
+с новой capture generation. Это явный временный пробел слышимости во время vision.
+Не скрывать reader флагом, не убирать guard и не переписывать helper ради pump.
+Source fixtures проверяют one claim/TTL/generation/late result/STOP ordering.
+Реальная S1 приёмка отдельно требует того же owned arecord PID через inference и
+APLAY, near-end при inference/playback без self-echo, STOP reap/no resurrection,
+отбрасывания late PCM после drain, свежего следующего turn и сохранённого spoken
+camera через честный quiesce. Это ещё не partial STT PASS.
+
+**S2 — recognize-only provisional STT.** В существующем authenticated transcribe
+seam добавить opt-in режим без LLM/classification/history/actions, сохраняя тот же
+recognizer/model lock. Текущий fasterWhisper принимает полное PCM окно: bounded
+rolling snapshots с cadence, active 1/latest 1, stable prefix по двум revisions;
+это повторное декодирование окон, не native online backend. Полный bounded final
+после VAD endpoint проходит normal STT/intent ровно один раз с прежней session и
+interruption semantics. Partials привязаны к utterance/revision/generations,
+устаревшие partial/final отбрасываются, память и actions не коммитятся.
+Timed-out STT с неизвестным состоянием не запускает дублирующий GPU request.
+Source fixtures проверяют supersession/final once/no history и bounded admission;
+реальная S2 приёмка дополнительно требует partial до VAD endpoint. Ни fixtures,
+ни S1 не заменяют continuous/partial/acoustic hardware acceptance.
 
 Оставшиеся составляющие потокового диалога:
 
