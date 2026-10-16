@@ -34,19 +34,22 @@ Read-only inventory runner установил следующие агрегат�
 принять архитектор и runner. В документе намеренно нет исполняемых команд:
 доказательства завершения домена пока недостаточны.
 
-Текущий конкретный кандидат runner: штатно остановить **только Docker Desktop**
-и bounded RO проверкой подтвердить завершение соответствующей Desktop WSL
-среды и старых Windows request/backend/proxy, недоступность прежнего API и
-отсутствие автоматического возобновления; только после этого fresh start.
-Если среда остаётся running или свидетельства неизвестны — abort/manual handoff,
-**без start и без принудительного WSL terminate/shutdown**. Это кандидат для
-review, **не maintenance GO**. Имена distro/процессов и endpoint остаются в
-приватном inventory; угадывать их по типовой установке нельзя.
+Окончательный scope координатора: штатно остановить Docker Desktop. Только
+после **известного** результата stop, если точно выбранная Desktop WSL target
+ещё Running, выполнить **одно явное завершение только этой target**. Затем
+bounded RO проверкой подтвердить Stopped, завершение старых Windows
+request/backend/proxy, недоступность прежнего API и отсутствие автоматического
+возобновления; только после этого fresh start. Отдельное завершение target
+явно входит в согласуемый с человеком scope, не прячется в RO hook.
+UNKNOWN stop или identity drift target означает abort/manual handoff без
+terminate/start/retry. Это кандидат для review, **не maintenance GO**. Имена
+distro/процессов и endpoint остаются в приватном inventory; угадывать их нельзя.
 
 Docker документирует [Desktop stop](https://docs.docker.com/reference/cli/docker/desktop/stop/).
-Это описание подтверждает назначение средства управления, но не отсутствие
-durable replay или завершение конкретного запроса. Отдельные WSL lifecycle
-команды и перезагрузка PC не входят в этот кандидат.
+Microsoft документирует [завершение выбранной WSL distribution](https://learn.microsoft.com/en-us/windows/wsl/basic-commands#terminate).
+Эти описания подтверждают назначение средств управления, но не отсутствие
+durable replay или завершение конкретного запроса. Общий WSL shutdown,
+завершение соседней distro и перезагрузка PC не входят в этот кандидат.
 
 Дополнительный bounded RO capability check: установлен Desktop CLI 0.4.3;
 version/status и help stop/start доступны, stop/start поддерживают timeout.
