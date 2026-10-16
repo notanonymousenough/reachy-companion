@@ -71,7 +71,7 @@ class DemoTests(unittest.TestCase):
                 self.operator['motion_policy_owner_id'] = 'human'
             return copy.deepcopy(self.operator)
         if path == '/control/status':
-            if self.operator['microphone_enabled']:
+            if self.operator['microphone_enabled'] and self.operator['listening']:
                 self.completed += 1
             return dict(turns=self.completed, volume_percent=self.volume)
         if path=='/vision-capabilities':return dict(bound_snapshot_say=1,agent_boot_id=self.operator['agent_boot_id'])
@@ -98,6 +98,43 @@ class DemoTests(unittest.TestCase):
         self.assertIsNone(self.operator['motion_policy_owner_id'])
         self.assertEqual(len(self.posts), 4)
         self.assertNotIn('owner_id', self.posts[-1][1])
+        self.assertTrue(self.posts[1][1]['listen'])
+
+    def test_prime_paused_first_grant_never_captures_until_existing_same_epoch_resume(self):
+        paused=[];resumed=[]
+        def request(config,url,payload=None,**kwargs):
+            value=self.request(config,url,payload,**kwargs)
+            if url.endswith('/control/status') and self.operator['microphone_enabled'] and not self.operator['listening']:
+                self.assertFalse(self.operator['capture_active']);self.assertEqual(self.completed,0)
+                paused.append(copy.deepcopy(self.operator))
+                if len(paused)==2:
+                    # Existing direct Agent /resume only sets listening; no
+                    # microphone regrant, epoch change or owner adoption.
+                    resumed.append((self.operator['microphone_epoch'],self.operator['microphone_owner_id']))
+                    self.operator.update(listening=True,capture_active=True,phase='listening')
+            return value
+        with patch('reachy_companion.client.request',side_effect=request),patch('reachy_companion.client.time.sleep'),patch('builtins.print'):
+            self.assertEqual(demo({'network':{'hub_url':'http://fixture'}},prime_paused=True),0)
+        self.assertEqual(len(paused),2);self.assertEqual(len(resumed),1)
+        self.assertFalse(self.posts[1][1]['listen']);self.assertEqual(self.posts[1][1]['expected_epoch'],4)
+        self.assertEqual(resumed[0],(5,self.posts[1][1]['owner_id']))
+        self.assertEqual(len(self.posts),4);self.assertEqual(self.completed,3)
+        self.assertFalse(self.operator['microphone_enabled']);self.assertFalse(self.operator['motion_policy']['motor_enabled'])
+
+    def test_prime_paused_never_auto_resumes_and_times_out_with_owned_cleanup(self):
+        now=[100.0]
+        def tick():now[0]+=.01;return now[0]
+        with patch('reachy_companion.client.time.monotonic',side_effect=tick):
+            self.assertEqual(self.run_demo(prime_paused=True,seconds=10),1)
+        self.assertEqual(self.completed,0);self.assertEqual(len(self.posts),4)
+        self.assertTrue(self.posts[1][1]['enabled']);self.assertFalse(self.posts[1][1]['listen'])
+        self.assertFalse(self.operator['capture_active']);self.assertFalse(self.operator['microphone_enabled'])
+
+    def test_prime_paused_requires_boolean_before_any_io(self):
+        for value in (None,1,'true',[]):
+            with self.subTest(value=value),patch('reachy_companion.client.request') as io,self.assertRaises(ValueError):
+                demo({},prime_paused=value)
+            io.assert_not_called()
 
     def test_inaudible_or_invalid_volume_denies_without_changing_it(self):
         for volume in (0,101,True):

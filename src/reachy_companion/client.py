@@ -109,10 +109,12 @@ def guarded_control(config, base, path, payload, expected, *, deadline=None, aut
         connection.close()
 
 
-def demo(config, *, turns=3, seconds=180, owner_id=None, operator_binding=None, vision_text=None, vision_deadline=None):
+def demo(config, *, turns=3, seconds=180, owner_id=None, operator_binding=None, vision_text=None, vision_deadline=None, prime_paused=False):
     """Run the existing live Agent, releasing only our unchanged CAS claims."""
     if type(turns) is not int or not 1 <= turns <= 3 or type(seconds) is not int or not 10 <= seconds <= 300:
         raise ValueError('Demo requires 1..3 turns and 10..300 seconds')
+    if type(prime_paused) is not bool:
+        raise ValueError('Boolean prime-paused mode required')
     if vision_text is not None or vision_deadline is not None:
         if (type(vision_text) is not str or not 0<len(vision_text.strip())<=1600
                 or any(tag in vision_text.lower() for tag in ('<think','</think','<|analysis|>','<|im_start|>','<analysis','[analysis]'))
@@ -198,7 +200,7 @@ def demo(config, *, turns=3, seconds=180, owner_id=None, operator_binding=None, 
                 or current['microphone_epoch'] != initial['microphone_epoch']):
             raise ValueError('Operator changed before demo listening')
         claims['microphone'] = initial['microphone_epoch'] + 1
-        write('/control/microphone', dict(enabled=True, listen=vision_text is None, expected_boot_id=boot,
+        write('/control/microphone', dict(enabled=True, listen=vision_text is None and not prime_paused, expected_boot_id=boot,
             expected_epoch=initial['microphone_epoch'], owner_id=owner), current)
         if vision_text is not None:
             current,_=operator()
@@ -214,7 +216,8 @@ def demo(config, *, turns=3, seconds=180, owner_id=None, operator_binding=None, 
             vision_speech_completed=spoken.get('ok') is True and not spoken.get('cancelled')
             result=0 if vision_speech_completed else 1
         else:
-            print('Live demo starting. Ctrl-C or microphone OFF stops.', flush=True)
+            print('Microphone permission ON, capture paused. Awaiting guarded controller cue/resume. Ctrl-C or microphone OFF stops.'
+                  if prime_paused else 'Live demo starting. Ctrl-C or microphone OFF stops.', flush=True)
             listening_reported = False
             while time.monotonic() < deadline:
                 current = call('/control/operator')
@@ -287,6 +290,7 @@ def demo(config, *, turns=3, seconds=180, owner_id=None, operator_binding=None, 
             physical_motion_verified=False, context_verified=False, cleanup_failed=cleanup_failed,
             cleanup_unknown=cleanup_unknown)
         if vision_text is not None:summary.update(vision_snapshot=True,vision_speech_completed=vision_speech_completed)
+        if prime_paused:summary['prime_paused']=True
         print(json.dumps(summary), flush=True)
     return 1 if cleanup_failed or cleanup_unknown else result
 

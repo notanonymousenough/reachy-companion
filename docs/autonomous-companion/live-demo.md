@@ -8,6 +8,23 @@ From the Mac with the existing working SSH access and local private configuratio
 ./scripts/companion-demo --robot-known-hosts /path/to/existing-known-hosts --turns 3 --seconds 180
 ```
 
+For a reviewed same-owner cue/resume controller, start with Agent capture paused:
+
+```sh
+./scripts/companion-demo --prime-paused --turns 1 --seconds 40
+```
+
+This optional mode changes only the **first** owned microphone ON grant to
+`listen=false`. The same boot/epochs/owners, CAS checks, independent watch and
+cleanup remain. The client never resumes automatically or adopts a newer epoch.
+After its bounded cue, the existing guarded controller uses the direct Agent
+`/resume`, which sets listening without changing the microphone epoch/owner.
+Without that controller the mode waits until its deadline, then performs owned
+OFF cleanup. The default command still grants `listen=true`. This needs the
+matching updated Hub client file and Mac launcher; no service, Agent or worker
+restart is required. It fixes the diagnostic admission gap, not the unknown
+spoken-camera child cause, and its publication is not a real diagnostic PASS.
+
 The optional exact `53a` spoken-snapshot overlay is described in
 `deploy/patches/agent-53a-spoken-vision.md`. Once installed and verified by the
 sole runner, the normal demo accepts «Что перед тобой?» / «Что ты видишь?» from

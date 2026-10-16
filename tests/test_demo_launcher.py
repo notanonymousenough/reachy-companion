@@ -1,5 +1,6 @@
 """Mac/watch orchestration checks. No SSH or device process is started."""
 import copy
+import ast
 import hashlib
 import importlib.util
 import json
@@ -8,6 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import tempfile
 import stat
+import shlex
 import subprocess
 import unittest
 from unittest.mock import Mock, patch
@@ -59,6 +61,33 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual(self.events,['arm','child','finish'])
         self.assertEqual(self.packet['owner'],self.owner)
         self.assertEqual(self.packet['operator_binding'],self.binding)
+        self.assertNotIn('prime_paused',self.packet)
+
+    def test_prime_paused_is_optional_and_passed_with_same_watch_binding(self):
+        with patch.object(launcher,'robot_call',side_effect=self.robot),patch.object(launcher,'hub_command',return_value=['fixture']), \
+                patch.object(launcher.subprocess,'run',side_effect=self.child),patch('builtins.print'):
+            self.assertEqual(launcher.launch({},self.hosts,turns=3,seconds=180,prime_paused=True),0)
+        self.assertEqual(self.events,['arm','child','finish'])
+        self.assertIs(self.packet['prime_paused'],True)
+        self.assertEqual(self.packet['owner'],self.owner);self.assertEqual(self.packet['operator_binding'],self.binding)
+
+    def test_invalid_prime_paused_rejected_before_watch_or_child(self):
+        for value in (1,None,'true'):
+            with patch.object(launcher,'robot_call') as robot,patch.object(launcher.subprocess,'run') as child,self.assertRaises(RuntimeError):
+                launcher.launch({},self.hosts,turns=3,seconds=180,prime_paused=value)
+            robot.assert_not_called();child.assert_not_called()
+
+    def test_hub_transport_compiles_and_only_allows_typed_optional_prime_field(self):
+        command=launcher.hub_command(dict(deployment=dict(hub=dict(root='/fixture',user='fixture',host='fixture'))))
+        code=shlex.split(command[-1])[4];tree=ast.parse(code);compile(tree,'hub-demo-command','exec')
+        checks=[node for node in tree.body if isinstance(node,ast.Assert) and 'prime_paused' in ast.unparse(node)]
+        self.assertEqual(len(checks),2)
+        packet=dict(owner='fixture',operator_binding=self.binding,turns=3,seconds=180)
+        for values in (packet,dict(packet,prime_paused=True)):
+            exec(compile(ast.Module(body=checks,type_ignores=[]),'hub-packet-check','exec'),dict(p=values))
+        for change in (dict(prime_paused=1),dict(extra=True)):
+            with self.assertRaises(AssertionError):
+                exec(compile(ast.Module(body=checks,type_ignores=[]),'hub-packet-check','exec'),dict(p=dict(packet,**change)))
 
     def test_explicit_vision_snapshot_precedes_speech_child_and_never_prints_final(self):
         def robot(config,hosts,payload):

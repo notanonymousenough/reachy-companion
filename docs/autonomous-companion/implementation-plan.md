@@ -65,6 +65,15 @@ patch, новый dispatcher и model/runtime migration на активный ac
 5. Реальный spoken camera acceptance и ordinary context continuity; затем STOP
    во время ответа и no resume. Лишь после этого статус этого маршрута PASS.
 
+Дополнительный Alice diagnostic был **NOT_EXERCISED**: обычный demo сначала
+открывал listening, поэтому concurrent controller получил GuardDenied до pause
+и до cue. Это не новая причина исходного camera-child сбоя и не вывод о качестве
+Алисы. Минимальный `--prime-paused` оставляет первый same-owner/CAS ON grant с
+`listen=false`; существующий guarded cue → direct `/resume` сохраняет исходные
+epochs. Нужен только matching Hub client file, без Agent/worker restart. После
+source review runner выполняет один исправленный конечный метод с новым fresh
+watch; publication/source checks не заменяют реально выполненный diagnostic.
+
 ## P0.2: source audit и настоящий потоковый диалог
 
 Проверен exact установленный worker `voice.py` SHA256

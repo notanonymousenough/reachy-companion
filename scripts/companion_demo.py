@@ -111,16 +111,18 @@ def hub_command(config):
         "assert hashlib.sha256(source.read_bytes()).hexdigest()==sys.argv[2],'Client revision changed';"
         "sys.path.insert(0,str(root/'src'));from reachy_companion.config import Config;"
         "from reachy_companion.client import demo;raw=sys.stdin.buffer.read(16385);assert len(raw)<=16384;p=json.loads(raw);"
-        "assert set(p) in ({'owner','operator_binding','turns','seconds'},{'owner','operator_binding','turns','seconds','vision_text','vision_deadline'});"
+        "assert (set(p)-{'prime_paused'}) in ({'owner','operator_binding','turns','seconds'},{'owner','operator_binding','turns','seconds','vision_text','vision_deadline'});"
+        "assert type(p.get('prime_paused',False)) is bool;"
         "sys.exit(demo(Config(root/'config.local.json'),owner_id=p['owner'],operator_binding=p['operator_binding'],"
-        "turns=p['turns'],seconds=p['seconds'],vision_text=p.get('vision_text'),vision_deadline=p.get('vision_deadline')))")
+        "turns=p['turns'],seconds=p['seconds'],vision_text=p.get('vision_text'),vision_deadline=p.get('vision_deadline'),prime_paused=p.get('prime_paused',False)))")
     remote = shlex.join(['/usr/bin/python3', '-I', '-B', '-c', code, hub['root'], pin])
     return ['ssh', '-oBatchMode=yes', '-oStrictHostKeyChecking=yes', '-oConnectTimeout=5',
         hub['user'] + '@' + hub['host'], remote]
 
 
-def launch(config, known_hosts, *, turns, seconds, vision=None):
+def launch(config, known_hosts, *, turns, seconds, vision=None, prime_paused=False):
     need(type(turns) is int and 1 <= turns <= 3 and type(seconds) is int and 10 <= seconds <= 300)
+    need(type(prime_paused) is bool)
     need(known_hosts.is_file())
     need(vision is None or (type(vision) is str and 1<=len(vision)<=256 and seconds>=60))
     started=time.monotonic()
@@ -132,6 +134,7 @@ def launch(config, known_hosts, *, turns, seconds, vision=None):
         ready = validate_ready(robot_call(config, known_hosts, dict(action='arm', owner=owner, seconds=seconds)), owner)
         print('Independent device watch ready.' if vision is not None else 'Independent device watch ready. Starting live demo on Hub.', flush=True)
         packet = dict(owner=owner, operator_binding=ready['operator_binding'], turns=turns, seconds=seconds)
+        if prime_paused:packet['prime_paused']=True
         if vision is not None:
             print('Taking one snapshot for a spoken reply. This command does not listen for an STT trigger.',flush=True)
             snapshot=robot_call(config,known_hosts,dict(action='vision',owner=owner,run_id=ready['run_id'],
@@ -173,9 +176,10 @@ def main():
     parser.add_argument('--turns', type=int, default=3)
     parser.add_argument('--seconds', type=int, default=180)
     parser.add_argument('--vision',nargs='?',const='Что перед тобой?',help='One explicit snapshot reply; optional question (not an STT trigger)')
+    parser.add_argument('--prime-paused',action='store_true',help='First owned microphone ON grant uses listen=false; guarded controller resumes')
     args = parser.parse_args()
     from reachy_companion.config import Config
-    return launch(Config(args.config, require_token=False), args.robot_known_hosts.expanduser(), turns=args.turns, seconds=args.seconds,vision=args.vision)
+    return launch(Config(args.config, require_token=False), args.robot_known_hosts.expanduser(), turns=args.turns, seconds=args.seconds,vision=args.vision,prime_paused=args.prime_paused)
 
 
 if __name__ == '__main__':
