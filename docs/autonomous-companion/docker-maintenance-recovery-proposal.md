@@ -48,12 +48,29 @@ Microsoft — [завершение отдельной WSL distribution](https:/
 версии на PC, отсутствие durable replay или завершение конкретного запроса.
 Общий WSL shutdown и перезагрузка PC не входят в этот кандидат.
 
+Дополнительный bounded RO capability check: установлен Desktop CLI 0.4.3;
+version/status и help stop/start доступны, stop/start поддерживают timeout.
+Самих stop/start не выполняли. Текущий pipe обслуживается Desktop backend;
+в registry две distro, целевая Desktop distro уникальна и связана с локальным
+Desktop storage. Однако выбранный WSL-engine setting недоступен: точная связь
+endpoint → backend → завершаемая distro как достаточная execution boundary
+**UNKNOWN**, исключение воздействия на соседнюю distro также **UNKNOWN**.
+Эти capability checks не разрешают переход к обслуживанию.
+
 Для submitters требуется проверяемый maintenance hold всех управляемых launcher,
 scheduler и retry paths на время границы. Координатор уже поставил управляемые
 чаты на HOLD PC mutations; это не доказывает hold всех внешних submitters.
 Требуется установить фактический scope и контроль доступа к endpoint. Нельзя
 выдавать отсутствие известных процессов за доказательство отсутствия всех
 будущих пользователей или акторов.
+
+RO результат по hold: координационный HOLD действует для трёх управляемых
+классов ролей — runner/writer/reviewer; это не число процессов и не полный
+аудит Windows retry/watchdog submitters. Canonical UNKNOWN блокирует новые
+CREATE у клиентов, соблюдающих протокол. Общий проверенный enforcement для
+всех управляемых будущих submitters пока отсутствует; gap ограничен этим
+scope, а не требованием доказать отсутствие любых будущих внешних клиентов.
+Известные прежние submitters отсутствуют. Новых мутаций и supersession нет.
 
 1. Зафиксировать свежие operator state/STOP/epochs и RO inventory. Сохранить
    приватные exact baseline/spec/image/source/profile/FI receipts у runner.
