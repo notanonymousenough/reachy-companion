@@ -37,7 +37,7 @@ Actual bound CLOUDS завершён native/phase/postnative/topic PASS, cleanup
 вопроса тоже не удовлетворяет target. Prompt-only изменение недостаточно.
 
 Подготовлен и независимо принят source-only opt-in gate для прежних RAW9B/endpoint:
-точные overlays Voice92cf→248e389 и Configc0→e7d3de62, default
+точные overlays Voice92cf→00330682 и Configc0→e7d3de62, default
 `conversation.alice_question_gate=false`. При opt-in и Alice prefix весь complete
 model candidate до TTS должен быть одним законченным вопросом3–5 words. Ничего
 не выбирается, не обрезается, не ремонтируется и не заменяется ACK. Только после
@@ -45,13 +45,15 @@ known-complete invalid candidate разрешена одна regeneration в о�
 request budget с теми же user/history. Invalid output не публикуется и не попадает
 в history; HTTP/timeout/backend errors не повторяются. STOP/authority/deadline
 проверяются до/между/после генераций и перед TTS; ACK branch отключён в Alice mode.
-Explicit-details request сохраняет исходный long-answer путь/max512.16 focused
+Explicit-details request сохраняет исходный long-answer путь/max512.17 focused
 tests PASS, independent source GO. Deadline запрещает позднюю публикацию, но не
 доказывает мгновенное прерывание blocking backend I/O; gate проверяет форму,
 не семантическую полезность или отсутствие скрытой просьбы выполнить действие.
 Runtime ещё не принят. Из-за read-only worker rootfs установка использует прежний
 same-image strict-slot overlay с двумя individual read-only binds Voice/Config,
 единственным worker на8082, recoverable baseline и exact private-profile restore.
+В Alice audio mode отсутствие загруженной SoundEvents session отклоняется до STT
+и модели; fallback kind=speech/scores0 не используется как verified speech.
 Это не доказательство длительного диалога или meaningful streaming.
 
 Обновлено 2026-10-17. Владелец плана — координатор Reachy Mini; writer ведёт код,

@@ -147,7 +147,7 @@
  
      def reset(self, session):
          self.sessions.pop(session, None)
-@@ -189,6 +298,15 @@
+@@ -189,6 +298,17 @@
  
      def prepare(self, payload, path, recognized_text=None, answer_result=None):
          prefix=self.speech_address(payload.get('speech_address_prefix',DEFAULT_SPEECH_ADDRESS))
@@ -155,6 +155,8 @@
 +                      and prefix == 'Алиса, ' and path != '/say')
 +        question_scope = question_deadline = None
 +        if alice_mode:
++            if path == '/turn' and getattr(getattr(self, 'sounds', None), 'session', None) is None:
++                raise RuntimeError('Alice audio classification unavailable; no speech fallback')
 +            budget = self.config['timeouts']['llm']
 +            if type(budget) not in (int, float) or not 0 < budget <= 3600 or not math.isfinite(budget):
 +                raise ValueError('Finite original LLM request budget required')
@@ -163,7 +165,7 @@
          reply_constraints=None
          if 'reply_constraints' in payload:
              from .spoken_reply import constraints,check_profile
-@@ -211,6 +329,9 @@
+@@ -211,6 +331,9 @@
          pending = None
          command = None
          decision = self.classify(text)
@@ -173,7 +175,7 @@
          if reply_constraints is not None and (not text or decision['action']!='answer'):
              raise ValueError('Constrained reply cannot use a preset/control path')
          if not text:
-@@ -228,9 +349,11 @@
+@@ -228,9 +351,11 @@
              reply = text
          else:
              self.phase = 'thinking'
@@ -187,7 +189,7 @@
          if reply_constraints is not None:
              from .spoken_reply import validate_text
              validate_text(reply,reply_constraints)
-@@ -246,8 +369,14 @@
+@@ -246,8 +371,14 @@
              raise RuntimeError('Backend returned an expression without spoken text')
          if pending is not None:
              pending['messages'][-1]['content'] = reply
@@ -203,7 +205,7 @@
  
      def completed(self, result, session, pending, started):
          if pending is not None:
-@@ -325,7 +454,8 @@
+@@ -325,7 +456,8 @@
              recognized = answer_result = None
              intro_bytes = 0
              acknowledgements = self.config['conversation'].get('interaction', {}).get('acknowledgements', {})

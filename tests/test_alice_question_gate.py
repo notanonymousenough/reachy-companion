@@ -39,6 +39,7 @@ class AliceQuestionGateTests(unittest.TestCase):
         self.addCleanup(fixture.doCleanups)
         self.p = fixture.pipeline
         self.p.__class__ = self.module.Pipeline
+        self.p.sounds = types.SimpleNamespace(session=object())
         self.spoken = fixture.spoken
         self.config = fixture.config
         self.config.data['conversation']['alice_question_gate'] = True
@@ -196,6 +197,17 @@ class AliceQuestionGateTests(unittest.TestCase):
                 self.p.turn(dict(pcm_base64=base64.b64encode(b'pcm').decode(), session='s'), '/turn')
         backend.assert_not_called()
         self.assertEqual(self.spoken, [])
+
+    def test_unavailable_audio_classifier_never_uses_speech_zero_fallback(self):
+        self.p.sounds.session = None
+        import base64
+        with patch('reachy_companion.brains.answer') as backend:
+            with self.assertRaises(RuntimeError):
+                self.p.turn(dict(pcm_base64=base64.b64encode(b'pcm').decode(), session='s'), '/turn')
+        self.p.transcribe.assert_not_called()
+        backend.assert_not_called()
+        self.assertEqual(self.spoken, [])
+        self.assertEqual(self.p.sessions, {})
 
     def test_unknown_or_slow_authority_prevents_any_model(self):
         for change in ('phase', 'owners', 'slow'):
