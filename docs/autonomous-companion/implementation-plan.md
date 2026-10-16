@@ -279,6 +279,14 @@ PC SoundEvents; music gate сбрасывает STT frames. Его actual effect
 не является классификацией речи. При OFF не открывать новый capture ради repro;
 speaker identity, источник музыки и intent, запустивший музыку, остаются UNKNOWN.
 
+Последующий actual read-only capability audit подтвердил sound_reactions enabled
+на Robot и PC; файл YAMNet существует, hash совпадает с config и known public pin.
+Live session_loaded не наблюдался напрямую. Новых classify/model-load/download
+вызовов не было. sound_mode=conversation/no error после mute reset не доказывает
+музыкальную классификацию во время incident. Current OFF сохраняется; возобновлять
+capture или музыку ради repro под текущим steering нельзя. Следующая реальная
+проверка требует уже разрешённого живого input; до неё discrimination UNKNOWN.
+
 На cf50/default-off выполнен один согласованный human-цикл. Оба окна объявлены
 человеку только после actual capture-active; человек прямо подтвердил, что оба
 ответа слышны. Один уникальный content attempt прошёл общий strict Agent21 + PC31
