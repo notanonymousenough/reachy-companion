@@ -251,6 +251,34 @@ Topic false сохранён отдельно. Это подтверждает �
 word count, не certified <=5 s acoustic duration и не длительную сессию. Настоящий
 streaming/continuous hearing/длительная Alice беседа ещё не приняты этим ходом.
 
+**Штатный persistent operator handoff выполнен.** После завершённого finite watch
+и known OFF source-reviewed переход использовал только policy CAS ON и microphone
+CAS ON с listen=True, затем read-only наблюдение. Actual capture/listening true,
+микрофон и разрешение stock motion включены; ownersNone означают существующий
+durable human operator mode. Новая служба/бесконечный test actor/фиктивный lease
+не создавались, watchdog не отключался, Agent/source не менялись. Seed/say/resume
+из handoff исключены: их unbound API не давал server-side epoch CAS. Поэтому
+Alice_seed_sent=false, long-dialogue PASS отсутствует. Службы оставлены работать;
+не считать legitimate manual ON зависшим finite grant и не arm finite watch
+поверх него. STOP/mute/newer epochs приоритетны, автоматического повторного ON нет.
+Человеку сообщено только после actual capture proof; предоставлено90 секунд без
+тестовых реплик и переключений. Это не подтверждение присутствия человека или
+слышимости его ответа. Guarded инициирование следующего Alice dialogue — отдельная
+задача; постоянно включённый микрофон ещё не означает simultaneous hearing/AEC.
+
+**Новый incident supersedes текущее listening состояние:** человек сообщил, что
+Алиса включила музыку. Автоматические elicitation и длительные Alice тесты
+приостановлены. Runner выполнил один штатный microphone OFF CAS: actual mic,
+capture и listening false, no ALSA/factory tasks, volume100; службы остаются ON.
+Повторный ON/resume/музыкальный repro не выполняется. Cause UNKNOWN; нормальный
+счётчик вырос16→21, attribution этих ходов человеку/Alice не подтверждена.
+Это не long-dialogue PASS. Пользователю сообщено фактическое OFF состояние.
+Existing SoundMonitor использует те же capture chunks и bounded latest queue к
+PC SoundEvents; music gate сбрасывает STT frames. Его actual effective enabled/model
+состояние ещё требует metadata проверки. sessionNone fallback kind=speech/scores0
+не является классификацией речи. При OFF не открывать новый capture ради repro;
+speaker identity, источник музыки и intent, запустивший музыку, остаются UNKNOWN.
+
 На cf50/default-off выполнен один согласованный human-цикл. Оба окна объявлены
 человеку только после actual capture-active; человек прямо подтвердил, что оба
 ответа слышны. Один уникальный content attempt прошёл общий strict Agent21 + PC31
