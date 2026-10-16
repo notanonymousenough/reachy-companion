@@ -69,6 +69,61 @@ startup acceptance остаются **OPEN**; следующие разделы 
 Существующая установленная копия старых scripts/task не меняется от этого Git
 коммита. Её owned suspension/migration и реальная проверка — отдельные действия.
 
+### Повторное использование существующего OperationSlot
+
+`scripts/windows/operation_slot.py` содержит точный code-only класс и два
+исходных helper без изменения cooperative протокола. SHA256 исходного/public
+файла — `de663d943ff9b999d315d9cbd1ef4858c76eb318fe5a02b6eb91b34e845965a4`,
+normalized AST трёх узлов — `5c47c5dc471fc06721aafb1402c48f2156b79746a26e815eae53e213c9702cd2`.
+Это identity кода, не enrollment или native filesystem доказательство.
+Класс использует тот же existing directory, sibling anchor, `operation.lock`,
+Windows byte-0 `msvcrt.LK_NBLCK`/POSIX `flock` и schema1
+`operation-state.json`. Его `pending()` по-прежнему возвращает None при missing
+state, а `__enter__` по-прежнему способен создать lock в существующем namespace.
+Поэтому сам по себе этот класс **не является строгим admission accepted START**.
+
+Отдельный `scripts/windows/accepted_start_admission.py` предоставляет
+`NamespaceBinding` и context manager `accepted_start_admission(binding)`.
+Binding передаётся только из независимого frozen enrollment: canonical absolute
+directory, parent/directory/anchor/lock native identity tuples и anchor SHA256.
+Не получать эти expected значения из текущих файлов ради успешного admission.
+Это in-memory API, не новый persistent slot, selector schema или bootstrap.
+
+До входа в исходный класс требуются существующие single-link regular non-reparse
+anchor, непустой lock и bounded state; отсутствующие файлы не инициализируются.
+После получения **того же** OS mutex перепроверяются enrollment/namespace и
+полученный anchor hash, затем читается существующий bounded state. Открывать
+state до mutex нельзя: на Windows это могло бы помешать atomic replace активного
+владельца. Проверяются identity до/после чтения, exact keys `schema/inflight`,
+integer schema1 и только `inflight is None`. False, пустой dict, UNKNOWN,
+duplicate/nonfinite/missing поля, hardlink/reparse/rebind дают отказ до тела.
+State inode не замораживается до mutex: законченная предыдущая операция вправе
+легально заменить его через существующий `save(None)`.
+
+Тело получает исходный slot API и сохраняет ответственность существующего
+протокола: записать inflight **до** реальной submission и очищать только после
+известного terminal результата. Нормальный выход повторно требует known idle
+и прежний namespace. Исключение или выход с pending не очищает запись, не делает
+retry/recovery/rollback и не удаляет marker/lock/anchor. Эта библиотека не начинает
+модель/контейнер и не заменяет manual-stop checks внешнего adapter.
+
+Это cooperative same-account защита, не враждебно-безопасный filesystem wrapper.
+Исходный O_CREAT не удалён: uncooperative удаление lock между precheck и entry
+может оставить созданный исходным классом новый lock. Identity mismatch не
+допускает тело; новые/оставшиеся файлы сохраняются для review, не удаляются и
+не принимаются как новое enrollment. Нет обещания атомарного запрета всех
+same-user/privileged namespace writers. Внепротокольный writer и native Windows
+behavior требуют отдельного контроля/acceptance.
+
+`test_operation_slot_admission.py` проверяет source/AST pin, независимые POSIX
+процессы original/public классов на одном enrolled fixture в обе стороны,
+UNKNOWN persistence, missing-state отличие, pending+exception/return, atomic
+state replacement, symlink/hardlink и directory/lock rebinding. Fixture IDs
+создаются только для нейтральных временных файлов. Это не Windows contention
+или готовый real adapter: формат opaque приватного selector, включение этих
+двух модулей в его reviewed dependency closure и actual integration остаются
+следующим отдельным gate. Существующий runner protocol/runtime не repin-ится.
+
 ### Что воспроизводится из Git
 
 Reviewed commit фиксирует исходники и рецепт сборки, но не гарантирует побитово
