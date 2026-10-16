@@ -225,6 +225,22 @@ SDK датчиков (например IMU, если существует). Од
 Длинная серия со старым verbose profile не запускается. Camera, stock motion,
 модель и STOP сохраняют прежние контракты.
 
+Фактически первый short-profile установлен через existing PC worker restart:
+только system prompt suffix и max_tokens512→96. Первичная readiness-проверка
+не уложилась в12 s и осталась FAIL; отдельный read-only reconcile подтвердил
+idle/HTTP200, effective profile, прежние source/image и известные OFF. Это один
+restart, новая conversation epoch; повторного restart не было.
+Первый WIND launch остановился до watch-ready, без нового ON/cue/turn. Отдельный
+RAIN прошёл native RC0/phase/cleanup, OFF/100. В локальном posthoc driver был неверный
+путь source; original reporting FAIL сохранён, отдельное read-only чтение того же
+завершённого run подтвердило postnative PASS. Не считать это новым speech turn.
+RAIN:10 spoken words включая Alice, complete/prefix/model-route true, topic false.
+Reply sampled process span6,7747 s — нижняя граница, поэтому <=5 s target точно
+не выполнен. Cue span2,9311 s. `short_sample_target_met` отражает только sampled
+проверку, `physical_duration_target_met` остаётся UNKNOWN; sampled span не верхняя
+граница длительности. Следующий шаг — более короткий обычный вопрос и явное
+исключение подробного ответа, без универсального96-token ограничения.
+
 На cf50/default-off выполнен один согласованный human-цикл. Оба окна объявлены
 человеку только после actual capture-active; человек прямо подтвердил, что оба
 ответа слышны. Один уникальный content attempt прошёл общий strict Agent21 + PC31
