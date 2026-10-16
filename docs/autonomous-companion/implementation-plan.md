@@ -172,6 +172,22 @@ quiescence требует `absence_verified` плюс прежние capture/own
 source acceptance; интеграция в frozen controller и отдельный hardware repeat
 ещё требуют проверки. Agent/profile/timeouts этим не меняются.
 
+Последующая интеграция observer прошла две source review: оба quiescence sites
+требуют `absence_verified`, positive-playback poll сохраняет исходный deadline,
+helper проверяет Agent identity после scan. Отдельный MOON hardware ход завершился
+native RC0, phase/postnative true за47,4885 s, OFF/100, без новых interruptions.
+Тематический результат false: этот case остаётся semantic FAIL. Точный transient
+ALSA guard исходного TIDE этим ретроспективно не установлен.
+
+Следующая длительная серия имеет **отдельный runtime-stability criterion**:
+>=10 runtime-accepted ходов AND >=1200 s. Runtime-accepted требует native RC0,
+phase/postnative true, известные OFF/100, exact epoch fences и прежние проверки
+interrupt/ownership. Semantic false разрешает продолжить только после этих
+проверок; semantic FAIL сохраняется, semantic-accepted count ведётся отдельно.
+Unknown, native failure, interruption или operator drift по-прежнему останавливают
+серии. Это явное изменение критерия следующего прогона, не пересчёт первого
+неуспешного soak и не полный MVP/context/coherence PASS. Предел1800 s сохраняется.
+
 После smoke runner выполняет 20–30-минутную сессию из последовательных bounded
 циклов с >=10 связанными ходами в той же реальной conversation session. Граница
 цикла и паузы отражаются честно; это не continuous-capture acceptance. Контекст:
@@ -187,6 +203,19 @@ SDK датчиков (например IMU, если существует). Од
 измерения. Generic sensor framework и покупка оборудования не нужны.
 
 ## Последний human measurement и incident антенн
+
+**Текущий приоритет Alice dialogue: короткие реплики.** Прямое наблюдение
+пользователя: Алиса прекращает слушать раньше окончания длинной речи Reachy.
+Длительная сессия теперь означает много коротких ходов. Следующая настройка
+через существующий профиль/system prompt должна требовать одну законченную
+фразу или вопрос с обращением «Алиса», ориентир5–10 content words/~3–5 s речи,
+без повторов, объяснений и нескольких вопросов. Это target, не измеренный PASS.
+Модельный ответ остаётся содержательным; PCM не обрезается посреди слова.
+Прежнее требование длинного spoken FINAL для Alice superseded. Изменение только
+после known safe OFF, с сохранением profile pins/restore; следующий фактический
+короткий ход проверяет word count, sampled APLAY duration и relevance отдельно.
+Длинная серия со старым verbose profile не запускается. Camera, stock motion,
+модель и STOP сохраняют прежние контракты.
 
 На cf50/default-off выполнен один согласованный human-цикл. Оба окна объявлены
 человеку только после actual capture-active; человек прямо подтвердил, что оба
