@@ -11,6 +11,14 @@ before using the command. The Agent and worker interfaces remain unchanged.
 There is no downgrade to an unguarded microphone write on an older Hub.
 An earlier direct Agent API trial is separate from acceptance of this CLI.
 
+Control comparisons validate the complete typed operator response but compare
+boot, microphone epoch/enabled/owner and the full motion policy/owner as authority.
+The idle expression counter can change without changing those permissions.
+Every ON grant still requires a fresh paused Agent with microphone, capture and
+listening OFF and quiet/privacy OFF. OFF cleanup permits normal phase transitions.
+ExpressionPlayer's separate motion version checks remain active. Every actual
+socket send still requires an operator read younger than 300 ms and server CAS.
+
 With the existing private configuration available locally:
 
 ```sh

@@ -3,7 +3,7 @@ import copy
 import unittest
 from unittest.mock import patch
 from types import SimpleNamespace
-from reachy_companion.client import demo, guarded_control
+from reachy_companion.client import demo, guarded_control, compare_control_operator
 from reachy_companion.microphone import validate_control
 
 
@@ -11,7 +11,8 @@ class DemoTests(unittest.TestCase):
     def setUp(self):
         self.operator = dict(agent_boot_id='boot', microphone_epoch=4, microphone_owner_id=None,
             microphone_enabled=False, capture_active=False, listening=False, phase='paused',
-            motion_policy_owner_id=None, motion_policy=dict(epoch=8, motor_enabled=False, quiet=False, privacy_all=False))
+            motion_policy_owner_id=None, motion_policy=dict(epoch=8, motor_enabled=False, quiet=False, privacy_all=False),
+            expression_version=1,microphone_state_error=None)
         self.posts = []
         self.completed = 0
         self.fail_after_microphone = False
@@ -20,7 +21,10 @@ class DemoTests(unittest.TestCase):
             import time
             from reachy_companion.client import request
             began=time.monotonic()
-            if request(config,base+'/control/operator') != expected or time.monotonic()-began>.3:
+            compare_control_operator(request(config,base+'/control/operator'),expected,require_paused=(
+                (path.endswith('/microphone') and payload.get('enabled') is True)
+                or (path.endswith('/motion-policy') and payload.get('motor_enabled') is True)))
+            if time.monotonic()-began>.3:
                 raise TimeoutError('stale fixture authority')
             return request(config,base+path,payload)
         guard=patch('reachy_companion.client.guarded_control',side_effect=guarded)
@@ -82,6 +86,16 @@ class DemoTests(unittest.TestCase):
         self.assertIsNone(self.operator['motion_policy_owner_id'])
         self.assertEqual(len(self.posts), 4)
         self.assertNotIn('owner_id', self.posts[-1][1])
+
+    def test_idle_expression_counter_changes_do_not_deny_admission_or_release(self):
+        original=self.request
+        def changing(*args,**kwargs):
+            if args[1].endswith('/control/operator'):self.operator['expression_version']+=1
+            return original(*args,**kwargs)
+        with patch('reachy_companion.client.request',side_effect=changing), \
+                patch('reachy_companion.client.time.sleep'),patch('builtins.print'):
+            self.assertEqual(demo({'network':{'hub_url':'http://fixture'}}),0)
+        self.assertEqual(len(self.posts),4)
 
     def test_post_applied_but_response_lost_still_releases_own_claim(self):
         self.fail_after_microphone = True
@@ -158,8 +172,11 @@ class DemoTests(unittest.TestCase):
 
 
 class GuardedControlTests(unittest.TestCase):
-    def run_send(self, *, slow_before=False, slow_headers=False, partial=False, changed=False):
-        clock=[0];self.sent=[];expected=dict(agent_boot_id='boot')
+    def run_send(self, *, slow_before=False, slow_headers=False, partial=False, changed=False, mutate=None, enabled=True):
+        clock=[0];self.sent=[];expected=dict(agent_boot_id='boot',microphone_epoch=4,
+            microphone_owner_id=None,microphone_enabled=False,capture_active=False,phase='paused',listening=False,
+            microphone_state_error=None,motion_policy=dict(epoch=8,motor_enabled=False,quiet=False,privacy_all=False),
+            motion_policy_owner_id=None,expression_version=1)
         def connect(connection):
             if slow_before:clock[0]+=10
             def send(data):
@@ -170,7 +187,9 @@ class GuardedControlTests(unittest.TestCase):
                 return len(data)
             connection.sock=SimpleNamespace(send=send,settimeout=lambda _:None,close=lambda:None)
         def read(*args,**kwargs):
-            return {} if changed else expected
+            current=copy.deepcopy(expected)
+            if mutate:mutate(current)
+            return {} if changed else current
         import http.client
         real_putrequest=http.client.HTTPConnection.putrequest
         def putrequest(*args,**kwargs):
@@ -182,7 +201,7 @@ class GuardedControlTests(unittest.TestCase):
                 patch('http.client.HTTPConnection.putrequest',putrequest), \
                 patch('http.client.HTTPConnection.getresponse',return_value=SimpleNamespace(status=200,read=lambda _:b'{}')):
             return guarded_control(SimpleNamespace(token='fixture'), 'http://fixture',
-                '/control/microphone',dict(enabled=True),expected)
+                '/control/microphone',dict(enabled=enabled),expected)
 
     def test_connect_before_fresh_read_and_headers_body_guarded(self):
         self.assertEqual(self.run_send(slow_before=True),{})
@@ -197,6 +216,27 @@ class GuardedControlTests(unittest.TestCase):
     def test_operator_change_after_connect_denies_all_sends(self):
         with self.assertRaises(ValueError):self.run_send(changed=True)
         self.assertEqual(self.sent,[])
+
+    def test_only_typed_volatile_fields_can_change_for_off(self):
+        def transition(value):
+            value.update(expression_version=999,phase='speaking',capture_active=True,listening=True)
+        self.assertEqual(self.run_send(mutate=transition,enabled=False),{})
+        with self.assertRaises(ValueError):self.run_send(mutate=transition,enabled=True)
+        self.assertEqual(self.sent,[])
+
+    def test_every_stable_authority_and_unknown_or_malformed_field_denies_before_send(self):
+        mutations=[lambda v:v.update(agent_boot_id='new'),lambda v:v.update(microphone_epoch=5),
+            lambda v:v.update(microphone_enabled=True),lambda v:v.update(microphone_owner_id='foreign'),
+            lambda v:v.update(motion_policy_owner_id='foreign'),lambda v:v['motion_policy'].update(epoch=9),
+            lambda v:v['motion_policy'].update(motor_enabled=True),lambda v:v['motion_policy'].update(quiet=True),
+            lambda v:v['motion_policy'].update(privacy_all=True),lambda v:v.update(expression_version=True),
+            lambda v:v.update(capture_active=0),lambda v:v.update(listening=0),lambda v:v.update(phase='unknown'),
+            lambda v:v.update(microphone_state_error='private'),lambda v:v.update(unknown=True),
+            lambda v:v.pop('expression_version')]
+        for mutate in mutations:
+            with self.subTest(mutate=mutate),self.assertRaises(ValueError):
+                self.run_send(mutate=mutate,enabled=False)
+            self.assertEqual(self.sent,[])
 
 
 if __name__ == '__main__': unittest.main()

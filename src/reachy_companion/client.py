@@ -15,6 +15,40 @@ def request(config, url, payload=None, timeout=None):
         return json.load(response)
 
 
+def control_authority(value):
+    """Validate the full operator response; project only control authority."""
+    fields = {'agent_boot_id', 'microphone_epoch', 'microphone_owner_id', 'microphone_enabled',
+        'capture_active', 'phase', 'listening', 'microphone_state_error', 'motion_policy',
+        'motion_policy_owner_id', 'expression_version'}
+    if type(value) is not dict or set(value) != fields:
+        raise ValueError('Exact operator response required')
+    policy = value['motion_policy']
+    if (type(policy) is not dict or set(policy) != {'motor_enabled', 'quiet', 'privacy_all', 'epoch'}
+            or type(value['agent_boot_id']) is not str or not 1 <= len(value['agent_boot_id']) <= 256
+            or any(type(v) is not int or not 0 <= v < 2**63 for v in
+                   (value['microphone_epoch'], value['expression_version'], policy.get('epoch')))
+            or any(type(value[k]) is not bool for k in ('microphone_enabled', 'capture_active', 'listening'))
+            or any(type(policy[k]) is not bool for k in ('motor_enabled', 'quiet', 'privacy_all'))
+            or any(value[k] is not None and (type(value[k]) is not str or not 1 <= len(value[k]) <= 128)
+                   for k in ('microphone_owner_id', 'motion_policy_owner_id'))
+            or value['microphone_state_error'] is not None
+            or type(value['phase']) is not str or value['phase'] not in ('starting', 'paused', 'listening',
+                'recording', 'processing', 'speaking', 'waiting_to_resume', 'music', 'error', 'stopped')):
+        raise ValueError('Typed current operator required')
+    return (value['agent_boot_id'], value['microphone_epoch'], value['microphone_enabled'],
+        value['microphone_owner_id'], policy['epoch'], policy['motor_enabled'], policy['quiet'],
+        policy['privacy_all'], value['motion_policy_owner_id'])
+
+
+def compare_control_operator(current, expected, *, require_paused=False):
+    if control_authority(current) != control_authority(expected):
+        raise ValueError('Operator authority changed before control send')
+    if require_paused and (current['phase'] != 'paused' or current['microphone_enabled']
+            or current['capture_active'] or current['listening']
+            or current['motion_policy']['quiet'] or current['motion_policy']['privacy_all']):
+        raise ValueError('Current paused microphone/capture/listening OFF required')
+
+
 def guarded_control(config, base, path, payload, expected):
     """Preconnect/serialize, then reread authority and guard every socket send."""
     endpoint = urlsplit(base)
@@ -43,8 +77,9 @@ def guarded_control(config, base, path, payload, expected):
         connection.connect()
         began = time.monotonic()
         current = request(config, base + '/control/operator', timeout=2)
-        if current != expected:
-            raise ValueError('Operator changed before control send')
+        compare_control_operator(current, expected, require_paused=(
+            (path == '/control/microphone' and payload.get('enabled') is True)
+            or (path == '/control/motion-policy' and payload.get('motor_enabled') is True)))
         connection.deadline = began + .3
         connection.request('POST', endpoint.path.rstrip('/') + path, body=body,
             headers={'Authorization': 'Bearer ' + config.token, 'Content-Type': 'application/json'})
@@ -89,6 +124,7 @@ def demo(config, *, turns=3, seconds=180):
     print('Runner independent device watchdog required before starting: client timeout cannot survive client/network loss.', flush=True)
     try:
         initial = call('/control/operator')
+        control_authority(initial)
         policy = initial['motion_policy']
         hardware = call('/status')
         stock = hardware['stock_motion']
@@ -103,8 +139,7 @@ def demo(config, *, turns=3, seconds=180):
         previous_task = stock['owned_uuid']
         boot = initial['agent_boot_id']
         fresh, began = operator()
-        if fresh != initial:
-            raise ValueError('Operator changed during admission')
+        compare_control_operator(fresh, initial, require_paused=True)
         claims['policy'] = policy['epoch'] + 1  # Also covers an applied POST with a lost response.
         write('/control/motion-policy', dict(motor_enabled=True, quiet=False, privacy_all=False,
             expected_boot_id=boot, expected_epoch=policy['epoch'], owner_id=owner), fresh)
