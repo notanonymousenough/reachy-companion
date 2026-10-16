@@ -1,0 +1,67 @@
+--- a/src/reachy_companion/agent.py
++++ b/src/reachy_companion/agent.py
+@@ -160,0 +161,24 @@
++    def vision_route_update(self, **fields):
++        bound, previous = self._vision_route
++        self._vision_route = (bound, dict(previous, **fields))
++
++    def vision_route_status(self, policy):
++        bound, result = getattr(self, '_vision_route', (None, None))
++        if (bound is None or bound['agent_boot_id'] != self.agent_boot_id
++                or bound['microphone_epoch'] != self.microphone_epoch
++                or bound['policy_epoch'] != policy['epoch']):
++            return None
++        return dict(result)
++
++    def vision_route_failure(self, exc):
++        from .spoken_vision import ERROR_PHASES, ERROR_CLASSES
++        # Compare only complete, fixed allowlisted messages; never retain exc text.
++        for phase in ERROR_PHASES:
++            for name in ERROR_CLASSES:
++                if (type(exc) is RuntimeError and exc.args ==
++                        ('Spoken snapshot child failed phase='+phase+' error_class='+name,)):
++                    self.vision_route_update(stage='dispatch', result='typed_child_failure',
++                                             child_phase=phase, child_error_class=name)
++                    return
++        self.vision_route_update(stage='dispatch', result='untyped_failure')
++
+@@ -164 +188,2 @@
+-            return {'listening': self.listening.is_set(), 'phase': self.phase,
++            policy = self.motion_policy.snapshot()
++            return {'vision_route': self.vision_route_status(policy), 'listening': self.listening.is_set(), 'phase': self.phase,
+@@ -172 +197 @@
+-                             'motion_actor': motion_status,'motion_policy':self.motion_policy.snapshot(),
++                             'motion_actor': motion_status,'motion_policy':policy,
+@@ -628,0 +654,6 @@
++                    self._vision_route = (captured_operator, dict(
++                        stt_nonempty=False, normalized_exact_visual=False, own_echo_match=False,
++                        action_allowlisted=False, route_attempted=False,
++                        stage='capture', result='pending', child_phase=None, child_error_class=None))
++                    if interrupted_input:
++                        self.vision_route_update(stage='interrupted', result='existing_interruption_path')
+@@ -666,0 +698 @@
++                        self.vision_route_update(stage='stt', result='pending')
+@@ -674,0 +707,6 @@
++                        exact_visual = matches(text)
++                        visual_allowed = matches(text, self.current_reply_text)
++                        self.vision_route_update(stt_nonempty=bool(text),
++                            normalized_exact_visual=exact_visual,
++                            own_echo_match=exact_visual and not visual_allowed,
++                            stage='action', result='pending')
+@@ -675,0 +714,4 @@
++                        self.vision_route_update(action_allowlisted=action in ('answer', 'stop', 'pause', 'reset'),
++                            stage='route', result=('action_rejected' if action != 'answer' else
++                                'empty_stt' if not text else 'nonmatching_stt' if not exact_visual else
++                                'echo_rejected' if not visual_allowed else 'eligible'))
+@@ -685 +727 @@
+-                        elif action == 'answer' and matches(text, self.current_reply_text):
++                        elif action == 'answer' and visual_allowed:
+@@ -687 +729,7 @@
+-                            response = dispatch(self, text, epoch, captured_operator)
++                            self.vision_route_update(route_attempted=True, stage='dispatch', result='pending')
++                            try:
++                                response = dispatch(self, text, epoch, captured_operator)
++                            except Exception as exc:
++                                self.vision_route_failure(exc)
++                                raise
++                            self.vision_route_update(stage='dispatch', result='returned')
