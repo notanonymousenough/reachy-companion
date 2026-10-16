@@ -104,6 +104,11 @@ Actual canonical factory/native namespace и durable managed-HOLD evidence
 Это fake-native source checks, не runtime acceptance. Independent reviewer rev131
 также выдал SOURCE COMPOSITION GO и повторил focused checks PASS. Fresh private
 context и конкретное maintenance approval ещё нужны; mutations0.
+Fresh bounded RO private binding runner затем принят: exact baseline/sources/
+profile/model/operator/task и canonical UNKNOWN unchanged;17/1running/16stopped,
+heartbeat ACTIVE. Concrete scope передан координатору для финального human
+согласования; downtimeUNKNOWN, actor cap420 не availability guarantee. Runtime
+действий пока нет; новая проверка mic/listening и90s window ещё не начинались.
 
 Обновлено 2026-10-17. Владелец плана — координатор Reachy Mini; writer ведёт код,
 проверки и этот документ; единственный runner выполняет изменения и проверки на

@@ -280,3 +280,15 @@ Independent reviewer rev131 выдал SOURCE COMPOSITION GO exact manifest089d6
 человеком. Private bindings остаются
 sole runner; проверка safe source не является проверкой их значений. На этом
 этапе actual automation/Docker/WSL/task/slot/runtime mutations **0**.
+
+Свежий bounded RO binding sole runner принят: exact source manifest прежний,
+canonical namespace/UNKNOWN marker и baseline instance совпали, inventory17
+(running1/stopped16), enrolled task XML/enabled/retry3 совпали, native model
+same/ready, operator exact OFF/unowned и profile/config/source preimages exact.
+Heartbeat ACTIVE preimage прочитан локально без automation tools. Private
+binding сохранён только на owned PC; writer не аттестует его приватные значения.
+Готовый scope передан координатору для одного конкретного согласования:
+прерывается работающий Reachy worker/STT/TTS; native model не останавливается
+и не перезагружается, соседняя WSL target не выбирается. Downtime UNKNOWN;
+supervisory cap420s не является гарантией восстановления доступности.
+Обслуживание ещё не запускалось; последующий preflight обязан повторить guards.
