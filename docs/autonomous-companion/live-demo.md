@@ -12,7 +12,10 @@ The optional exact `53a` spoken-snapshot overlay is described in
 `deploy/patches/agent-53a-spoken-vision.md`. Once installed and verified by the
 sole runner, the normal demo accepts «Что перед тобой?» / «Что ты видишь?» from
 a fresh normal STT turn. It reuses the same camera/native FINAL and speaker
-path. This new dispatcher still needs real device acceptance; the preceding
+path. Its first real spoken-camera attempt failed inside the snapshot child;
+ordinary speech still works. The child cause is unknown; the next helper-only
+diagnostic is documented in `deploy/patches/spoken-vision-child-diagnostics.md`.
+This dispatcher has not passed real device acceptance; the preceding
 explicit snapshot checkpoint has already passed human scene verification,
 spoken output, stock motion and STOP. Ordinary session context is retained;
 visual question/answer history is not added. The overlay adds a separate STT

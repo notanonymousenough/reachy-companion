@@ -16,6 +16,39 @@ import time
 import unicodedata
 
 BAD_FINAL=('<think','</think','<|analysis|>','<|im_start|>','<analysis','[analysis]')
+ERROR_PHASES=frozenset(('startup','snapshot_import','parent_lifetime','packet_read','packet_validation',
+    'model_inventory','capture','image_admission','inference','final_parser','post_guards','complete',
+    'operator_before_capture','operator_before_image','operator_after_inference','operator_other'))
+ERROR_CLASSES=frozenset(('ValueError','RuntimeError','TypeError','KeyError','AttributeError','ImportError',
+    'ModuleNotFoundError','FileNotFoundError','PermissionError','OSError','TimeoutError','ConnectionRefusedError',
+    'ConnectionResetError','BrokenPipeError','JSONDecodeError','HTTPException','IncompleteRead',
+    'RemoteDisconnected','SystemExit','KeyboardInterrupt','OtherError'))
+PHASE='startup'
+SNAPSHOT=None
+
+
+def failure(error):
+    phase=getattr(SNAPSHOT,'PHASE','startup') if PHASE=='snapshot' else PHASE
+    name=type(error).__name__
+    return dict(kind='companion-spoken-vision-error',phase=phase if type(phase) is str and phase in ERROR_PHASES else 'startup',
+                error_class=name if name in ERROR_CLASSES else 'OtherError')
+
+
+def child_result(output, returncode):
+    """Parse bounded typed failure before rc; never reflect untrusted strings."""
+    if len(output)>16000:raise RuntimeError('Spoken snapshot child output exceeded bound')
+    rows=[line for line in output.splitlines() if line.startswith(b'{')]
+    if len(rows)!=1:raise ValueError('One snapshot result required')
+    result=json.loads(rows[0])
+    if type(result) is not dict:raise ValueError('Typed snapshot result required')
+    if result.get('kind')=='companion-spoken-vision-error':
+        if (set(result)=={'kind','phase','error_class'} and type(result['phase']) is str
+                and result['phase'] in ERROR_PHASES and type(result['error_class']) is str
+                and result['error_class'] in ERROR_CLASSES):
+            raise RuntimeError('Spoken snapshot child failed phase='+result['phase']+' error_class='+result['error_class'])
+        raise RuntimeError('Spoken snapshot child failed invalid diagnostic')
+    if returncode:raise RuntimeError('Spoken snapshot child failed without typed diagnostic')
+    return result
 
 
 def words(text):
@@ -72,12 +105,7 @@ def dispatch(agent, text, epoch, expected):
             process.kill();process.communicate();raise TimeoutError('Spoken snapshot child timed out') from None
     finally:
         if process.poll() is None:process.kill();process.communicate()
-    check()
-    if process.returncode or len(output)>16000:raise RuntimeError('Spoken snapshot child failed')
-    rows=[line for line in output.splitlines() if line.startswith(b'{')]
-    if len(rows)!=1:raise ValueError('One snapshot result required')
-    result=json.loads(rows[0])
-    if type(result) is not dict:raise ValueError('Typed snapshot result required')
+    result=child_result(output,process.returncode)
     answer=result.get('final_text');expires=result.get('expires_at_monotonic')
     if (result.get('kind')!='companion-vision-snapshot' or type(answer) is not str or not 1<=len(answer)<=1600
             or any(tag in answer.lower() for tag in BAD_FINAL)
@@ -92,12 +120,17 @@ def dispatch(agent, text, epoch, expected):
 
 
 def child(packet, snapshot):
+    global PHASE
+    PHASE='packet_validation'
     deadline=packet['deadline']
     if (type(deadline) not in (int,float) or not math.isfinite(deadline) or not 0<deadline-time.monotonic()<=50
             or type(packet['port']) is not int or not 1<=packet['port']<=65535
             or type(packet['token']) is not str or len(packet['token'])<32):
         raise ValueError('Bounded local snapshot packet required')
     def check():
+        global PHASE
+        PHASE={'model_inventory':'operator_before_capture','image_admission':'operator_before_image',
+               'post_guards':'operator_after_inference'}.get(getattr(snapshot,'PHASE',None),'operator_other')
         began=time.monotonic()
         connection=http.client.HTTPConnection('127.0.0.1',packet['port'],timeout=2)
         try:
@@ -106,23 +139,29 @@ def child(packet, snapshot):
             if response.status!=200 or len(data)>16000:raise RuntimeError('Operator unavailable')
             check_operator(json.loads(data),packet['expected'],deadline)
             if time.monotonic()-began>.3:raise RuntimeError('Operator read expired')
+            PHASE='snapshot'
             return began
         finally:connection.close()
+    PHASE='snapshot'
     return snapshot.caption_checked(packet['config'],deadline,packet['question'],check)
 
 
 def main():
+    global PHASE,SNAPSHOT
+    PHASE='snapshot_import'
     path=Path(__file__).with_name('snapshot_vision.py')
     spec=importlib.util.spec_from_file_location('spoken_snapshot_child',path)
-    snapshot=importlib.util.module_from_spec(spec);spec.loader.exec_module(snapshot)
+    snapshot=importlib.util.module_from_spec(spec);SNAPSHOT=snapshot;spec.loader.exec_module(snapshot)
+    PHASE='parent_lifetime'
     snapshot.bind_parent_lifetime()
+    PHASE='packet_read'
     packet=json.loads(sys.stdin.buffer.read(16001))
     print(json.dumps(child(packet,snapshot)),flush=True)
 
 
 if __name__=='__main__':
     try:main()
-    except BaseException:
+    except BaseException as error:
         # Never log camera bytes, caption, transcript, token or upstream body.
-        print('{"kind":"companion-spoken-vision-error"}',flush=True)
+        print(json.dumps(failure(error)),flush=True)
         raise SystemExit(1)

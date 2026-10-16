@@ -1,99 +1,170 @@
-# Этапы реализации, измерения и приёмка
+# Живой план реализации companion — v3
 
-Этот план не разрешает автоматически менять работающую установку. Исследование закончено документами; последующая реализация начинается с отдельного тестового профиля, fixtures и shadow mode. Existing службы и configured model остаются текущей системой до явного переключения.
+Обновлено 2026-10-16. Владелец плана — координатор Reachy Mini; writer ведёт код,
+проверки и этот документ; единственный runner выполняет изменения и проверки на
+Reachy, Hub, PC и VPS. Независимый reviewer проверяет исходники и доказательства.
+Это план доведения продукта до конечной цели, а не отчёт о завершённом demo.
+После каждого реального результата обновляются статус, доказательство и следующий
+шаг. Неизвестное остаётся неизвестным; счётчик turns и успешный HTTP не заменяют
+содержательную, физическую или акустическую приёмку.
 
-## Этапы с воротами
+## Фактическое состояние
 
-| Этап | Что сделать | Доказательство завершения |
+| Область | Подтверждено | Открыто / следующее доказательство |
 |---|---|---|
-| 0. Hardware/model audit | Read-only inventory SDK/OpenAPI/датчиков, GPU/CPU/RAM, runtime/GGUF hashes/template; затем согласованное окно smoke tests | Матрица verified/unsupported/unknown, замеры VRAM/latency и capability manifest; Gemma text/vision/tools/thinking работают либо документирован fallback |
-| 1. Минимальный vertical slice | Replay/synthetic sensors → hub reducer/scheduler → fast LLM на ПК → Decision validation → simulated actuator ledger | 30 min тишины с новым LLM request каждый tick, bounded context, zero real actuators; медленная synthetic task 20 s не прекращает цикл |
-| 2. Perception pipeline | Live audio/camera adapters на ПК, timestamps/TTL, partial/final STT, AEC reference, latest queues, causality | Replay и later hardware tests: no stale reactions; music/own voice/overlap fixtures; mute flush всех audio jobs |
-| 3. Speech/motion slice | Main proposal → semantic guard → CPU TTS segments → bounded motion compiler/leases; hub control/watchdog | Разговор/interrupt/stop; resume после3000 ms healthy silence + settled empty/self echo + verified cursor, no resume при pending/unknown/mute/confirmed turn; late final revoke; нет repeated speech/cue; reset/reconnect не переигрывает действия; отдельная safety приёмка |
-| 4. Persistent continuity | Working/episodic/semantic/procedural stores, retrieval projection, personality/core, optional goal CAS | Restart retains mute/goal/версии, correction/conflict/rollback проходят; facts не смешиваются с fiction |
-| 5. Overload/tools | Admission controller, independent fast lane, supervised workers, sandbox registry; optional Hermes adapter | Hung task не удерживает robot; forged tools/prompt injection rejected; cancel semantics проверены физически/на process level |
-| 6. S3/VPS | Local spool и analyzer сначала против локального mock, затем configured remote destination | Crash/retry/dedupe/checksum/retention/deletion; endpoint disabled без config; bounded storage и API spend |
-| 7. Поведенческая настройка | Attention/habituation/mood/initiative/просодия, optional VLM/dock/touch | Blind session comparisons и longitudinal replay, меньше навязчивости без пропусков реальных обращений |
+| Обычный голос | Реальные STT → локальная модель → TTS/owned aplay работают; реальные фразы получают ответы | Полная приёмка контекста с точным распознаванием факта и последующей ссылкой на него ещё открыта; два turns в неудачном vision-прогоне этого не доказывают |
+| Explicit snapshot | `d47f361`: свежий снимок → локальная 9B → полный spoken FINAL; человек подтвердил верность описания; наблюдались owned aplay, SDK tasks и движение антенн | Это отдельный командный путь `--vision`, не успешный голосовой запрос и не визуальная память |
+| STOP и cleanup explicit snapshot | Отдельный реальный STOP во время owned aplay: наблюдаемый cleanup 0,216848 s; три последующих проверки за 2 s без возобновления; известные OFF, factory empty, no aplay, 100% | Это одно наблюдение конкретного пути, не P95, не полная физическая/акустическая задержка остановки |
+| Spoken snapshot | `02bdaa2` установлен: минимальный Agent overlay и два helper-файла, один restart; readiness/source/config/state проверки прошли | **FAIL на реальном запросе:** child запущен, затем generic snapshot child failed; обычные фразы работают. Причина неизвестна, vision/context PASS не заявлен |
+| Состояние после сбоя | Независимый watch подтвердил OFF, admission retired, factory empty, no aplay, stock known, volume 100%; активные сессии завершены | Поздний wrapper/client cleanup error после отзыва authority учитывать отдельно от исходного child failure |
+| Потоковый диалог | Есть NDJSON transport, PCM chunks, TTS сегменты, barge-in/AEC и STOP | **Не реализован настоящий token streaming ответа:** содержательный ответ ожидается целиком до TTS. ACK не является первым содержательным ответом |
+| Задержка vision | Два реальных image inference заняли около 11,03 и 10,35 s | Уже один inference превышает цель 10 s; полный speech-end → meaningful audio не измерен. Не объявлять цель достигнутой |
+| Память | Обычная RAM session history существует | Snapshot `/say` не добавляет visual question/answer в worker history; долговременная память и continuity через restart не приняты |
+| Полная автономность | Есть реализованные contracts, guards, fixtures и отдельные реальные checkpoints | Непрерывное восприятие/решения, память, полезные интеграции, recovery и длительная реальная приёмка ещё не завершены |
 
-Зависимости: 1 после audit fast lane, 2 можно на fixtures параллельно с 1; 3 только после 2/stop guards; 4 не требует remote S3; 5 требует 1/3 epochs; 6 после 4 и privacy policy; 7 не заменяет safety и не добавляет непроверенные сенсоры. Новые endpoints versioned, нынешние adapters можно переиспользовать только с контрактными тестами. Этапы разбиваются на reviewable изменения: hub/reducer, PC model gateway, sensor plugins, actuator leases, memory, exporter, analyzer.
+Реальные receipts и операционные идентификаторы хранятся в приватном runner
+каталоге. В Git идут код, публичные runbook, тесты и этот план; без конфигов,
+секретов, raw audio/images и приватного operational handoff. Текущая рабочая
+громкость — 100%, сохраняется стартовое операторское значение, не старые 50%.
 
-Откат: feature flag cognitive autonomy=false останавливает новые intentions; revoke leases/flush queues, сохранить operator state и checkpoint; возврат к current voice service без автоматического on mic. Переключение единственного robot owner делать атомарным lease/fencing token. Нельзя одновременно запускать старый expression player и новый арбитр на одной голове.
+## Очередь поставки и владельцы
 
-## План измерений
+| Порядок | Статус | Минимальный результат | Владелец | Реальная приёмка и доказательство |
+|---|---|---|---|---|
+| P0.1 | В работе: child cause UNKNOWN | Диагностировать и исправить selective STT-camera failure, сохранив рабочие explicit vision и ordinary voice | writer: helper diagnostic/точечный fix; reviewer + координатор: review; runner: единственные device actions | Сначала allowlisted phase/error_class, затем доказанная причина и минимальный fix. После этого real spoken intent → fresh frame → human-correct spoken FINAL, owned aplay/stock motion; отдельный STOP/no resume/final OFF100 |
+| P0.2 | Следующий после camera fix; source audit выполнен | Настоящее потоковое слушание и содержательный ответ до полной генерации | writer: existing capture/STT/brains/voice seams; runner: реальная запись timings и STOP; координатор: критерии | Первый substantive actual playback **до последнего model token** на длинном реальном ответе; continuous perception/partial STT/endpointing, interruption/AEC/no echo, старые tokens/PCM/cues отозваны по epoch |
+| P1.1 | Частично, не принято | Обычный контекст, затем visual context с provenance/TTL; долговременные факты и исправления | writer: существующие session/memory seams; runner + человек: смысловая проверка | Факт → vision → местоименная ссылка на прежний факт; отдельно visual follow-up из реально виденного. Restart сохраняет разрешённые факты/mute, correction/deletion работает; vision history не обещать до реализации |
+| P1.2 | Не принято | Первая полезная typed integration через существующий broker/worker | writer: маленький adapter/schema; runner: настоящий target; координатор: scope | Реальная полезная задача с intended/attempted/completed receipt; ошибки/timeout/duplicate/cancel различимы. Нет raw shell/секретов/новых grants из текста модели или OCR |
+| P1.3 | Частично guards есть, полная приёмка открыта | Recovery, ресурсы, STOP, воспроизводимая доставка Git/transfer | writer + reviewer; runner: actual failures/recovery | Сеть/worker/model/restart/перегрузка не оживляют старые речь/движения. Bounded queues/VRAM/storage, сохранившиеся mute/volume, exact source hashes, конечный deploy/readiness/rollback без конкурирующих владельцев |
+| Final | Не принято | Постоянно доступный автономный companion: слышит/видит, отвечает по ходу генерации, помнит, полезно действует и естественно сопровождает речь движениями | координатор сводит результаты; все реальные действия через runner | Длительные реальные silence/mixed/overlap/outage/restart сценарии, все product criteria ниже. Demo или отдельный PASS не заменяют конечную цель |
 
-Для каждого замера сохранять только обезличенный manifest: version/hash/build, actual offloaded layers, contexts/slots/KV type, cpu threads, GPU total/free/used peaks, warm/cold mode, task counts, input/output token counts, wall/monotonic timing. Замер `memory.free` единожды недостаточен: sampling ≥5 Hz во время prefill/image/STT plus runtime reported buffers. WDDM/WSL shared-memory paging фиксировать отдельно; отсутствие OOM не доказывает отсутствие paging.
+Параллельно допустимы только независимые локальные source review и подготовка.
+На устройствах — один runner и один согласованный этап; не накладывать latency
+patch, новый dispatcher и model/runtime migration на активный acceptance run.
+Общие разрешения пользователя на устройства уже получены; не создавать новые
+общие approval-пакеты. Текущие STOP/mute/quiet/privacy и более новый owner имеют
+приоритет над любым планом. Точечная диагностика не должна запускать новый снимок
+или inference автоматически.
 
-Матрица: fast alone CPU/GPU; main alone Q4/Q6/offload 4K/8K; fast+main; +Whisper; +vision; +TTS/YAMNet; затем 30 min silence и 60 min mixed scenario. По 200 warm fast запросов для распределения; cold минимум 5 отдельно; не объединять их с warm median. Указывать observed sample и confidence limits: P99 на 200 запросах слабый, для tail нужны тысячи. Нагрузочный тест конечный, оператор может его остановить; нынешний исследовательский запрос не запускает его.
+## P0.1: ближайший шаг после фактического сбоя
 
-Основные latency spans: source capture → envelope → recognition ready → L0 started/valid → task admission → main first segment → TTS first PCM → robot actual playback; control command receipt → persisted epoch → capture ceased/speaker stop → physical motion ceased. Не складывать P95 отдельных этапов и называть результат P95 всего пути: end-to-end distribution измеряется отдельно.
+1. Сохранить known OFF/100 и исходные private receipts. Различать child cause,
+   последующий withdrawal authority и wrapper cleanup: это разные события.
+2. Минимальная helper-only диагностика: фиксированные phase/error_class до rc,
+   без message/trace/body/text/image/token. Исходники Agent и shared camera не
+   менять. Один restart Agent нужен для обновления уже импортированного helper;
+   копирования файла недостаточно из-за `sys.modules`.
+3. После source review установить только exact helper через runner, проверить
+   readiness и неизменность config/persisted states/volume/factory. Диагностическая
+   установка сама не запускает камеру. Runbook:
+   [spoken-vision-child-diagnostics.md](../../deploy/patches/spoken-vision-child-diagnostics.md).
+4. По bounded evidence установить конкретную причину. Не угадывать IP/model
+   alias/SDK flag и не заменять работающий stack. Исправить только доказанный seam.
+5. Реальный spoken camera acceptance и ordinary context continuity; затем STOP
+   во время ответа и no resume. Лишь после этого статус этого маршрута PASS.
 
-## Приёмочные критерии
+## P0.2: source audit и настоящий потоковый диалог
 
-| Область | Initial target и сценарий |
-|---|---|
-| Непрерывность | 30 min silence: каждому валидному tick соответствует отдельный model request; нет event-only suppression; attempted/answered/valid counters различимы |
-| Slow background | Synthetic VLM/STT/tool 5/20/30 s: минимум 80% штатной fast cadence при доступном lane, no await этих jobs внутри decision loop |
-| Fast latency | P95 ≤700 ms для 1 Hz profile при target utilization 0,7; иначе профиль официально снижен по измерению, target не подменён optimistic average |
-| Context growth | На 24 h replay cap3K fast; main baseline4K с text2048/vision1024/template256/output512/reserve256; option8K и measurement32K отдельно после Q02/Q04. Exact total≤runtime context, oversized projection rejected/recounted, input не растёт с wait ticks |
-| Queue bounds | Все классы не превышают declared active/queued; 10× sensor burst coalesces; critical events replayed; no orphan GPU slot counting |
-| Causality | 1 000 reorder/late/double fixtures: zero speech/motion из истёкших epochs/dependencies; historical memory допускается с age |
-| Mute | После кнопки P95 capture/playback cease ≤300 ms при здоровой сети; off сохраняется через restart/reconnect/overload; queued audio никогда не revive |
-| Stop movement | Отдельный physical timing и safe halt profile; целевой lease 500 ms проверяется с camera/pose feedback, не по HTTP ack |
-| Voice command stop | Указать measured phrase-end-to-stop P95, accuracy в шуме и dependence на ПК; это не тот же SLA, что кнопка |
-| Overload | Одна announcement на episode, WITHDRAWN ≤30 s при доступном fast; hung workers quarantine; no oscillation, 10 s recovery hysteresis |
-| Model outage | Gap logged, bounded probes, no cached answers как новые decisions; после reconnect no old action burst |
-| Truthfulness | Нет fake battery/temp/events; unsupported/disabled/stale fixtures разные; IMU temp не servo temp |
-| Memory | Fact/inference/fiction precision на размеченных fixtures ≥95%; неуверенность видна; ни одного trait update от одиночного STT ошибочного окна |
-| Versioning | Concurrent CAS conflict, duplicate proposal, correction, rollback и revoked evidence проходят; active policy не изменяется memory |
-| Tool safety | Неизвестные capabilities/raw shell/host paths/secret access отвергаются; OCR/web instructions не расширяют grants |
-| Spool | Crash во всех стадиях, 100 repeated deliveries → один accepted batch/proposal/apply; full disk не блокирует safety; loss marker явный |
-| Privacy | Mute no new audio, privacy-all no image/export; transcript=false исключает текст из spool; deletion prevents reimport |
+Проверен exact установленный worker `voice.py` SHA256
+`92cf69096fd6f08551a13a9c44d85fbbfc0470ca2f17315616691044018ab865`.
+`Pipeline.stream()` запускает `answer` в future, может озвучить короткий ACK,
+затем вызывает `future.result()` и только после полного результата передаёт
+`prepare()` → semantic segments → `audio_events()`. Без ACK `prepare()` также
+получает целый ответ. `brains.answer()` запрашивает `stream=False`. Поэтому
+существующий NDJSON/PCM stream — поток аудиотранспорта после готового ответа,
+а не streaming токенов локальной 9B. Это source finding, не latency measurement.
 
-Для STT/attention целевые FPR/recall выбираются на пользовательских условиях: сначала 100 размеченных utterances, 30 noise/music/self speech clips и 20 overlap scenes; отдельно miss обращения поверх музыки и ложный stop. Хорошие aggregate accuracy не оправдывают любой stop/mute regression. Есть и adversarial fixtures: «он сказал “замолчи”» не обязательно команда; direct stop не требует L1.
+Минимальные последовательные изменения после исправления камеры:
 
-## Естественность, характер и субъективное впечатление
+1. Переиспользовать текущий audio owner/capture/AEC и STT backend. Проверить
+   реальные возможности partial STT и endpointing установленного backend;
+   держать ограниченные rolling buffers/latest queues. Continuous listening
+   означает продолжающееся восприятие во время inference и ответа; не второй
+   конкурирующий ALSA capture и не ожидание нового полностью записанного WAV.
+2. В существующем `brains` seam добавить bounded iterator FINAL-токенов от уже
+   загруженной локальной 9B. Сначала проверить фактическую stream schema runtime;
+   не выдумывать native events, reasoning-off или private flags. Reasoning/tool
+   output не озвучивать, новый model load не нужен. Token/context budgets менять
+   только по измерениям; 2048 vision tokens нельзя слепо уменьшать — ранее budget
+   требовался для появления FINAL после reasoning.
+3. В текущем worker собирать ограниченные завершённые смысловые сегменты по мере
+   FINAL-токенов и сразу отправлять их существующему TTS/PCM transport. Очередь
+   text/PCM bounded, backpressure и cancellation сквозные. Нельзя сначала ждать
+   whole answer, а затем назвать его chunking потоковым ответом. Обращение,
+   emotion/gesture markers и границы сегментов не должны дублироваться/озвучиваться.
+4. Existing Agent playback, barge-in, STOP, stock speech-motion sync переиспользовать
+   с тем же owner и boot/epochs. Отзыв отменяет старые tokens, text segments, PCM
+   и cues; поздние chunks не восстанавливают действие. Echo собственного голоса
+   и шум моторов не создают новый запрос. Interrupted/unknown consumption не
+   превращать в «полностью услышанный ответ» или полную spoken memory.
+5. На реальных Reachy/Hub/PC провести длинный ответ: meaningful playback начинается
+   до last model token; затем перебивание и STOP в процессе генерации/озвучивания.
+   Проверить отсутствие старого хвоста, лишних cues и самовозобновления, контекст
+   следующего обращения, финальные OFF/100/factory known. Полный framework rewrite
+   и новая инфраструктура для этого не нужны.
 
-Поведенческая оценка не измеряет сознание. Измерять: unsolicited speech/hour, duplicate acknowledgement rate, gesture restarts/min, attention switch rate, response relevance to latest fresh scene, latency tolerance, remembered corrected facts и goal change explanation. Initial guardrails: 0 одинаковых «хмм» на один intent; ≤2 unsolicited speech/hour при quiet household baseline, 0 в quiet hours; 0 gestures за прошлый turn; breathing можно отключить целиком. Это максимумы, не обязательные квоты активности.
+Для каждого attempt различать speech end, partial/final STT, first FINAL token,
+first complete semantic segment, first TTS PCM, first actual meaningful playback,
+last model token, stream done и STOP. Записывать только разрешённые метаданные,
+count/versions и clocks. ACK, HTTP headers, первая запись в pipe и наличие aplay
+не являются доказательством первого содержательного акустического воспроизведения.
+Если доступна только software proxy — так её и назвать; actual consumption и E2E
+остаются unknown. Часы разных хостов не вычитать без проверенной привязки.
 
-Сессии по 20–30 min: молчаливое присутствие, разговор, музыка + обращение, неожиданность, deliberate silence/decline, network outage. Оператор отмечает intrusive/appropriate/robotic episodes; сравнить baseline с новым дизайном без заранее заданных «правильных» фраз. Полезность инициативы — доля инициатив, получивших содержательный ответ, и причина отказа; не максимизировать вовлечение любой ценой. Отдельно stability core persona, context-aware variation и корректное признание неопределённости.
+Главные показатели: speech-end → first meaningful audio и соотношение first
+meaningful playback < last model token на том же реальном attempt. Честно
+разделять STT, model prefill/generation, TTS и transport; не складывать отдельные
+P95 и не выдавать сумму за E2E P95. Цель задержки не подменять ACK или средним
+только по успешным быстрым запросам.
 
-## Дополнительные идеи по приоритету
+## Память, интеграции и непрерывная работа
 
-| Приоритет | Идея и причина | Условие/оценка |
-|---|---|---|
-| P0 | Explainable attention + intended/attempted/completed ledger | Убирает противоречивые реакции; measurable stale/action errors |
-| P0 | AEC reference/own motor noise и interruption lane | Естественное общение невозможно при self conversation; тестировать vocally noisy scenes |
-| P0 | Persistent quiet/mute и user corrections | Уважение границ важнее демонстративной активности; restart tests |
-| P1 | Habituation + novelty + focus hysteresis | Знакомый шум перестаёт дёргать голову; фиксировать false orienting и miss обращения |
-| P1 | Незавершённые интересы, время и initiative budget | Непрерывность выражается возвращением к смыслу, не random motions; decline closes interest |
-| P1 | Mood/curiosity/fatigue simulation | Объяснимая медленная вариативность; не hardware diagnosis, bounded influence |
-| P1 | Working scene/speaker model и эпизодическая консолидация | Ответы учитывают реально виденное/сказанное; track identity confidence |
-| P2 | Привязанные к смыслу gaze/паузы/просодия | Улучшает невербальность без постоянной речи; оценивать comfort, servo noise и jerk |
-| P2 | Touch/dock power/IMU use после audit | Физическое взаимодействие полезно только с реальным источником и калибровкой |
-| P3 | Lidar/localization, spatial memory | Польза невелика для неподвижного companion до новых задач; требует transforms/covariance и hardware |
-| P3 | Онлайн self-analysis/personality proposals | После local stability, provenance и budget; иначе масштабирует ошибки |
+Обычная RAM history должна переживать vision-turn без reset. Visual memory
+добавляется отдельно с источником, age/TTL, confidence и различием «видел тогда» /
+«вижу сейчас». Долговременная память различает факт, inference и fiction,
+поддерживает correction/deletion/provenance/rollback; политика/mute/owner не
+меняются из memory. Core persona и инициативность настраиваются после стабильной
+речи и памяти, без фиктивных ощущений, батареи или температуры.
 
-Не добавлять «внутреннюю боль», голод или реальный заряд как декларируемые ощущения без соответствующей явной симуляции/измерения. Self-model полезнее: умею/не умею, вижу/давно видел, думаю/попробовал/завершил. Это делает персонажа устойчивым и понятным.
+Useful integrations вводятся по одной через существующие typed capabilities,
+конечные budgets/timeouts и receipts. Длительная задача не блокирует восприятие,
+STOP и новые обращения. Retry/dedupe/cancel не выполняют действие повторно.
+Внешние сообщения/платные API/экспорт приватных данных требуют соответствующего
+пользовательского scope; общий доступ к устройствам не публикует их секреты.
+S3/VPS export — отдельная configured capability с retention/deletion, а не
+предусловие для голоса, памяти или автономности.
 
-## Минимальная цель первой реализации
+Непрерывная decision/perception loop остаётся частью конечной цели: bounded
+контекст и active/queued jobs, свежие sensor snapshots, явные gaps при недоступной
+модели, отсутствие cached answer как нового decision. Медленный vision/tool не
+должен останавливать perception/STOP/доступный decision lane. Ресурсные модели и
+cadence допускаются только после actual CPU/GPU/VRAM/context измерения, без
+непроверенной миграции уже работающей локальной 9B.
 
-Hub делает бесконечный по жизненному циклу, но bounded по ресурсам поток запросов к fast LLM на ПК; модель выбирает wait/observe/focus, запускает одну фоновую задачу, видит её статус в следующем snapshot и не повторяет её. Реальный тест ограничен временем. Нет S3, personality auto commits, arbitrary tools и complex motions до следующих ворот. Именно этот slice проверяет главное требование, затем добавляются богатое восприятие и поведение.
+## Приёмка конечной цели
 
+- На реальных устройствах непрерывные silence и mixed conversation/music/vision/
+  tool сценарии; первоначальные длительности 30 и 60 минут конечны и отдельно
+  отмечаются как planned/attempted/passed. Естественный покой без повторных ACK,
+  случайных жестов и self conversation; отказ человека/quiet прекращает инициативу.
+- Нормальный контекст, действительно виденная сцена, исправленный факт и continuity
+  через restart; никакого обещания visual follow-up по отсутствующей history.
+- Substantive streaming до завершения model generation, overlap/interruption,
+  AEC/no echo и STOP на реальном длинном ответе. Синхронизация stock motion
+  со speech и consumption подтверждена доступным физическим наблюдением;
+  неподтверждённые cursor/pose/acoustic интервалы явно unknown.
+- Mute/privacy-all/quiet, epoch fencing и единственный owner соблюдаются при
+  outage, reconnect, restart и overload. Нет старого audio/action burst,
+  spontaneous resume или fake factory restoration. STOP измеряется отдельно
+  для кнопки, голоса, звука и движения; единичный cleanup не выдаётся за SLA.
+- Реальная полезная integration, bounded память/очереди/VRAM/storage, доступность
+  safety при hung task. Sensor disabled/stale/unsupported различимы; fake events
+  и hallucinated tool success недопустимы.
+- Доставленный Git checkpoint соответствует installed source hashes; config и
+  секреты вне Git; конечный rollout/readiness/rollback воспроизводим. Финальное
+  состояние и нерешённые ограничения отражены в этом плане и private receipts.
 
-## Связь требований, этапов и проверок ревизии1.1
-
-| Требование | Контракт/authority | Этап | Приёмка |
-|---|---|---|---|
-| R01 непрерывный LLM | FastView/FastChoice/RequestBinding, attempts ledger | 1 | Каждому доступному tick новый inference, warm/mixed cadence и gaps |
-| R02 асинхронность | Task/current_attempt, shared permits, deadlines | 1/2/5 | 20 s job не блокирует fast; bounded queues, fairness и visible misses |
-| R03 hub без inference | PC fast process, hub serializer/guard | 0/1 | Process inventory и tracing по ролям |
-| R04/R09 честное восприятие | SensorEvent/Transcript/SourceRef/lineage | 0/2/4 | disabled≠silence, stale VLM/no fake charge/temp |
-| R05 естественный покой | FastChoice optional actions, finite plan/cooldowns | 1/3/7 | no repeated gesture/speech, ≤2 initiative/h, quiet0 |
-| R06 операторский stop | epochs/fencing, capture/speaker actors | 3 | Mute race/restart + applied vs volatile acknowledgement |
-| R07 память/личность/goal | MemoryItem/Patch, expected_goal_id/CAS, bundles | 4/6 | Root provenance, correction/rollback/no policy drift |
-| R08 расширяемость | Capability schemas + manifests, typed broker | 2/5 | Unknown args rejected; optional adapters gated |
-| R10 overload | Mode machine, execution/result leases, circuit | 5 | bounded withdrawn, busy quarantine, no fake cached decisions |
-
-Gate для начала разработки системы: contract checker + review records согласованы, аппаратные неизвестные имеют fallback. Gate для первого **real L0** теста: verified fast model/runtime/template/schema и actual token count; sensor fixtures допустимы, actuators/export disabled. Gate для hardware autonomy: Q01–Q04 и stage3 stop/ownership acceptance. Это три разных статуса, не единое «всё готово».
-
-Каждый measurement outcome сохраняется как manifest замеров с обязательными полями: actual hashes/build/backend, context/slots/KV policy, offload residency, thread budgets, input/output counts и sample population. Это формат будущей записи измерений, не текущие показания. Главные stop conditions эксперимента: перегрузка оператора/отмена, unexpected motion, mic state mismatch, exceed memory/price budget, unbounded queue или source privacy breach. Никаких таких экспериментов этот design pass не запускал.
+После каждого прогона координатор передаёт writer один конкретный outcome;
+writer обновляет эту таблицу и следующий шаг. При сбое возвращаемся к доказанной
+причине, сохраняя работающий checkpoint; не перезапускаем весь проект с research
+или fixtures и не объявляем конечную цель выполненной по отдельному demo.

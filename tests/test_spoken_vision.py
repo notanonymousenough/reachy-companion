@@ -5,6 +5,8 @@ import hashlib
 import json
 from pathlib import Path
 import subprocess
+import sys
+import tempfile
 import threading
 from types import SimpleNamespace
 import unittest
@@ -151,6 +153,57 @@ class SpokenVisionTests(unittest.TestCase):
         self.value['motion_policy']['privacy_all']=True
         with patch.object(spoken.time,'monotonic',return_value=100),patch.object(spoken.http.client,'HTTPConnection',return_value=connection),self.assertRaises(RuntimeError):
             spoken.child(packet,snapshot)
+
+    def test_typed_failure_is_read_before_rc_and_before_withdrawn_authority(self):
+        diagnostic=dict(kind='companion-spoken-vision-error',phase='capture',error_class='ValueError')
+        self.process.returncode=1
+        def complete(*args,**kwargs):
+            self.value['microphone_enabled']=False
+            return json.dumps(diagnostic).encode(),None
+        self.process.communicate.side_effect=complete
+        with patch.object(spoken.time,'monotonic',return_value=100),patch.object(spoken.subprocess,'Popen',return_value=self.process), \
+                self.assertRaisesRegex(RuntimeError,'^Spoken snapshot child failed phase=capture error_class=ValueError$'):
+            self.dispatch()
+        self.agent.voice.assert_not_called()
+
+    def test_diagnostic_allowlist_rejects_private_strings_and_extra_fields(self):
+        for result in (dict(kind='companion-spoken-vision-error',phase='PRIVATE BODY',error_class='ValueError'),
+                dict(kind='companion-spoken-vision-error',phase='capture',error_class='PRIVATE TOKEN'),
+                dict(kind='companion-spoken-vision-error',phase='capture',error_class='ValueError',message='PRIVATE IMAGE')):
+            with self.assertRaises(RuntimeError) as caught:spoken.child_result(json.dumps(result).encode(),1)
+            self.assertNotIn('PRIVATE',str(caught.exception))
+        with patch.object(spoken,'PHASE','snapshot'),patch.object(spoken,'SNAPSHOT',SimpleNamespace(PHASE='capture')):
+            self.assertEqual(spoken.failure(ValueError('PRIVATE token/transcript/body')),
+                dict(kind='companion-spoken-vision-error',phase='capture',error_class='ValueError'))
+
+    def test_rc_size_and_framing_failures_are_distinct_without_echoing_output(self):
+        for data,rc,error,pattern in (
+                (b'PRIVATE' * 3000,1,RuntimeError,'output exceeded bound'),
+                (b'PRIVATE',1,ValueError,'One snapshot result required'),
+                (b'{}\n{}\nPRIVATE',1,ValueError,'One snapshot result required'),
+                (b'{"kind":"PRIVATE"}',1,RuntimeError,'without typed diagnostic')):
+            with self.subTest(pattern=pattern),self.assertRaisesRegex(error,pattern) as caught:
+                spoken.child_result(data,rc)
+            self.assertNotIn('PRIVATE',str(caught.exception))
+
+    def test_real_child_subprocess_emits_only_bounded_phase_class_on_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            helper=Path(directory)/'spoken_vision.py';helper.write_bytes(Path(spoken.__file__).read_bytes())
+            snapshot=Path(directory)/'snapshot_vision.py'
+            snapshot.write_text("PHASE='startup'\ndef bind_parent_lifetime():pass\n"
+                "def caption_checked(config,deadline,question,check):\n"
+                " global PHASE\n PHASE='capture'\n raise ValueError(config['private_body'])\n")
+            packet=dict(config=dict(private_body='PRIVATE TOKEN IMAGE TRANSCRIPT'),port=8090,token='x'*32,
+                expected=self.expected,deadline=spoken.time.monotonic()+45,question='Что перед тобой?')
+            result=subprocess.run([sys.executable,str(helper),'--snapshot-child'],input=json.dumps(packet).encode(),
+                capture_output=True,timeout=5)
+            self.assertEqual(result.returncode,1);self.assertEqual(result.stderr,b'')
+            self.assertEqual(json.loads(result.stdout),dict(kind='companion-spoken-vision-error',phase='capture',error_class='ValueError'))
+            self.assertNotIn(b'PRIVATE',result.stdout)
+            snapshot.unlink()
+            result=subprocess.run([sys.executable,str(helper),'--snapshot-child'],input=b'PRIVATE',capture_output=True,timeout=5)
+            self.assertEqual(result.returncode,1);self.assertEqual(result.stderr,b'')
+            self.assertEqual(json.loads(result.stdout),dict(kind='companion-spoken-vision-error',phase='snapshot_import',error_class='FileNotFoundError'))
 
 
 class AgentSpokenOverlayTests(unittest.TestCase):
