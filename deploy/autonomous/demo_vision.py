@@ -111,35 +111,63 @@ def get_models(address):
 
 
 def capture_png():
+    global PHASE
+    PHASE='capture_import'
     import numpy as np
     from reachy_mini.media.camera_gstreamer import GStreamerCamera,Gst
     from reachy_mini.media.camera_constants import get_camera_specs_by_name
-    need(importlib.metadata.version('reachy-mini')=='1.11.0'
-         and 'reachy_mini.media.audio_gstreamer' not in sys.modules)
-    camera=GStreamerCamera(camera_specs=get_camera_specs_by_name('wireless'))
+    PHASE='capture_sdk_version'
+    need(importlib.metadata.version('reachy-mini')=='1.11.0')
+    PHASE='capture_no_audio'
+    need('reachy_mini.media.audio_gstreamer' not in sys.modules)
+    PHASE='capture_specs'
+    specs=get_camera_specs_by_name('wireless')
+    PHASE='capture_construct'
+    camera=GStreamerCamera(camera_specs=specs)
     sample=buffer=data=pixels=scan=None
+    primary_phase=None
     try:
+        PHASE='capture_open'
         camera.open();until=time.monotonic()+2
+        PHASE='capture_sample'
         while time.monotonic()<until:
             sample=camera._appsink_video.emit('try-pull-sample',100_000_000)
             if sample is not None:break
         need(sample is not None)
         dequeued=time.monotonic();buffer=sample.get_buffer()
+        PHASE='capture_caps'
         caps=sample.get_caps().get_structure(0)
-        need((caps.get_value('width'),caps.get_value('height'),caps.get_value('format'))==(1280,720,'BGR')
-             and buffer.get_size()==1280*720*3)
+        need((caps.get_value('width'),caps.get_value('height'),caps.get_value('format'))==(1280,720,'BGR'))
+        PHASE='capture_buffer'
+        need(buffer.get_size()==1280*720*3)
+        PHASE='capture_extract'
         data=buffer.extract_dup(0,buffer.get_size())
+        PHASE='capture_pixels'
         pixels=np.frombuffer(data,dtype=np.uint8).reshape((720,1280,3))[::2,::2,::-1].copy()
         def chunk(kind,value):
             return struct.pack('!I',len(value))+kind+value+struct.pack('!I',binascii.crc32(kind+value)&0xffffffff)
+        PHASE='capture_encode'
         scan=b''.join(b'\0'+pixels[i].tobytes() for i in range(360))
         png=(b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR',struct.pack('!IIBBBBB',640,360,8,2,0,0,0))
              +chunk(b'IDAT',zlib.compress(scan))+chunk(b'IEND',b''))
+        PHASE='capture_png_bound'
         need(len(png)<=1048576)
+    except BaseException:
+        primary_phase=PHASE
+        raise
     finally:
         sample=buffer=data=pixels=scan=None
-        camera.close()
-        need(camera.pipeline.get_state(1_000_000_000).state==Gst.State.NULL)
+        try:
+            PHASE='capture_close'
+            camera.close()
+            PHASE='capture_closed'
+            need(camera.pipeline.get_state(1_000_000_000).state==Gst.State.NULL)
+        except BaseException:
+            if primary_phase is None:raise
+            # Retain the first capture failure if cleanup also fails.
+        finally:
+            if primary_phase is not None:PHASE=primary_phase
+    PHASE='capture'
     return png,dequeued
 
 

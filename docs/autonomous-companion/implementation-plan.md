@@ -15,7 +15,7 @@ Reachy, Hub, PC и VPS. Независимый reviewer проверяет ис�
 | Обычный голос | Реальные STT → локальная модель → TTS/owned aplay работают; реальные фразы получают ответы | Полная приёмка контекста с точным распознаванием факта и последующей ссылкой на него ещё открыта; два turns в неудачном vision-прогоне этого не доказывают |
 | Explicit snapshot | `d47f361`: свежий снимок → локальная 9B → полный spoken FINAL; человек подтвердил верность описания; наблюдались owned aplay, SDK tasks и движение антенн | Это отдельный командный путь `--vision`, не успешный голосовой запрос и не визуальная память |
 | STOP и cleanup explicit snapshot | Отдельный реальный STOP во время owned aplay: наблюдаемый cleanup 0,216848 s; три последующих проверки за 2 s без возобновления; известные OFF, factory empty, no aplay, 100% | Это одно наблюдение конкретного пути, не P95, не полная физическая/акустическая задержка остановки |
-| Spoken snapshot | `02bdaa2` установлен: минимальный Agent overlay и два helper-файла, один restart; readiness/source/config/state проверки прошли | **FAIL на реальном запросе:** child запущен, затем generic snapshot child failed; обычные фразы работают. Причина неизвестна, vision/context PASS не заявлен |
+| Spoken snapshot | `02bdaa2` установлен: минимальный Agent overlay и два helper-файла, один restart; readiness/source/config/state проверки прошли | **FAIL на новом реальном human-запросе:** Agent289 подтвердил точный visual STT, отсутствие echo и вызов dispatch; child вернул capture/ValueError. Конкретный capture guard ещё неизвестен; intent/STT не менять, camera/context PASS нет |
 | Prime-paused diagnostic | `73c241b`: Hub client обновлён без restart; в одном исправленном реальном прогоне cue выполнен при закрытом capture, затем подтверждены resume и свежий захват | **NOT_EXERCISED для камеры:** точный visual intent в STT отсутствовал, child не запускался. Один completed turn не доказывает vision/context. Повтора Alice vision не планируется |
 | Состояние после сбоя | Независимый watch подтвердил OFF, admission retired, factory empty, no aplay, stock known, volume 100%; активные сессии завершены | Поздний wrapper/client cleanup error после отзыва authority учитывать отдельно от исходного child failure |
 | Потоковый диалог | Реальный PC SSE/prefix contract подтверждён; `ad7c59b` содержит реализованный token-reader → segments → existing TTS с конечным drain | Реальная попытка остановилась на lifecycle validation: Docker после собственного запуска изменил только OomKillDisable false → null. Исходный worker/config восстановлены и проверены; streaming voice PASS нет. Следующий шаг — узкое исправление сравнения в validation и recovery. ACK/исходники не заменяют этот результат; continuous/partial STT ещё не реализован |
@@ -32,7 +32,7 @@ Reachy, Hub, PC и VPS. Независимый reviewer проверяет ис�
 
 | Порядок | Статус | Минимальный результат | Владелец | Реальная приёмка и доказательство |
 |---|---|---|---|---|
-| P0.1 | `51f3e2c` diagnostic и `73c241b` prime-paused установлены; исправленный Alice прогон NOT_EXERCISED, child cause UNKNOWN | Диагностировать и исправить selective STT-camera failure, сохранив рабочие explicit vision и ordinary voice | writer: точечный fix по новой evidence; reviewer + координатор: review; runner: единственные device actions | Нужен действительно распознанный точный visual intent и allowlisted phase/error_class; ещё одного Alice vision повтора нет. Затем proven fix → human-correct spoken FINAL, motion/STOP/no resume/final OFF100 |
+| P0.1 | Agent289 actual human route подтверждён; child capture/ValueError, конкретный guard UNKNOWN | Диагностировать и исправить selective STT-camera failure, сохранив рабочие explicit vision и ordinary voice | writer: точечный fix по новой evidence; reviewer + координатор: review; runner: единственные device actions | Точный human visual intent и capture/ValueError уже получены. Следующий шаг — fixed capture substage на exact helpers, затем proven fix → human-correct spoken FINAL, motion/STOP/no resume/final OFF100 |
 | P0.2 | Actual PC SSE/prefix PASS; реальный lifecycle failure, исходный worker/config восстановлены; streaming hardware PASS нет | Настоящее потоковое слушание и содержательный ответ до полной генерации | writer: existing capture/STT/brains/voice seams; runner: реальная запись timings и STOP; координатор: критерии | Сначала scoped Docker false→null comparison в candidate validation/recovery, затем реальный длинный ответ/STOP/следующий turn и повторяемая команда входа в проверенный режим. Source checks не заменяют этот результат. Continuous perception/partial STT/endpointing — отдельный следующий seam, ещё не реализован |
 | P1.1 | Частично, не принято | Обычный контекст, затем visual context с provenance/TTL; долговременные факты и исправления | writer: существующие session/memory seams; runner + человек: смысловая проверка | Факт → vision → местоименная ссылка на прежний факт; отдельно visual follow-up из реально виденного. Restart сохраняет разрешённые факты/mute, correction/deletion работает; vision history не обещать до реализации |
 | P1.2 | Не принято | Первая полезная typed integration через существующий broker/worker | writer: маленький adapter/schema; runner: настоящий target; координатор: scope | Реальная полезная задача с intended/attempted/completed receipt; ошибки/timeout/duplicate/cancel различимы. Нет raw shell/секретов/новых grants из текста модели или OCR |
@@ -78,6 +78,17 @@ question = false и child = false: это **NOT_EXERCISED**, не новая д�
 исходного child failure. Completed turn = 1 не является vision/context PASS.
 Независимый cleanup подтвердил OFF/100%, factory empty и no aplay. Повтора
 Alice vision не будет; следующая причина/правка требует новой реальной evidence.
+
+Новый отдельный human camera-запрос на Agent289 **подтвердил маршрутизацию**:
+STT непустой, точный visual intent, own echo false, action allowlisted и dispatch
+attempted true. Child вернул typed `capture/ValueError`. Это конкретнее прежнего
+NOT_EXERCISED и generic failure, но capture объединяет SDK/import preflight,
+sample/caps/buffer/NumPy/PNG и cleanup проверки. Ни один отдельный guard ещё не
+доказан. Минимальный следующий checkpoint — фиксированные capture_* подэтапы
+только в двух exact helper-файлах; Agent/intent/STT и guard/TTL не меняются:
+[capture-step-diagnostics.md](../../deploy/patches/capture-step-diagnostics.md).
+После ограниченной конкретной evidence исправляется доказанный source; нового
+human retry автоматически нет. Реальная scene/spoken camera приёмка открыта.
 
 Реальный streaming rollout под `ad7c59b` завершился **lifecycle failure**, а не
 голосовой приёмкой. На Docker Engine 29.7.2 / API 1.55 собственный candidate был

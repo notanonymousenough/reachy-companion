@@ -17,6 +17,9 @@ import unicodedata
 
 BAD_FINAL=('<think','</think','<|analysis|>','<|im_start|>','<analysis','[analysis]')
 ERROR_PHASES=frozenset(('startup','snapshot_import','parent_lifetime','packet_read','packet_validation',
+    'capture_import','capture_sdk_version','capture_no_audio','capture_specs','capture_construct',
+    'capture_open','capture_sample','capture_caps','capture_buffer','capture_extract','capture_pixels',
+    'capture_encode','capture_png_bound','capture_close','capture_closed',
     'model_inventory','capture','image_admission','inference','final_parser','post_guards','complete',
     'operator_before_capture','operator_before_image','operator_after_inference','operator_other'))
 ERROR_CLASSES=frozenset(('ValueError','RuntimeError','TypeError','KeyError','AttributeError','ImportError',
