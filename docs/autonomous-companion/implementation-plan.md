@@ -97,6 +97,12 @@ SOURCE GO/8tests PASS: same existing mutex/provider, durable original UNKNOWN
 intent и supersession до sole save(None), marker/approval recheck до freshstart,
 никакого autoretry. Это abstract core; concrete provider/effects composition,
 maintenance approval и фактическое восстановление ещё не приняты.
+Последующий writer source composition review exact manifest089d6f35 — GO:
+10source/4test pins match; provider4/adapters9/assembly1/JS2+UTF8 syntheticPASS.
+Actual canonical factory/native namespace и durable managed-HOLD evidence
+согласованы; HOST bridge использует existing finite READY/own receipts.
+Это fake-native source checks, не runtime acceptance. Independent final verdict,
+fresh private context и конкретное maintenance approval ещё нужны; mutations0.
 
 Обновлено 2026-10-17. Владелец плана — координатор Reachy Mini; writer ведёт код,
 проверки и этот документ; единственный runner выполняет изменения и проверки на

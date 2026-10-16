@@ -250,3 +250,31 @@ core** в рамках provider/effects contracts; восемь тестов PAS
 evidence. Composition, maintenance и execution GO не выданы. Следующий
 reviewable результат — конкретный provider/effects adapter, затем финальный
 scope обслуживания для человека.
+
+Последующий focused composition review writer: SOURCE COMPOSITION GO для
+параметризованных provider/effects/readers/HOST bridge/actor из manifest
+`089d6f359bf0fe17a6e137c07287ad9112fb36becb9f8b65d88fe0c7d4ea79f1`.
+Все 10 source pins и 4 synthetic-test pins сверены. Независимо повторены
+provider4, adapters9, full-assembly1, JS2 workflows и UTF-8 fixtures — PASS.
+Полная сборка использует fake natives/app APIs: она проверяет интерфейсы,
+один canonical mutex/save и host restore перед task enable, а не hardware.
+Actor использует exact keyword-only factory с caller-private native namespace;
+legacy global fallback отсутствует. Native reader сообщает disappearance facts,
+а finite scoped no_auto_resume связывается со свежим task/HOST/submitter HOLD
+и явно принятыми условиями отсутствия сторонних команд. Task snapshot,
+host receipt/hash, approved conditions, known-stop receipt и submitter proof
+сохраняются в durable private terminate evidence. Это закрывает прежние два
+source blocker; global future absence не заявляется.
+
+HOST bridge повторно использует конечный READY/own-receipt путь: после durable
+intent PC ждёт реального Mac tool response, bound intent/plan/nonce/phase/deadline,
+с приватным preimage heartbeat. UNKNOWN host status запрещает следующую PC
+мутацию. Restore READY возможен только после known verified idle/supersession;
+heartbeat восстанавливается прежде task enable. Возможный частичный restore
+сохраняется в диагностике: общий тезис «при любой ошибке всё остаётся paused»
+неверен после уже завершённого изменения. Никакого автоматического повтора.
+
+Ещё нужны итоговый independent composition verdict, fresh exact private context
+и согласование готового обслуживания человеком. Private bindings остаются
+sole runner; проверка safe source не является проверкой их значений. На этом
+этапе actual automation/Docker/WSL/task/slot/runtime mutations **0**.
