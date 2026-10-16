@@ -1,0 +1,87 @@
+--- a/src/reachy_companion/voice.py
++++ b/src/reachy_companion/voice.py
+@@ -322,42 +322,48 @@
+         started = time.monotonic()
+         future = executor = None
+         try:
+-            recognized = answer_result = None
+-            intro_bytes = 0
+-            acknowledgements = self.config['conversation'].get('interaction', {}).get('acknowledgements', {})
+-            if path != '/say' and acknowledgements.get('enabled', False) and 'reply_constraints' not in payload:
+-                self.check_robot()
+-                recognized = (self.transcribe(base64.b64decode(payload['pcm_base64'], validate=True))
+-                              if path == '/turn' else payload['text'].strip())
+-                if not isinstance(recognized, str) or len(recognized) > self.config['limits']['max_text_chars']:
+-                    raise ValueError('Invalid text length')
+-                decision = self.classify(recognized)
+-                if decision['action'] == 'answer':
+-                    import concurrent.futures
+-                    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+-                    session = payload.get('session', self.config['conversation']['session'])
+-                    if not isinstance(session, str) or not 1 <= len(session) <= self.config['limits']['max_session_chars']:
+-                        raise ValueError('Invalid session')
+-                    self.phase = 'thinking'
+-                    future = executor.submit(self.answer, recognized, session, payload.get('previous_reply_interrupted', False))
+-                    try:
+-                        answer_result = future.result(timeout=acknowledgements['delay_seconds'])
+-                    except concurrent.futures.TimeoutError:
+-                        intro = acknowledgements['phrases'][decision['intent']]
+-                        yield {'type': 'reply', 'transcript': recognized, 'reply': intro, 'emotion': decision['emotion'],
+-                               'command': None, 'acknowledgement': True, **self.speech_address_metadata(intro,prefix)}
+-                        for event in self.audio_events([{'text': intro, 'emotion': decision['emotion'], 'gesture': 'auto'}],speech_address_prefix=prefix):
+-                            if event['type'] == 'audio':
+-                                intro_bytes += len(base64.b64decode(event['pcm_base64']))
+-                            yield event
+-                        answer_result = future.result()
+-            result, session, pending = (self.prepare(payload, path, recognized, answer_result)
+-                                        if recognized is not None else self.prepare(payload, path))
+-            yield {'type': 'reply', **result}
+-            self.phase = 'speaking'
+-            segments = result.get('segments') or [{'text': result['reply'], 'emotion': result.get('emotion', 'neutral'), 'gesture': 'auto'}]
+-            yield from self.audio_events(segments, intro_bytes,speech_address_prefix=prefix)
+-            terminal = {'type': 'done', 'ok': True, **self.completed(result, session, pending, started)}
++            mode=self.config['streaming'].get('content_tokens', False)
++            if type(mode) is not bool:raise ValueError('Boolean content stream mode required')
++            if mode and path in ('/text','/turn'):
++                from .token_stream import content_events
++                terminal=yield from content_events(self,payload,path)
++            else:
++                recognized = answer_result = None
++                intro_bytes = 0
++                acknowledgements = self.config['conversation'].get('interaction', {}).get('acknowledgements', {})
++                if path != '/say' and acknowledgements.get('enabled', False) and 'reply_constraints' not in payload:
++                    self.check_robot()
++                    recognized = (self.transcribe(base64.b64decode(payload['pcm_base64'], validate=True))
++                                  if path == '/turn' else payload['text'].strip())
++                    if not isinstance(recognized, str) or len(recognized) > self.config['limits']['max_text_chars']:
++                        raise ValueError('Invalid text length')
++                    decision = self.classify(recognized)
++                    if decision['action'] == 'answer':
++                        import concurrent.futures
++                        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
++                        session = payload.get('session', self.config['conversation']['session'])
++                        if not isinstance(session, str) or not 1 <= len(session) <= self.config['limits']['max_session_chars']:
++                            raise ValueError('Invalid session')
++                        self.phase = 'thinking'
++                        future = executor.submit(self.answer, recognized, session, payload.get('previous_reply_interrupted', False))
++                        try:
++                            answer_result = future.result(timeout=acknowledgements['delay_seconds'])
++                        except concurrent.futures.TimeoutError:
++                            intro = acknowledgements['phrases'][decision['intent']]
++                            yield {'type': 'reply', 'transcript': recognized, 'reply': intro, 'emotion': decision['emotion'],
++                                   'command': None, 'acknowledgement': True, **self.speech_address_metadata(intro,prefix)}
++                            for event in self.audio_events([{'text': intro, 'emotion': decision['emotion'], 'gesture': 'auto'}],speech_address_prefix=prefix):
++                                if event['type'] == 'audio':
++                                    intro_bytes += len(base64.b64decode(event['pcm_base64']))
++                                yield event
++                            answer_result = future.result()
++                result, session, pending = (self.prepare(payload, path, recognized, answer_result)
++                                            if recognized is not None else self.prepare(payload, path))
++                yield {'type': 'reply', **result}
++                self.phase = 'speaking'
++                segments = result.get('segments') or [{'text': result['reply'], 'emotion': result.get('emotion', 'neutral'), 'gesture': 'auto'}]
++                yield from self.audio_events(segments, intro_bytes,speech_address_prefix=prefix)
++                terminal = {'type': 'done', 'ok': True, **self.completed(result, session, pending, started)}
+         finally:
+             try:
+                 if executor is not None:

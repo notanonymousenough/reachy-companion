@@ -1,0 +1,87 @@
+--- a/src/reachy_companion/brains.py
++++ b/src/reachy_companion/brains.py
+@@ -4,0 +5,2 @@
++import threading
++from contextlib import contextmanager
+@@ -5,0 +8,73 @@
++
++
++class ModelExecutionOwnership:
++    """Process-local same-backend admission; unknown entries never auto-expire."""
++    def __init__(self,capacity=16):
++        self.lock=threading.Lock()
++        self.entries={}
++        self.capacity=capacity
++
++    class Permit:
++        def __init__(self,owner,state):self.owner=owner;self.state=state
++        def submitted(self):
++            with self.owner.lock:self.state['submitted']=True
++        def terminal(self):
++            with self.owner.lock:self.state['terminal']=True
++
++    def status(self,identity):
++        with self.lock:
++            state=self.entries.get(identity)
++            return dict(active=bool(state and state['active']),
++                        unknown=bool(state and state['submitted'] and not state['terminal'] and not state['active']))
++
++    @contextmanager
++    def reserve(self,identity):
++        with self.lock:
++            if identity in self.entries:raise RuntimeError('Model execution busy or completion unknown')
++            if len(self.entries)>=self.capacity:raise RuntimeError('Model execution ownership capacity exhausted')
++            state=dict(active=True,submitted=False,terminal=False)
++            self.entries[identity]=state
++        try:yield self.Permit(self,state)
++        finally:
++            with self.lock:
++                state['active']=False
++                if not state['submitted'] or state['terminal']:del self.entries[identity]
++
++
++MODEL_EXECUTION=ModelExecutionOwnership()
++
++def model_identity(config):
++    return config['network']['llm_base_url'].rstrip('/'),config['llm']['model']
++
++
++def http_model_choice(config,request):
++    identity=model_identity(config)
++    with MODEL_EXECUTION.reserve(identity) as execution:
++        execution.submitted()
++        with build_opener(ProxyHandler({})).open(request,timeout=config['timeouts']['llm']) as response:
++            raw=response.read(1048577)
++            if len(raw)>1048576:raise RuntimeError('HTTP model envelope exceeds bound')
++            def reject(value):raise ValueError('Non-finite HTTP model JSON')
++            def unique(pairs):
++                result={}
++                for key,value in pairs:
++                    if key in result:raise ValueError('Duplicate HTTP model JSON key')
++                    result[key]=value
++                return result
++            envelope=json.loads(raw,parse_constant=reject,object_pairs_hook=unique)
++            if (not isinstance(envelope,dict) or envelope.get('model')!=identity[1]
++                    or not isinstance(envelope.get('choices'),list) or len(envelope['choices'])!=1):
++                raise RuntimeError('HTTP model response identity unverified')
++            choice=envelope['choices'][0]
++            if not isinstance(choice,dict) or type(choice.get('index',0)) is not int or choice.get('index',0)!=0 or choice.get('finish_reason') not in ('stop','length'):
++                raise RuntimeError('HTTP model terminal response unverified')
++            execution.terminal()
++            return choice
++
++
++def raw_prompt(config,messages):
++    settings=config['llm']
++    def clean(content):return re.sub(r'<\|[^\n]*?\|>', '', content)
++    return ''.join(settings['message_template'].format(role=m['role'],content=clean(m['content']))
++                   for m in messages)+settings['assistant_prefix']
++
+@@ -38,2 +113,5 @@
+-    with build_opener(ProxyHandler({})).open(request, timeout=config['timeouts']['llm']) as response:
+-        choice = json.load(response)['choices'][0]
++    if selected == 'lm_studio' and config['streaming'].get('content_tokens', False) is True:
++        choice = http_model_choice(config, request)
++    else:
++        with build_opener(ProxyHandler({})).open(request, timeout=config['timeouts']['llm']) as response:
++            choice = json.load(response)['choices'][0]

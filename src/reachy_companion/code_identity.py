@@ -15,7 +15,7 @@ MODULES = {'reachy_companion'} | {'reachy_companion.' + name for name in (
     '__main__ agent barge_in brains client code_identity config control_page deployment '
     'emotion_library expression_player expressions firewall hub intents logging_utils microphone '
     'motion_limits motion_policy motion_proxy recognition replay router sound_events sound_monitor '
-    'speech_clock speech_motion spoken_reply spoken_reply_sdk spoken_vision voice volume worker_container').split()}
+    'speech_clock speech_motion spoken_reply spoken_reply_sdk spoken_vision token_stream voice volume worker_container').split()}
 
 
 def source_manifest(root, package_root):
