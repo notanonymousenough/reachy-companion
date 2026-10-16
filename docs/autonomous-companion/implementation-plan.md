@@ -17,8 +17,8 @@ Reachy, Hub, PC и VPS. Независимый reviewer проверяет ис�
 | STOP и cleanup explicit snapshot | Отдельный реальный STOP во время owned aplay: наблюдаемый cleanup 0,216848 s; три последующих проверки за 2 s без возобновления; известные OFF, factory empty, no aplay, 100% | Это одно наблюдение конкретного пути, не P95, не полная физическая/акустическая задержка остановки |
 | Spoken snapshot | **РЕАЛЬНО РАБОТАЕТ:** после socket-only fix `7799e89` один human visual-запрос завершился успешно; человек подтвердил верность названия и описания. Exact visual STT, один turn без ошибки, CLI rc0 и независимый cleanup подтверждены | Это приёмка голосового camera → spoken description пути. Visual memory, latency target, streaming, отдельный STOP/motion прогон этим результатом не приняты; observer не дал terminal returned |
 | Prime-paused diagnostic | `73c241b`: Hub client обновлён без restart; в одном исправленном реальном прогоне cue выполнен при закрытом capture, затем подтверждены resume и свежий захват | **NOT_EXERCISED для камеры:** точный visual intent в STT отсутствовал, child не запускался. Один completed turn не доказывает vision/context. Повтора Alice vision не планируется |
-| Состояние после сбоя | Для предыдущих принятых окон подтверждены OFF/factory free/no aplay/100%; последний `1e2d91c` CLI сообщил cleanup true | Текущий PC baseline ещё не восстановлен; единственный runner классифицирует исход и выполняет scoped recovery. Не переносить подтверждения прошлых окон на текущий результат |
-| Потоковый диалог | В предыдущем прогоне подтверждены содержательное начало ответа и owned STOP/cleanup; overlap condition не выполнен. Source `1e2d91c` прошёл 40 проверок и paired consumer fixtures | **Новый единственный `1e2d91c` trial: hardware voice NOT EXERCISED — человек подтвердил, что не успел произнести запрос.** EXIT2/completed0/CLI cleanup true; schema error нет, PC recovery ещё не завершён. Runner выполняет classification и scoped recovery, новых trial/runtime patches нет |
+| Состояние после сбоя | После разрешённого повтора baseline/config/исходные worker-модули восстановлены и idle, content_tokens false, candidate parked, slot пустой; Robot OFF/unowned/free/100%, no camera/aplay; принятый camera bind сохранён | Это независимый конечный PASS восстановления данного повтора; не заменяет audible overlap, acoustic onset, E2E latency или длительный recovery soak |
+| Потоковый диалог | **Частичная реальная приёмка повторного `1e2d91c` прогона:** оба ответа слышны; owned STOP/cleanup и следующий turn в том же PC процессе прошли; PCM в обеих попытках выдан до последующих token READ; baseline независимо восстановлен | Содержательный audible overlap **NOT DEMONSTRATED**: первый сегмент 2 символа; APLAY впервые замечен после DONE, точный onset не измерен. Нужен source audit Agent wait/buffering и полноты сегмента; continuous capture/partial STT остаются обязательными и не реализованы |
 | Задержка vision | Два реальных image inference заняли около 11,03 и 10,35 s | Уже один inference превышает цель 10 s; полный speech-end → meaningful audio не измерен. Не объявлять цель достигнутой |
 | Память | Обычная RAM session history существует | Snapshot `/say` не добавляет visual question/answer в worker history; долговременная память и continuity через restart не приняты |
 | Полная автономность | Есть реализованные contracts, guards, fixtures и отдельные реальные checkpoints | Непрерывное восприятие/решения, память, полезные интеграции, recovery и длительная реальная приёмка ещё не завершены |
@@ -33,7 +33,7 @@ Reachy, Hub, PC и VPS. Независимый reviewer проверяет ис�
 | Порядок | Статус | Минимальный результат | Владелец | Реальная приёмка и доказательство |
 |---|---|---|---|---|
 | P0.1 | **Spoken camera PASS для одного реального human-запроса:** socket-only fix установлен, описание подтверждено человеком, финальный cleanup проверен | Сохранить принятый camera voice path и воспроизводимый `7799e89` fix | writer: public fix/план; runner: единственные device actions; координатор: следующая приёмка | Следующий приоритет — P0.2. Отдельные camera STOP/motion/no-resume и visual follow-up memory остаются открыты; один корректный spoken ответ их не заменяет |
-| P0.2 | Source `1e2d91c` принят; actual hardware voice NOT EXERCISED — запрос не прозвучал; EXIT2/completed0, schema error нет; PC recovery в работе | Сначала восстановить baseline; затем синхронизировать начало человеческой фразы с фактическим capture window | runner: единственный активный device owner, read-only classification/scoped recovery; writer: план и fix только по causal evidence; координатор: следующий шаг | Не повторять trial и не менять runtime по догадке. Нужны whole-boot proof, точная причина failed FIRSTSTOP/recovery guard и подтверждённый baseline; затем реальные meaningful overlap/STOP/next-turn критерии |
+| P0.2 | Повтор реально принят частично: оба ответа слышны, PCM/token overlap true, STOP и same-process next turn прошли, baseline восстановлен | Содержательная слышимая речь до завершения генерации и затем continuous capture/partial STT | writer: source-only audit exact Agent289 gate/start/consumption и 2-char segment; runner: единственный device owner, новых прогонов до evidence нет | Не считать позднее обнаружение APLAY доказательством позднего onset. Найти измеримые blocking waits/буферы и точки bounded timestamps; без нового framework, speculative fix, ACK или замедления модели |
 | P1.1 | Частично, не принято | Обычный контекст, затем visual context с provenance/TTL; долговременные факты и исправления | writer: существующие session/memory seams; runner + человек: смысловая проверка | Факт → vision → местоименная ссылка на прежний факт; отдельно visual follow-up из реально виденного. Restart сохраняет разрешённые факты/mute, correction/deletion работает; vision history не обещать до реализации |
 | P1.2 | Не принято | Первая полезная typed integration через существующий broker/worker | writer: маленький adapter/schema; runner: настоящий target; координатор: scope | Реальная полезная задача с intended/attempted/completed receipt; ошибки/timeout/duplicate/cancel различимы. Нет raw shell/секретов/новых grants из текста модели или OCR |
 | P1.3 | Частично guards есть, полная приёмка открыта | Recovery, ресурсы, STOP, воспроизводимая доставка Git/transfer | writer + reviewer; runner: actual failures/recovery | Сеть/worker/model/restart/перегрузка не оживляют старые речь/движения. Bounded queues/VRAM/storage, сохранившиеся mute/volume, exact source hashes, конечный deploy/readiness/rollback без конкурирующих владельцев |
@@ -154,12 +154,57 @@ runner classification; отсутствующие telemetry/terminal призн�
 не реальной приёмкой streaming. Камера и Agent в этом trial не менялись;
 принятый spoken camera результат сохраняется отдельно.
 
-**Текущее состояние:** PC baseline ещё не восстановлен. Runner — единственный
+**Состояние в конце того первого, NOT EXERCISED окна:** PC baseline ещё не был восстановлен. Runner — единственный
 активный device owner — выполняет read-only classification и scoped recovery.
 Нового runtime patch и повторного trial нет. После recovery следующий
 поведенческий шаг — синхронизация начала человеческой фразы с фактическим capture
 window. Нового runtime source fix без evidence нет. Не объявлять restoration,
 quiescence, READY_NEXT или product PASS заранее.
+
+
+Затем по прямой просьбе человека baseline восстановлен и выполнен **один повтор**
+сообщая о фактическом capture active в его текущем чате для обоих окон. Человек
+подтвердил, что оба ответа были слышны. Приняты owned STOP после наблюдения APLAY
+3,054525 s и cleanup 0,399767 s; это software guard/cleanup span, не физический
+E2E/P95. До следующего окна подтверждены terminal, producer/Piper quiescence.
+Второй запрос обработан тем же candidate PC процессом, completed turn = 1.
+
+На едином PC request clock получена **producer PCM/token overlap** в обоих случаях:
+
+| Метрика | Первый ответ | Второй ответ |
+|---|---|---|
+| First semantic, s | 0,522609 | 0,602126 |
+| First PCM yield, s | 0,630313 | 0,731289 |
+| Last nonempty token READ, s | 0,928876 | 1,106271 |
+| DONE READ, s | 0,929183 | 1,110466 |
+| First segment chars / punctuation class | 2 / period | 61 / question |
+| First Piper wait, s | 0,102501 | 0,118607 |
+| First SoX, s | 0,004061 | 0,009230 |
+| First cues, s | 0,000080 | 0,000201 |
+| First segment prepare to audio yield, s | 0,106887 | 0,128304 |
+
+Оба record прошли общий строгий 31-field parser: model POST attempted, terminal
+и producer quiesced true; failed/overflow false. Это реальная проверка paired
+schema и ранней выдачи PCM, не только 40 source checks/восемь fixture cases.
+Но первый сегмент длиной два символа не доказывает содержательное начало речи.
+Первый **наблюдавшийся** APLAY имеет bound POST+[1,265793; 2,273196] s, позже DONE.
+Это не измерение точного acoustic onset и не доказательство, что onset был после
+DONE: начало могло предшествовать обнаружению процесса. Второй acoustic/APLAY
+onset и E2E speech-end timing не измерены. Поэтому meaningful **AUDIBLE overlap
+NOT DEMONSTRATED**, полного streaming voice PASS пока нет.
+
+**Текущее независимо подтверждённое состояние после повтора:** baseline running/
+idle, точный protected config восстановлен, исходные brains/voice загружены,
+content_tokens false, candidate parked, inventory сохранён, slot пустой. Robot
+OFF/unowned/free, громкость 100%, factory running empty, no camera/aplay.
+Camera socket-only read-only bind сохранён, Agent и camera helpers не менялись.
+Нового прогона нет. Следующий конкретный source-only шаг — exact Agent289 путь
+first reply → expression.wait_timeline → first audio → APLAY start/write и
+отсутствующее доказательство actual consumption; отдельно полнота первого
+2-char сегмента в существующем parser. Нужны конкретные blocking gates и bounded
+same-clock timestamps, без экспорта приватного ответа, нового framework,
+искусственного delay или ACK. Continuous capture/partial STT — обязательный
+последующий seamless этап; он не считается готовым по этому повтору.
 
 Реальный streaming rollout под `ad7c59b` завершился **lifecycle failure**, а не
 голосовой приёмкой. На Docker Engine 29.7.2 / API 1.55 собственный candidate был
