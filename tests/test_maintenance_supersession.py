@@ -23,6 +23,7 @@ class Fixture:
         self.locked = False
         self.fault = fault
         self.saves = 0
+        self.held = False
 
     def __enter__(self):
         assert not self.locked
@@ -76,8 +77,8 @@ class Fixture:
         if self.fault == 'save-before':
             raise OSError('before rename')
         self.raw = IDLE
-        if self.fault == 'save-after':
-            raise OSError('after rename/fsync/verify unknown')
+        if self.fault in ('save-after-replace', 'save-after-fsync'):
+            raise OSError(self.fault)
         if self.fault == 'save-drift':
             self.raw = b'{"schema":1,"inflight":{"fixture":"new-owner"}}'
 
@@ -97,7 +98,9 @@ class Fixture:
         return result
 
     def hold(self):
-        return self.effect('hold', M.HOLD)
+        result = self.effect('hold', M.HOLD)
+        self.held = True
+        return result
 
     def terminate(self):
         return self.effect('terminate', M.BOUNDARY)
@@ -106,7 +109,9 @@ class Fixture:
         return self.effect('reconcile', M.RECONCILE)
 
     def restore(self):
-        return self.effect('restore', M.RESTORE)
+        result = self.effect('restore', M.RESTORE)
+        self.held = False
+        return result
 
 
 class MaintenanceTests(unittest.TestCase):
@@ -156,7 +161,8 @@ class MaintenanceTests(unittest.TestCase):
                 self.assertNotIn('reconcile', f.events)
 
     def test_final_write_failure_can_have_completed_no_restore_or_rewrite(self):
-        for fault, expected in (('save-before', OLD), ('save-after', IDLE)):
+        for fault, expected in (('save-before', OLD),
+                ('save-after-replace', IDLE), ('save-after-fsync', IDLE)):
             f = Fixture(fault)
             with self.assertRaises(OSError):
                 self.run_once(f)
@@ -165,6 +171,9 @@ class MaintenanceTests(unittest.TestCase):
             self.assertIn('intent', f.records)
             self.assertIn('supersession', f.records)
             self.assertNotIn('restore', f.events)
+            self.assertTrue(f.held)
+            self.assertEqual(base64.b64decode(json.loads(
+                f.records['intent'])['original_marker_base64']), OLD)
 
     def test_new_owner_after_write_blocks_restore(self):
         f = Fixture('save-drift')

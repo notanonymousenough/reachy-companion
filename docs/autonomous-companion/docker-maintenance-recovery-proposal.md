@@ -138,6 +138,13 @@ replace может означать уже заменённый marker: исхо
 retry/новая мутация запрещены до RO reconciliation. Обещать неизменность
 canonical bytes при неизвестном результате final write нельзя. Успешный save
 проверяется как known-idle прежде чем adapter возвращает task/heartbeat.
+Архитектор rev22 подтвердил: при UNKNOWN final write marker может быть прежним,
+idle или недоступным; **даже pending=None не является authority**. Независимый
+от slot HOLD сохраняется до RO manual reconciliation same plan/namespace/intent;
+новые STOP/owner/privacy имеют приоритет. Нет второго clear или слепой записи
+старого marker. Focused fixtures различают отказ до replace, после replace до
+directory fsync и после fsync при verify; durable original/history и HOLD
+сохраняются во всех трёх случаях.
 Восемь синтетических тестов проверяют порядок и отказы, включая final-write
 до/после rename, marker drift до fresh start и отказ restore. Runtime GO нет.
 
