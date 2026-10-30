@@ -9,6 +9,7 @@ import math
 import os
 from pathlib import Path
 import signal
+from .signal_stop import SignalStop
 import threading
 import time
 from .audio_adapter import AudioAdapter,HttpSTT
@@ -271,7 +272,7 @@ def main():
         authority=lease_authority(initial.get('lease_binding'))
     elif initial.get('lifetime','finite')!='finite':raise ValueError('Do not mix finite and lease protocols')
     motion=None;audio=speech=poller=lease=server=scheduler=datagram=None
-    stop=threading.Event();latest={};lock=threading.Lock();report=None;server_thread=None
+    stop=SignalStop();latest={};lock=threading.Lock();report=None;server_thread=None
     def publish(value):
         with lock:latest.clear();latest.update(value)
     def status():
@@ -281,7 +282,7 @@ def main():
         server=create_server(companion.token,args.controller,args.source_boot,stop,status,port=args.status_port)
         server_thread=threading.Thread(target=server.serve_forever,daemon=True);server_thread.start()
         for signum in (signal.SIGTERM,signal.SIGINT):
-            previous_signals[signum]=signal.signal(signum,lambda *_:stop.set())
+            previous_signals[signum]=signal.signal(signum,stop.request_signal)
         if motion_enabled:
             # Existing actor owns hardware; this path cannot construct/restart it.
             native=cfg['motion'];motor_hub=Hub(Config(args.companion_config))

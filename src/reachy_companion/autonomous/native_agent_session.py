@@ -5,6 +5,7 @@ import math
 import os
 from pathlib import Path
 import signal
+from .signal_stop import SignalStop
 import threading
 import time
 
@@ -246,7 +247,7 @@ def main():
     token = args.token_file.read_text().strip()
     os.environ[cfg['gateway']['token_env']] = token
     scheduler = NativeScheduler(cfg, NativeGateway(cfg), native)
-    stop = threading.Event(); current = dict(stage='STARTING'); lock = threading.Lock()
+    stop = SignalStop(); current = dict(stage='STARTING'); lock = threading.Lock()
     metadata = MetadataSnapshots(args.metadata) if args.service else None
     def publish(value):
         with lock: current.clear(); current.update(value)
@@ -258,7 +259,7 @@ def main():
         server = create_server(token, args.controller, args.agent_boot, stop, read_status, port=args.status_port)
         thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
         for signum in (signal.SIGINT, signal.SIGTERM):
-            previous[signum] = signal.signal(signum, lambda *_: stop.set())
+            previous[signum] = signal.signal(signum, stop.request_signal)
         report = run_native_session(scheduler, stop, duration, publish, service=args.service)
     finally:
         scheduler.close()
