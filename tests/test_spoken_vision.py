@@ -62,6 +62,21 @@ class SpokenVisionTests(unittest.TestCase):
     def dispatch(self):
         return spoken.dispatch(self.agent,'Что перед тобой?',17,self.expected)
 
+    def test_nullable_ordinary_owner_preserves_binding_and_policy_guards(self):
+        value=copy.deepcopy(self.value)
+        value.update(microphone_owner_id=None,motion_policy_owner_id=None)
+        expected=spoken.binding(value)
+        with patch.object(spoken.time,'monotonic',return_value=100):
+            spoken.check_operator(value,expected,110)
+            for owner in (False,0,'','x'*129):
+                invalid=dict(value,microphone_owner_id=owner,motion_policy_owner_id=owner)
+                with self.subTest(owner=owner),self.assertRaises(RuntimeError):
+                    spoken.check_operator(invalid,spoken.binding(invalid),110)
+            for changed in (dict(microphone_epoch=18),dict(motion_policy_owner_id='foreign'),
+                            dict(capture_active=True),dict(microphone_enabled=False)):
+                with self.subTest(changed=changed),self.assertRaises(RuntimeError):
+                    spoken.check_operator(dict(value,**changed),expected,110)
+
     def test_only_complete_bounded_neutral_questions_no_quotes_commands_or_own_echo(self):
         for text in ('Что перед тобой?','Алиса, что перед тобой?','Ричи, пожалуйста, что ты видишь?'):
             self.assertTrue(spoken.matches(text))

@@ -49,6 +49,9 @@ python3.13 -m venv .venv
 установка зависимостей: `uv pip sync requirements/dev.lock`, затем
 `uv pip install --no-deps -e .`.
 
+Для проверки JavaScript панели нужен Node.js 22+: `node tests/test_conversation_mode_page.cjs`.
+Этот тест также включён в CI; браузер и npm-зависимости ему не нужны.
+
 Тесты используют синтетические данные, временные каталоги и локальные HTTP-серверы.
 Они не требуют SSH, живого робота, GPU, Whisper/Piper или LM Studio.
 Аппаратные проверки из `tests/live/` автоматически не запускаются.

@@ -131,13 +131,20 @@ class CapturePhaseTests(unittest.TestCase):
         self.assertEqual(vision.PHASE,'capture');self.camera.close.assert_called_once()
         self.camera.pipeline.get_state.assert_called_once_with(1_000_000_000)
 
-    def test_only_capture_function_and_parent_phase_allowlist_change_from_exact_installed_pins(self):
+    def test_capture_diagnostics_and_nullable_owner_are_only_changes_from_historical_pins(self):
         for path,sha,skip in (
                 ('deploy/autonomous/demo_vision.py','1bd06dec8f941a78f0519e090e3a54cbc5816f5485fbb83ddd348e1830d0ef3f','capture_png'),
                 ('src/reachy_companion/spoken_vision.py','242ac03560af18c042ddef39fa2eb0eb343aa4c9dcb13e99a31e5eda3c134c69','ERROR_PHASES')):
             old=subprocess.check_output(['git','show','e86e54bd4d55f2cf4382e8ef5c5529e8d389d6e4:'+path],cwd=ROOT)
             self.assertEqual(hashlib.sha256(old).hexdigest(),sha)
             def outside(source):
+                # A later delivered change allows the ordinary, unowned session.
+                # Normalize only that exact expression; all other guards and
+                # code outside capture/phase diagnostics must still be identical.
+                source=source.replace(
+                    b"binding(value)!=expected or type(expected['owner_id']) is not str or not 1<=len(expected['owner_id'])<=128",
+                    b"binding(value)!=expected or (expected['owner_id'] is not None\n"
+                    b"            and (type(expected['owner_id']) is not str or not 1<=len(expected['owner_id'])<=128))")
                 tree=ast.parse(source)
                 tree.body=[n for n in tree.body if getattr(n,'name',None)!=skip and not
                     (isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id==skip for t in n.targets))]
