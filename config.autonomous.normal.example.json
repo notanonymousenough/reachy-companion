@@ -119,5 +119,26 @@
     "max_seconds": 30,
     "chunk_frames": 1600,
     "stop_timeout_s": 0.3
+  },
+  "production": {
+    "state_path": "data/companion-state.sqlite3",
+    "overload_latency_s": 10,
+    "overload_queue": 6,
+    "memory_refresh_s": 60,
+    "character_refresh_s": 3600,
+    "outbox_cap": 10000,
+    "sensors": {},
+    "tools": {},
+    "delivery": {
+      "s3": {
+        "enabled": false,
+        "url": null
+      },
+      "vps": {
+        "enabled": false,
+        "url": null,
+        "token_env": "REACHY_ANALYSIS_TOKEN"
+      }
+    }
   }
 }

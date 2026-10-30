@@ -6,6 +6,12 @@ import sys
 
 
 def main():
+    if len(sys.argv)>1 and sys.argv[1]=='autonomous':
+        # Existing Agent remains the sole device owner. This command runs only
+        # the joined Scheduler and uses the existing authenticated device APIs.
+        from .autonomous.companion_session import main as autonomous_main
+        sys.argv.pop(1)
+        return autonomous_main()
     parser = argparse.ArgumentParser(prog='companion')
     parser.add_argument('--config', help='JSON configuration; defaults to config.local.json or REACHY_COMPANION_CONFIG')
     commands = parser.add_subparsers(dest='group', required=True)

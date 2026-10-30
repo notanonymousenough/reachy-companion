@@ -141,6 +141,22 @@ class AudioPeer:
     def permitted(self):
         with self.lock:return self.started_lease and self.operator_ready()
 
+    def publish_level(self, pcm, captured_end):
+        """Measured background amplitude; independent of VAD/STT utterances."""
+        import math
+        import struct
+        if not isinstance(pcm,bytes) or not pcm or len(pcm)%2 or len(pcm)>256000:
+            raise ValueError('Bounded mono S16LE level samples required')
+        with self.lock:
+            if not self.permitted():return False
+            age=self.clock()-captured_end
+            if not 0<=age<=.25:return False
+            values=struct.unpack('<'+'h'*(len(pcm)//2),pcm)
+            rms=math.sqrt(sum(v*v for v in values)/len(values))/32768
+            previous=getattr(self,'audio_level',None)
+            self.audio_level=dict(rms=rms,delta=None if previous is None else rms-previous['rms'],captured_end=captured_end)
+            return True
+
     def publish(self, pcm, captured_end, echo_reference):
         if not isinstance(pcm, bytes) or not pcm or len(pcm)%2 or len(pcm)>256000:
             raise ValueError('Bounded mono16k observation')
@@ -239,11 +255,16 @@ class AudioPeer:
         if path == '/observation':
             with self.lock:
                 value=self.observation;self.observation=None
-                if not value:return dict(observation=None,source_boot=self.boot_id)
+                level=getattr(self,'audio_level',None)
+                telemetry={}
+                level_age = self.clock()-level['captured_end'] if level else None
+                if level_age is not None and 0 <= level_age <= .25:
+                    telemetry['audio_level']=dict(rms=level['rms'],delta=level['delta'],capture_age_s=level_age)
+                if not value:return dict(observation=None,source_boot=self.boot_id,**telemetry)
                 value=dict(value)
                 value['capture_age_s']=self.clock()-value.pop('captured_end')
                 value['pcm_base64']=base64.b64encode(value.pop('pcm')).decode()
-                return dict(observation=value,source_boot=self.boot_id)
+                return dict(observation=value,source_boot=self.boot_id,**telemetry)
         if self.lifetime=='lease' and path=='/retire':return self.retire(body)
         stream=body.get('stream_id')
         if not isinstance(stream,str) or not 1<=len(stream)<=128:raise ValueError('Stream identity required')
@@ -283,6 +304,10 @@ class AudioPeer:
             return len(pcm)//2
         if path == '/finish':return self.playback.finish(actual)
         if path == '/progress':
+            terminal=self.playback.terminal_receipt(actual)
+            if terminal is not None:
+                receipt=dict(terminal['stop_receipt']);receipt['stream_id']=stream
+                return receipt
             with self.playback.lock:
                 active=self.playback.active
                 if active and active['stream_id']==actual and not active['started']:
@@ -443,7 +468,9 @@ def create_server(peer, token, bind='127.0.0.1', port=8780, *, stop_port=None):
                         if control_only:self.send_header('Connection','close')
                         self.send_header('Content-Length',str(len(payload)));self.end_headers();self.wfile.write(payload)
                 except OSError:self.close_connection=True
-                except Exception:
+                except Exception as exc:
+                    import logging
+                    logging.getLogger(__name__).warning('audio_peer_rejected path=%s error=%s',self.path,str(exc))
                     try:self.send_error(409)
                     except OSError:self.close_connection=True
         return Server((bind,selected_port),Handler)
@@ -635,10 +662,16 @@ class AudioPolling:
                 self.job=None;result,self.result=self.result,None
                 if result:
                     scope,binding,started,packet=result
-                    if (scope!=authority or not operator or tuple(operator['binding'])!=binding
+                    same_scope=self.adapter.same_capture_scope(scope,authority)
+                    if (not same_scope or not operator or tuple(operator['binding'])!=binding
                             or now-started>=.25 or packet.get('source_boot')!=self.source_boot):
                         self.rejected+=1
-                    elif packet.get('observation'):
+                    else:
+                        level=packet.get('audio_level')
+                        if level and hasattr(self.adapter,'observe_level'):
+                            self.adapter.observe_level(level,started=started,source_boot=self.source_boot,authority=authority,operator_binding=binding)
+                    if (same_scope and operator and tuple(operator['binding'])==binding and now-started<.25
+                            and packet.get('source_boot')==self.source_boot and packet.get('observation')):
                         observation=packet['observation']
                         age=observation['capture_age_s']
                         if type(age) not in (int,float) or not 0<=age<=.25:self.rejected+=1
@@ -648,9 +681,10 @@ class AudioPolling:
                             # transport latency increases age, never freshness.
                             self.adapter.submit(pcm,source_boot=self.source_boot,
                                 sequence=observation['sequence'],captured_end=started-age,
-                                authority=scope,operator_binding=binding,
+                                authority=authority,operator_binding=binding,
                                 echo_reference=observation.get('echo_reference'))
-            if not self.job and now>=self.next_poll and operator:
+            if (not self.job and now>=self.next_poll and operator and operator['microphone_enabled']
+                    and not operator['privacy_all'] and now<operator['valid_until']):
                 binding=tuple(operator['binding']);self.calls+=1;self.next_poll=now+.05
                 def work():
                     try:
@@ -671,7 +705,10 @@ class AudioPolling:
 
 class PeerLease:
     """Independent renewal slot, gated by actual scheduler progress, not HTTP reads."""
-    def __init__(self,client,*,datagram=None,source_boot=None,authority=None):
+    def __init__(self,client,*,datagram=None,source_boot=None,authority=None,progress_timeout_s=.1):
+        if type(progress_timeout_s) not in (int,float) or not .05<=progress_timeout_s<=.2:
+            raise ValueError('Reducer timeout must preserve the 500 ms withdrawal bound')
+        self.progress_timeout_s=progress_timeout_s
         if source_boot is not None:stream_identity(source_boot,1)
         if (source_boot is None)!=(authority is None):raise ValueError('Lease source and authority must be paired')
         self.source_boot=source_boot;self.authority=lease_authority(authority) if authority is not None else None
@@ -684,9 +721,9 @@ class PeerLease:
         self.last_worker_tick=None;self.max_worker_gap_ms=0;self.last_send=None;self.last_accepted=None
         self.worker_exit=None;self.worker_exception=None;self.first_close=None
         endpoint=urlsplit(client.url)
-        # A lost TCP segment must not occupy the renewal slot for almost the
-        # whole 300 ms device lease. Other peer operations retain their limits.
-        self.connection=http.client.HTTPConnection(endpoint.hostname,endpoint.port,timeout=min(client.timeout,.05))
+        # Allow ordinary Wi-Fi/SSH jitter while leaving 200 ms of the device's
+        # 300 ms lease for withdrawal. Unknown completion still latches closed.
+        self.connection=http.client.HTTPConnection(endpoint.hostname,endpoint.port,timeout=min(client.timeout,.1))
         self.worker=threading.Thread(target=self._run,daemon=True);self.worker.start()
     def tick(self,authority=None):
         with self.lock:
@@ -695,7 +732,7 @@ class PeerLease:
                 if self.closed:return False
                 try:valid=lease_authority(authority)==self.authority
                 except ValueError:valid=False
-                if not valid or self.armed and now-self.last_tick>=.1:
+                if not valid or self.armed and now-self.last_tick>=self.progress_timeout_s:
                     self._withdraw('authority_changed' if not valid else 'reducer_expired');return False
                 self.armed=True
             self.max_tick_gap_ms=max(self.max_tick_gap_ms,(now-self.last_tick)*1000);self.last_tick=now
@@ -725,9 +762,9 @@ class PeerLease:
                         continue_wait=True
                     else:
                         continue_wait=False
-                        if now-self.last_tick>=.1:self._withdraw('reducer_expired');return
+                        if now-self.last_tick>=self.progress_timeout_s:self._withdraw('reducer_expired');return
                 else:continue_wait=False
-                valid=not continue_wait and time.monotonic()-self.last_tick<.1
+                valid=not continue_wait and time.monotonic()-self.last_tick<self.progress_timeout_s
                 self.busy=valid
             if continue_wait:time.sleep(.005);continue
             if valid:
@@ -740,7 +777,7 @@ class PeerLease:
                         with self.lock:
                             if self.source_boot is None:self.calls+=1
                             self.busy=False
-                            if self.source_boot is not None and (self.closed or time.monotonic()-self.last_tick>=.1):
+                            if self.source_boot is not None and (self.closed or time.monotonic()-self.last_tick>=self.progress_timeout_s):
                                 self._withdraw('late_renewal_ack');return
                             self.last_accepted=time.monotonic()
                             self.max_call_ms=max(self.max_call_ms,(time.monotonic()-started)*1000)
@@ -762,7 +799,7 @@ class PeerLease:
                             if (type(answer) is not dict or set(answer)!={'source_boot','authority'}
                                     or type(answer['source_boot']) is not str or answer['source_boot']!=self.source_boot
                                     or lease_authority(answer['authority'])!=self.authority):raise ValueError('Lease acknowledgement scope')
-                            if self.closed or time.monotonic()-self.last_tick>=.1:self._withdraw('late_renewal_ack');return
+                            if self.closed or time.monotonic()-self.last_tick>=self.progress_timeout_s:self._withdraw('late_renewal_ack');return
                         self.last_accepted=time.monotonic()
                 except Exception as exc:
                     self.connection.close()

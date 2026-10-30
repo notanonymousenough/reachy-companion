@@ -1,0 +1,90 @@
+#!/usr/bin/env python3
+"""Start, stop or inspect the installed Mac / Hub / Reachy production deployment."""
+import argparse
+import json
+import os
+import shlex
+from pathlib import Path
+import subprocess
+import time
+from urllib.request import Request, urlopen
+
+ROOT=Path(__file__).resolve().parents[1]
+LABELS=('llm','fast','worker','gateway','tunnels')
+
+
+def command(*args, check=True):
+    return subprocess.run(args,check=check,capture_output=True,text=True)
+
+
+def health():
+    result={}
+    token=(ROOT/'secrets/autonomous-mac.token').read_text().strip()
+    for name,port in [('llama-9b',18097),('router',18098),('worker',8082),('gateway',8097)]:
+        try:
+            request=Request('http://127.0.0.1:%s/health'%port,
+                headers={'Authorization':'Bearer '+token} if name=='gateway' else {})
+            with urlopen(request,timeout=2) as response:value=json.load(response)
+            result[name]=value.get('status')=='ok' or value.get('ok') is True or value.get('role')=='pc_gateway'
+        except OSError:result[name]=False
+    return result
+
+
+def session():
+    code="""import json,pathlib,urllib.request
+r=pathlib.Path('/home/deploy/reachy-companion');c=json.loads((r/'config.local.json').read_text())
+p=pathlib.Path(c['paths']['token_file']);p=p if p.is_absolute() else r/p
+request=urllib.request.Request('http://127.0.0.1:8791/status',headers={'Authorization':'Bearer '+p.read_text().strip()})
+with urllib.request.urlopen(request,timeout=2) as response:d=json.load(response)
+print(json.dumps({k:d.get(k) for k in ('stage','elapsed_s','listening_ready','counts')}))
+"""
+    result=command('ssh','-o','BatchMode=yes','-o','ConnectTimeout=5','reachy-hub',
+                   'python3 -c '+shlex.quote(code),check=False)
+    try:return json.loads(result.stdout)
+    except ValueError:return {'stage':'unavailable','listening_ready':False}
+
+
+def status():
+    print(json.dumps({'mac':health()},ensure_ascii=False))
+    print(json.dumps({'session':session()},ensure_ascii=False))
+    for host,services in [('reachy-hub',('reachy-hub','reachy-voice','reachy-production')),
+                          ('reachy-mini',('reachy-mini-daemon','reachy-voice-agent','reachy-production-audio'))]:
+        result=command('ssh','-o','BatchMode=yes','-o','ConnectTimeout=5',host,
+                       'systemctl is-active '+' '.join(services),check=False)
+        print(host+': '+', '.join('%s=%s'%(service,value) for service,value in zip(services,result.stdout.splitlines())))
+        if result.stderr:print(result.stderr.strip())
+
+
+def main():
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('action',choices=('start','stop','status'))
+    args=parser.parse_args()
+    domain='gui/%s'%os.getuid()
+    if args.action=='start':
+        for name in LABELS:
+            label='local.reachy.'+name
+            if command('launchctl','print',domain+'/'+label,check=False).returncode:
+                command('launchctl','bootstrap',domain,str(Path.home()/'Library/LaunchAgents'/(label+'.plist')))
+            else:command('launchctl','kickstart',domain+'/'+label)
+        deadline=time.monotonic()+180
+        while not all(health().values()):
+            if time.monotonic()>=deadline:raise RuntimeError('Mac services did not become ready; inspect data/mac-runtime logs')
+            time.sleep(1)
+        active=command('ssh','reachy-hub','systemctl is-active reachy-production',check=False)
+        if active.stdout.strip()!='active':
+            command('ssh','reachy-mini','sudo -n systemctl start reachy-production-audio')
+            command('ssh','reachy-hub','sudo -n systemctl start reachy-production')
+        deadline=time.monotonic()+15
+        while True:
+            state=session()
+            if state.get('stage')=='ACTIVE' and state.get('listening_ready'):break
+            if state.get('stage')=='WITHDRAWN' or time.monotonic()>=deadline:
+                raise RuntimeError('Audio owner is not ready; run stop, inspect logs, then explicitly start')
+            time.sleep(.2)
+    elif args.action=='stop':
+        command('ssh','reachy-hub','sudo -n systemctl stop reachy-production')
+        command('ssh','reachy-mini','sudo -n systemctl stop reachy-production-audio')
+    status()
+
+
+if __name__=='__main__':main()

@@ -68,6 +68,14 @@ class LeaseProtocolTests(unittest.TestCase):
         self.assertFalse(self.remote.admission_ready()) # ACK alone does not release local refs
         self.assertTrue(self.local.retire_terminal(terminal['stream_id'],terminal['generation']))
         self.assertTrue(self.remote.admission_ready())
+    def test_completed_progress_uses_owned_terminal_after_backend_release(self):
+        terminal=self.complete('completed-progress')
+        with patch.object(self.backend,'progress',side_effect=RuntimeError('hardware handle released')):
+            receipt=self.client.call('/progress',**self.remote._scope(terminal['stream_id']))
+        self.assertTrue(receipt['verified'])
+        self.assertEqual(receipt['consumed_frames'],160)
+        self.retire(terminal)
+
     def test_forty_real_worker_completions_retire_bounded_maps_and_cannot_replay_first(self):
         for index in range(40):
             terminal=self.complete('fixture-'+str(index));self.retire(terminal)
@@ -81,9 +89,11 @@ class LeaseProtocolTests(unittest.TestCase):
         self.assertEqual(self.peer.stream_high_water,40);self.assertEqual(self.peer.streams,{})
     def test_retire_waits_actual_progress_handler_reference_and_blocks_new_output(self):
         terminal=self.complete();scope=self.remote._scope(terminal['stream_id'])
-        entered=threading.Event();release=threading.Event();results=[];original=self.backend.progress
-        def progress(stream):entered.set();release.wait(2);return original(stream)
-        with patch.object(self.backend,'progress',side_effect=progress):
+        entered=threading.Event();release=threading.Event();results=[];original=self.peer.dispatch
+        def dispatch(path,body):
+            if path=='/progress':entered.set();release.wait(2)
+            return original(path,body)
+        with patch.object(self.peer,'dispatch',side_effect=dispatch):
             worker=threading.Thread(target=lambda:results.append(self.client.call('/progress',**scope)));worker.start()
             try:
                 self.assertTrue(entered.wait(1));self.assertFalse(self.remote.retire(terminal))
@@ -146,6 +156,24 @@ class LeaseProtocolTests(unittest.TestCase):
             scope=self.remote._scope(stream)
             with self.assertRaises(HTTPError):self.client.call('/retire',**scope,generation=self.remote.pending_stream['generation'],completion='complete')
             self.assertEqual(len(self.peer.stream_records),1);self.assertFalse(self.remote.admission_ready())
+
+    def test_verified_nonresumable_cancellation_can_retire_without_inventing_cursor(self):
+        original=self.backend.stop
+        def cancelled(stream):
+            value=original(stream)
+            return {**value,'verified':False,'consumed_frames':None,'cancelled_without_cursor':True}
+        with patch.object(self.backend,'stop',side_effect=cancelled):
+            self.local.operator('fixture-hub',microphone_enabled=True,valid_until=time.monotonic()+2)
+            stream=self.local.begin('fixture-hub','cancel-no-pause',deadline=time.monotonic()+2)
+            self.local.push(stream,b'\0\0'*160)
+            wait(lambda:any(e['kind']=='speech_progress' for e in self.local.status()['timeline']))
+            self.local.interrupt('human_utterance',preserve=False)
+            wait(lambda:self.local.terminal_receipt() is not None)
+            terminal=self.local.terminal_receipt()
+            self.assertIsNone(terminal['consumed_frames'])
+            self.assertFalse(terminal['complete']);self.assertFalse(self.local.status()['resumable'])
+            self.retire(terminal)
+            self.assertTrue(self.remote.admission_ready())
     def test_missing_or_wrong_source_authority_cannot_renew_or_change_deadline(self):
         self.ticking.clear();self.ticker.join(1);self.lease.close();self.lease.worker.join(1)
         deadline=self.peer.lease_deadline
@@ -263,6 +291,20 @@ class OwnerClaimTests(unittest.TestCase):
 
 
 class RenewalRaceTests(unittest.TestCase):
+    def test_explicit_pi_budget_accepts_jitter_but_latches_after_200ms(self):
+        authority=owner_binding(dict(agent_boot_id='agent',owned_microphone_epoch=1,policy_epoch=0,owner_id='owner'))
+        client=SimpleNamespace(url='http://127.0.0.1:1',timeout=.25,token='t'*32,controller='fixture')
+        with patch.object(PeerLease,'_run',return_value=None):
+            lease=PeerLease(client,source_boot='source',authority=authority,progress_timeout_s=.2)
+        self.addCleanup(lease.connection.close)
+        self.assertTrue(lease.tick(authority))
+        lease.last_tick=time.monotonic()-.15
+        self.assertTrue(lease.tick(authority))
+        lease.last_tick=time.monotonic()-.21
+        self.assertFalse(lease.tick(authority))
+        self.assertFalse(lease.tick(authority))
+        with self.assertRaises(ValueError):PeerLease(client,progress_timeout_s=.201)
+
     def renewal(self,outcome):
         entered=threading.Event();release=threading.Event();requests=[]
         authority=owner_binding(dict(agent_boot_id='fixture-agent',owned_microphone_epoch=1,policy_epoch=0 if outcome=='false_policy' else 1,owner_id='fixture-owner'))

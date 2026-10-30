@@ -54,6 +54,15 @@ class WhisperCacheIntegrityTests(unittest.TestCase):
         self.download.assert_not_called()
         self.assertEqual({path.name:path.read_bytes() for path in self.target.iterdir()},before)
 
+    def test_pinned_whisper_small_text_vocabulary_is_accepted(self):
+        self.cache()
+        (self.target/'vocabulary.json').unlink()
+        (self.target/'vocabulary.txt').write_text('synthetic token\n')
+        recognition.prepare(self.config)
+        self.download.assert_not_called()
+        (self.target/'model.bin').write_bytes(b'corrupt')
+        self.assertFalse(recognition.verified_whisper_cache(self.target,self.settings['sha256']))
+
     def test_exactly_one_acquisition_then_configured_hash_check_for_missing_and_bad_existing_cache(self):
         for existing in (False,True):
             if existing:self.cache(weights=b'bad previous cache')

@@ -136,7 +136,9 @@ class LeaseDatagramServer:
 
 class DatagramRenewal:
     """One actual two-packet exchange slot; no retry of expired challenges."""
-    def __init__(self,client,source_boot,port,*,authority=None):
+    def __init__(self,client,source_boot,port,*,authority=None,retries=0):
+        if type(retries) is not int or not 0<=retries<=1:raise ValueError('At most one fresh challenge retry')
+        self.retries=retries
         self.authority=lease_authority(authority) if authority is not None else None;self.withdrawn=False
         endpoint=urlsplit(client.url)
         self.last_send=None;self.last_ack=None;self.ack_sequence=None
@@ -145,7 +147,7 @@ class DatagramRenewal:
         self.socket_receipt=None;self.first_close=None
         self.source=source_boot;self.controller=client.controller;self.secret=key(client.token,source_boot);self.sequence=0
         self.socket=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
-        self.socket.connect((endpoint.hostname,port));self.socket.settimeout(.04)
+        self.socket.connect((endpoint.hostname,port));self.socket.settimeout(.08)
     def capture_socket_receipt(self):
         """Sample the connected kernel socket before its first hello; not delivery proof."""
         with self.diagnostics_lock:
@@ -165,6 +167,25 @@ class DatagramRenewal:
     def receive(self):
         raw=self.socket.recv(8193);self.last_receive=time.monotonic()
         return verified(self.secret,raw)
+    def receive_for(self,kind,field,expected):
+        deadline=time.monotonic()+.08
+        for _ in range(8):
+            remaining=deadline-time.monotonic()
+            if remaining<=0:raise socket.timeout('Current lease response timed out')
+            self.socket.settimeout(remaining)
+            self.record('challenge_wait' if kind=='challenge' else 'ack_wait')
+            value=self.receive()
+            if value.get('source_boot')!=self.source:raise ValueError('Lease response source')
+            if value.get('kind')==kind and value.get(field)==expected:return value
+            old_challenge=(value.get('kind')=='challenge' and isinstance(value.get('echo'),str)
+                and len(value['echo'])==32 and value.get('echo')!=expected)
+            old_ack=(value.get('kind')=='accepted' and type(value.get('sequence')) is int
+                and 1<=value['sequence']<=self.sequence and value.get('sequence')!=expected)
+            if not (old_challenge or old_ack):raise ValueError('Unexpected lease response')
+            # Authenticated packets can arrive out of order after a timeout.
+            # They confer no permission; continue waiting for this fresh exchange.
+            self.record('stale_response_ignored')
+        raise ValueError('Too many stale lease responses')
     def record(self,phase,error_kind=None):
         with self.diagnostics_lock:
             self.exchange_phase=phase
@@ -172,7 +193,16 @@ class DatagramRenewal:
     def renew(self):
         if self.authority is not None and self.withdrawn:raise RuntimeError('Datagram lease permanently withdrawn')
         with self.diagnostics_lock:self.attempts+=1;self.attempt_started=time.monotonic()
-        try:self.exchange()
+        try:
+            for attempt in range(self.retries+1):
+                try:
+                    self.exchange()
+                    break
+                except socket.timeout:
+                    if attempt==self.retries:raise
+                    # A new challenge on the same owner, never a replay or
+                    # reconnect. The device rejects it after lease expiry.
+                    self.record('fresh_challenge_retry')
         except Exception as exc:
             if self.authority is not None:self.withdrawn=True
             phase=self.exchange_phase;kind=type(exc).__name__
@@ -194,20 +224,21 @@ class DatagramRenewal:
         for _ in range(8):
             try:self.socket.recv(8193)
             except BlockingIOError:break
-        self.socket.settimeout(.04)
+        self.socket.settimeout(.08)
         self.record('socket_binding');self.capture_socket_receipt()
         began=time.monotonic();echo=secrets.token_hex(16)
         self.record('hello_send');self.last_send=time.monotonic()
         extra={'authority':self.authority} if self.authority is not None else {}
         self.socket.send(signed(self.secret,dict(kind='hello',source_boot=self.source,controller=self.controller,echo=echo,**extra)))
-        self.record('challenge_wait');challenge=self.receive()
+        self.record('challenge_wait');challenge=self.receive_for('challenge','echo',echo)
         if (challenge.get('kind')!='challenge' or challenge.get('source_boot')!=self.source
-                or challenge.get('echo')!=echo or time.monotonic()-began>=.08):raise ValueError('Fresh challenge required')
+                or challenge.get('echo')!=echo):raise ValueError('Fresh challenge required')
+        if time.monotonic()-began>=.08:raise socket.timeout('Fresh challenge arrived too late')
         self.sequence+=1
         self.record('renew_send');self.last_send=time.monotonic()
         self.socket.send(signed(self.secret,dict(kind='renew',source_boot=self.source,controller=self.controller,
             nonce=challenge['nonce'],sequence=self.sequence,**extra)))
-        self.record('ack_wait');ack=self.receive()
+        self.record('ack_wait');ack=self.receive_for('accepted','sequence',self.sequence)
         if (type(ack) is not dict or set(ack)!={'kind','source_boot','sequence'}
                 or type(ack['kind']) is not str or type(ack['source_boot']) is not str
                 or type(ack['sequence']) is not int or not 1<=ack['sequence']<2**63

@@ -46,6 +46,12 @@ class ComputeProbeTests(unittest.TestCase):
             self.assertIsNotNone(monitor.abort_reason);process.terminate.assert_called_once()
 
     def test_gateway_shutdown_failure_still_reaps_private_runtime(self):
+        import socket
+        with socket.socket() as listener, socket.socket() as gateway_listener:
+            listener.bind(('127.0.0.1',0))
+            gateway_listener.bind(('127.0.0.1',0))
+            runtime_port=listener.getsockname()[1]
+            gateway_port=gateway_listener.getsockname()[1]
         with patch.object(sys,'path',[str(SOURCE.parent),*sys.path]):
             spec=importlib.util.spec_from_file_location('gateway_probe_test',SOURCE.parent/'gateway_probe.py')
             module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
@@ -54,8 +60,8 @@ class ComputeProbeTests(unittest.TestCase):
             args=SimpleNamespace(server=root/'server',weights=root/'weights',config=root/'config',token_file=token,
                 output=root/'receipt.json',duration=0,threads=8,video_token_file=None,gpu_layers=0,
                 vendor_dir=None,gpu_index=0,gpu_reserve_mib=512)
-            cfg=dict(gateway=dict(bind='127.0.0.1',port=8097,token_env='FIXTURE_GATEWAY_TOKEN'),http_timeout_s=1,
-                models=dict(fast=dict(base_url='http://127.0.0.1:18097',context_tokens=4096,id='fixture',
+            cfg=dict(gateway=dict(bind='127.0.0.1',port=gateway_port,token_env='FIXTURE_GATEWAY_TOKEN'),http_timeout_s=1,
+                models=dict(fast=dict(base_url='http://127.0.0.1:'+str(runtime_port),context_tokens=4096,id='fixture',
                     audit=dict(weight_sha256='fixture-hash',runtime_build='fixture-hash')),main={}))
             process=Mock();process.poll.side_effect=[None,0]
             api=Mock();api.shutdown.side_effect=RuntimeError('injected close failure')

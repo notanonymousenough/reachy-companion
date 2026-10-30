@@ -5,7 +5,9 @@ import os
 import threading
 import time
 from urllib.request import Request, build_opener, ProxyHandler
-from .contracts import decode, uid, validator
+from urllib.error import HTTPError
+from http.client import HTTPException
+from .contracts import decode, uid, validator, validate
 from .state import State
 
 
@@ -13,6 +15,7 @@ class Job:
     """A daemon transport job; deadline expiry never implies execution completion."""
     def __init__(self, function, *args):
         self.future = Future()
+        self.started=time.monotonic()
         def work():
             try:
                 self.future.set_result(function(*args))
@@ -44,8 +47,29 @@ class RemoteGateway:
             raise ValueError('Oversized gateway response')
         return decode(raw)
 
+    def inference(self,path,payload,role):
+        try:return self.call(path,payload)
+        except (OSError,HTTPException):
+            import sys
+            failure=sys.exception()
+            if isinstance(failure,HTTPError) and failure.code in (401,403,404,409,422):raise
+            if not self.config.get('production'):raise
+            # A client-side timeout is not backend terminal evidence. Keep this
+            # actual Job occupied; never repost inference. Authenticated exact-ID
+            # terminal metadata may retire it. Unknown/restarted compute remains
+            # occupied for the external controller's audit/STOP path.
+            while True:
+                try:
+                    health=self.call('/health')
+                    execution=health.get('executions',{}).get(role,{})
+                    if (health.get('compute_boot_id')==self.boot_id and execution.get('request_id')==payload['request_id']
+                            and execution.get('status')=='terminal'):
+                        raise RuntimeError('Inference response lost; exact remote execution is terminal')
+                except (OSError,HTTPException):pass
+                time.sleep(.1)
+
     def fast(self, request_id, view):
-        result = self.call('/decision', dict(request_id=request_id, data=view))
+        result = self.inference('/decision', dict(request_id=request_id, data=view),'fast')
         if result['request_id'] != request_id:
             raise ValueError('request identity mismatch')
         return result
@@ -55,7 +79,7 @@ class RemoteGateway:
             from .workflows import WorkflowClient
             output = WorkflowClient(self.config['workflows']).run(task)
             return dict(output=output,compute_boot_id=task.authority.compute_boot_id,request_id=task.attempt_id)
-        result = self.call('/main', dict(request_id=task.attempt_id, data=task.prompt))
+        result = self.inference('/main', dict(request_id=task.attempt_id, data=task.prompt),'main')
         if result['request_id'] != task.attempt_id:
             raise ValueError('attempt identity mismatch')
         return result
@@ -109,11 +133,67 @@ class Scheduler:
         self.fast_job = self.main_job = None
         self.binding = self.main_task = None
         self.next_tick = 0
+        self.next_autonomous = 0
         self.expiry_logged = False
         self.context_job=None;self.context_revoke_job=None;self.context_terminal_job=None
         self.context_binding=None
         self.next_context=0
         self.closed=False
+        self.services=None;self.production=False;self.latencies={};self.overload_since=None;self.overload_notice_pending=False;self.audio_busy_since=None
+
+    def enable_production(self, store, sensors=None, deliveries=None, tools=None):
+        if self.services:raise ValueError('One production owner only')
+        if self.config.get('native_agent',{}).get('enabled'):
+            raise ValueError('Production Scheduler exclusively owns decisions; native orchestration must be disabled')
+        from .services import Services
+        store.claim()
+        self.production=self.state.production=True
+        self.services=Services(self,store,sensors,deliveries,tools)
+        self.state.services=self.services;self.state.log_sink=self.services.log
+        for name in ('audio.level','audio.transcript','camera','battery','power','servo.load','network','lidar'):
+            self.state.ingest(dict(type='sensor',id=name,availability='unknown',source_id='unconfigured'),time.monotonic())
+
+    def pressure(self,now):
+        if not self.production:return
+        state=self.state
+        if state.stopped:return
+        settings=self.config.get('production',{})
+        jobs=[job for job in (self.fast_job,self.main_job,self.motion_job,self.context_job) if job and not job.future.done()]
+        if self.services:
+            jobs += [row[0] for row in (*self.services.tool_jobs.values(),*self.services.polls.values()) if not row[0].future.done()]
+            if self.services.maintenance and not self.services.maintenance[0].future.done():jobs.append(self.services.maintenance[0])
+        audio_busy=False
+        if self.speech_adapter:
+            status=self.speech_adapter.status()
+            audio_busy=any(status.get(k,False) for k in ('execution_busy','tts_execution_busy','cancellation_execution_busy','pending_proposal'))
+        if self.audio_adapter:audio_busy=audio_busy or self.audio_adapter.status().get('execution_busy',False)
+        if audio_busy and self.audio_busy_since is None:self.audio_busy_since=now
+        if not audio_busy:self.audio_busy_since=None
+        age=max(max((now-job.started for job in jobs),default=0),0 if self.audio_busy_since is None else now-self.audio_busy_since)
+        queued=len(state.candidates)+sum(t.status=='ready' for t in state.tasks.values())
+        if state.overload=='ACTIVE' and (age>settings.get('overload_latency_s',10) or queued>settings.get('overload_queue',6) or self.services and self.services.unresolved and not self.services.tool_jobs):
+            state.overload='DRAINING';self.overload_since=now
+            state.motion_proposals.clear();state.speech_proposals.clear()
+            state.record('overload_entered')
+            self.overload_notice_pending=bool(self.speech_adapter and not (state.muted or state.privacy or state.quiet))
+            if self.speech_adapter:
+                self.speech_adapter.interrupt('overload',False)
+                audio_busy=True
+        if state.overload=='DRAINING' and self.overload_notice_pending and not audio_busy:
+            self.overload_notice_pending=False
+            if not (state.muted or state.privacy or state.quiet):
+                try:
+                    self.speech_adapter.execute(dict(text='Я перегрузился. Подожду завершения задач и соберу мысли.',
+                        request_id=uid(),authority=state.authority,deadline=now+10))
+                    audio_busy=True;state.record('overload_notice_proposed')
+                except Exception:state.record('overload_notice_rejected')
+        if state.overload=='DRAINING' and not jobs and not audio_busy and self.fast_job is None and self.main_job is None and self.motion_job is None and not (self.services and self.services.unresolved):
+            summaries=[t.result[:128] for t in state.tasks.values() if t.result]
+            state.previous.append(('Drain results: '+'; '.join(summaries))[:128])
+            state.candidates.clear()
+            for task in state.tasks.values():
+                if task.status=='ready':task.status='discarded';task.result=None
+            state.overload='CONSOLIDATING';state.record('drain_completed')
 
     def ingest(self, event, now=None):
         if self.closed:return
@@ -123,6 +203,10 @@ class Scheduler:
         old_authority=self.state.authority
         self.state.ingest(event, time.monotonic() if now is None else now)
         if event.get('type')=='operator' and self.state.privacy:self.revoke_context(old_authority)
+        if event.get('type')=='stop':
+            if self.speech_adapter:self.speech_adapter.interrupt('stop',False)
+            if self.audio_adapter:self.audio_adapter.interrupt()
+            if self.motion_adapter:self.motion_adapter.close()
 
     def revoke_context(self,authority,terminal=False):
         if not self.config.get('context',{}).get('enabled'):return
@@ -148,6 +232,9 @@ class Scheduler:
             except BaseException as exc:
                 if error is None:error=exc
                 else:error.add_note('Additional scheduler close failure: '+type(exc).__name__)
+        if self.services:
+            self.state.log_sink=None
+            self.services.close()
         if error is not None:raise error
 
     def speech_activity(self,origin):
@@ -174,6 +261,9 @@ class Scheduler:
             self.state.audio_source_bound=self.audio_adapter.status()['source_boot'] is not None
             event=self.audio_adapter.advance(self.state.authority,receipt)
             if event:self.ingest(event,now)
+            if self.production and hasattr(self.audio_adapter,'drain_level'):
+                level=self.audio_adapter.drain_level(self.state.authority)
+                if level:self.ingest(level,now)
         if self.motion_adapter:
             if self.actor_job and self.actor_job.future.done():
                 try:self.state.set_actor(self.actor_job.future.result())
@@ -189,6 +279,8 @@ class Scheduler:
                 except Exception:self.state.record('motion_failed')
                 self.motion_job=None
         if self.state.privacy and not was_private:self.revoke_context(before_operator)
+        if self.services:self.services.advance(now)
+        self.pressure(now)
         if self.config.get('context',{}).get('enabled') and hasattr(self.gateway,'context') and hasattr(self.gateway,'revoke_context'):
             if self.context_job and self.context_job.future.done():
                 request_id,authority,started=self.context_binding
@@ -208,6 +300,9 @@ class Scheduler:
             task = self.main_task
             try:
                 result = self.main_job.future.result()
+                self.latencies['main']=max(0,now-getattr(self.main_job,'started',now))
+                if self.production and self.state.overload=='DRAINING' and isinstance(result.get('output'),str) and task.authority==self.state.authority:
+                    self.state.previous.append(('Drained main: '+result['output'])[:128])
                 if result['compute_boot_id'] != task.authority.compute_boot_id or result['request_id'] != task.attempt_id:
                     self.state.complete(task.task_id, task.attempt_id, task.authority, None, now, error=True)
                 else:
@@ -222,9 +317,15 @@ class Scheduler:
                 if (result['compute_boot_id'] != self.binding.authority.compute_boot_id
                         or result['request_id'] != self.binding.request_id):
                     raise ValueError('Completion does not match request authority')
+                self.latencies['fast']=max(0,now-getattr(self.fast_job,'started',now))
                 choice = result['output']
+                if self.production and self.state.overload=='CONSOLIDATING':
+                    validate('FastChoice',choice)
+                    if (now>self.binding.deadline or self.binding.authority!=self.state.authority
+                            or self.binding.durable_revision!=self.state.durable_revision):raise ValueError('Stale consolidation')
+                    self.state.overload='ACTIVE';self.state.record('consolidation_completed')
                 # Capacity rejection before reducer consumes the candidate.
-                if choice.get('start') and self.main_job:
+                if choice.get('start') and (self.main_job or self.services and self.services.maintenance):
                     self.state.record('main_execution_busy')
                     task = None
                 else:
@@ -237,8 +338,8 @@ class Scheduler:
                 if task:
                     self.main_task = task
                     self.main_job = Job(self.gateway.main, task)
-            except Exception:
-                self.state.record('fast_failed')
+            except Exception as exc:
+                self.state.record('fast_failed', error_class=type(exc).__name__)
             self.fast_job = self.binding = None
         if self.speech_adapter:
             self.speech_adapter.advance(self.state.authority)
@@ -250,14 +351,26 @@ class Scheduler:
         if self.fast_job and now > self.binding.deadline and not self.expiry_logged:
             self.state.record('fast_deadline_expired')
             self.expiry_logged = True
-        if self.motion_adapter and self.state.actor_binding is None:return
+        if self.production and (self.state.stopped or self.state.overload=='DRAINING'):return
+        if self.motion_adapter and self.state.actor_binding is None and not self.production:return
         if now < self.next_tick:
             return
         # No catch-up burst. Skipped busy ticks remain explicit gaps.
         self.next_tick = now + self.config['period_s']
         if self.fast_job:
             self.state.record('tick_busy_gap'); return
+        if (self.production and not self.state.privacy and not self.state.candidates and not self.main_job
+                and now>=self.next_autonomous and not any(task.status=='ready' for task in self.state.tasks.values())):
+            # One replaceable self-directed input, never an invented human utterance.
+            ref='autonomous:'+uid()
+            self.state.candidates[ref]='Self-directed reflection on current observations, goal and unfinished work.'
+            self.state.candidate_kinds[ref]='main'
+            self.next_autonomous=now+30
         view = self.state.snapshot(now)
+        if self.production:
+            view['runtime']['latency_s']=dict(self.latencies)
+            view['runtime']['queue_depth']=len(self.state.candidates)+sum(t.status=='running' for t in self.state.tasks.values())
+            view['runtime']['background_busy']=self.services.busy() if self.services else 0
         if self.main_job and not self.main_job.future.done() and self.main_task.status != 'running':
             # Revoking a result does not conceal still-busy physical execution.
             view['pending'] = view['pending'][:7] + [dict(alias=self.main_task.task_id,

@@ -4,6 +4,7 @@ import os
 import socket
 import time
 import unittest
+from unittest.mock import Mock
 from reachy_companion.autonomous.audio_peer import AudioPeer,PeerClient,PeerLease
 from reachy_companion.autonomous.lease_datagram import LeaseDatagramServer,DatagramRenewal,key,signed,verified
 from reachy_companion.autonomous.playback import Playback,ReplayPCM
@@ -21,6 +22,30 @@ class Peer:
 
 
 class DatagramTests(unittest.TestCase):
+    def test_authenticated_late_response_does_not_replace_fresh_exchange(self):
+        client=PeerClient('http://127.0.0.1:1','t'*32,'owner')
+        transport=DatagramRenewal(client,'boot',1);self.addCleanup(transport.close)
+        transport.sequence=1
+        transport.receive=Mock(side_effect=[dict(kind='accepted',source_boot='boot',sequence=1),
+            dict(kind='challenge',source_boot='boot',echo='o'*32,nonce='old'),
+            dict(kind='challenge',source_boot='boot',echo='n'*32,nonce='fresh')])
+        value=transport.receive_for('challenge','echo','n'*32)
+        self.assertEqual(value['nonce'],'fresh')
+        self.assertIsNone(transport.last_ack)
+        self.assertEqual(transport.sequence,1)
+        self.assertEqual(transport.receive.call_count,3)
+
+    def test_optional_retry_uses_new_challenge_only_for_packet_loss(self):
+        client=PeerClient('http://127.0.0.1:1','t'*32,'controller')
+        transport=DatagramRenewal(client,'source',12345,retries=1)
+        self.addCleanup(transport.close)
+        transport.exchange=Mock(side_effect=[socket.timeout(),None])
+        transport.renew()
+        self.assertEqual(transport.exchange.call_count,2)
+        transport.exchange=Mock(side_effect=ValueError('invalid identity'))
+        with self.assertRaises(ValueError):transport.renew()
+        self.assertEqual(transport.exchange.call_count,1)
+
     def test_real_socket_receipt_survives_failure_close_and_caller_mutation(self):
         sink=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);sink.bind(('127.0.0.1',0));self.addCleanup(sink.close)
         client=PeerClient('http://127.0.0.1:1','t'*32,'controller')

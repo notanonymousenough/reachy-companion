@@ -95,7 +95,9 @@ class Playback:
                 or type(value) is not int or not s['consumed']<=value<=s['written']
                 or provenance not in ('device_consumed_pcm','simulated_consumed_pcm')
                 or provenance=='simulated_consumed_pcm' and not self.allow_simulated):
-            raise RuntimeError('Consumed PCM cursor unverified')
+            raise RuntimeError('Consumed PCM cursor unverified: '
+                f'frames={value}, previous={s["consumed"]}, written={s["written"]}, '
+                f'verified={receipt.get("verified")}, provenance={provenance}')
         return value
 
     def run(self,s):
@@ -117,6 +119,7 @@ class Playback:
                 if written_all:self.backend.finish(s['stream_id'])
                 receipt=self.backend.progress(s['stream_id'])
                 with self.lock:
+                    if not self.current(s):break
                     s['consumed']=self.cursor(s,receipt)
                     if self.current(s):
                         self.record('speech_progress',stream_id=s['stream_id'],request_id=s['request_id'],
@@ -126,8 +129,11 @@ class Playback:
                 self.wake.wait(.005);self.wake.clear()
         except Exception as exc:
             with self.lock:
-                self.quarantined=True;self.paused=None
-                self.record('playback_failure',stream_id=s['stream_id'],error=type(exc).__name__)
+                if self.current(s):
+                    import logging
+                    logging.getLogger(__name__).exception('Owned PCM playback failed')
+                    self.quarantined=True;self.paused=None
+                    self.record('playback_failure',stream_id=s['stream_id'],error=type(exc).__name__)
         finally:
             known=self.bounded_stop(s['stream_id'])
             with self.lock:
@@ -150,10 +156,13 @@ class Playback:
                 return None
             operation=self.audio_stops.get(value['stream_id'])
             receipt=operation[1].get('receipt',{}) if operation else {}
+            cancelled_without_cursor=(not value['complete'] and receipt.get('cancelled_without_cursor') is True
+                and receipt.get('verified') is False and receipt.get('consumed_frames') is None)
             if (not operation or operation[0].is_alive() or value['stop_known'] is not True
                     or receipt.get('stream_id')!=value['stream_id'] or receipt.get('verified_stopped') is not True
-                    or receipt.get('verified') is not True or type(receipt.get('consumed_frames')) is not int
-                    or not value['consumed_frames']<=receipt['consumed_frames']<=value['written_frames']<=value['submitted_frames']
+                    or not cancelled_without_cursor and (receipt.get('verified') is not True
+                        or type(receipt.get('consumed_frames')) is not int
+                        or not value['consumed_frames']<=receipt['consumed_frames']<=value['written_frames']<=value['submitted_frames'])
                     or receipt.get('provenance') not in ('device_consumed_pcm','simulated_consumed_pcm')
                     or receipt.get('provenance')=='simulated_consumed_pcm' and not self.allow_simulated):
                 return None

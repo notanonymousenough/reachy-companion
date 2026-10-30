@@ -15,10 +15,14 @@ def expected_whisper_hash(settings):
 def verified_whisper_cache(target,expected):
     """Stream-hash weights; metadata presence/readability is not a content hash."""
     try:
-        for name in ('config.json','tokenizer.json','vocabulary.json'):
+        for name in ('config.json','tokenizer.json'):
             path=target/name
             if not path.is_file():return False
             with path.open('rb') as source:source.read(1)
+        vocabulary = next((target/name for name in ('vocabulary.json','vocabulary.txt')
+                           if (target/name).is_file()), None)
+        if vocabulary is None:return False
+        with vocabulary.open('rb') as source:source.read(1)
         weights=target/'model.bin'
         if not weights.is_file():return False
         with weights.open('rb') as source:
@@ -68,6 +72,10 @@ class Recognizer:
                     no_speech_threshold=s['no_speech_threshold'], log_prob_threshold=s['log_prob_threshold'])
                 parts=[]
                 for seg in segments:
+                    if s.get('diagnostics_enabled'):
+                        import logging
+                        logging.getLogger('reachy-voice').info('stt_segment logprob=%.3f no_speech=%.3f text=%r',
+                            seg.avg_logprob,seg.no_speech_prob,seg.text)
                     log_ok=seg.avg_logprob>=s['log_prob_threshold']
                     if diagnostics is None and not log_ok:continue # preserve original default short-circuit
                     speech_ok=seg.no_speech_prob<s['no_speech_threshold']

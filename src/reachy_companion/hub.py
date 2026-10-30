@@ -250,8 +250,15 @@ class Hub:
         data = None if payload is None else json.dumps(payload).encode()
         request = Request(self.config['network']['robot_url'] + path, data=data,
                           headers={'Content-Type': 'application/json'})
-        with self.http.open(request, timeout=self.config['timeouts']['robot']) as response:
-            return json.load(response)
+        try:
+            with self.http.open(request, timeout=self.config['timeouts']['robot']) as response:
+                return json.load(response)
+        except HTTPError as exc:
+            if exc.code != 404 or path != '/api/daemon/robot-app-lock-status' or payload is not None:
+                raise
+            # New factory daemons expose the running app instead of the legacy lock.
+            current = self.factory('/api/apps/current-app-status')
+            return {'state': 'free' if current is None else 'locked', 'app': current}
 
     def robot(self, path, payload=None):
         if payload is not None and self.stock_selected():

@@ -10,7 +10,7 @@ import math
 import threading
 import time
 from urllib.request import Request, build_opener, ProxyHandler
-from .contracts import decode
+from .contracts import decode,Authority
 
 
 class HttpSTT:
@@ -35,7 +35,9 @@ class HttpSTT:
 
 
 class AudioAdapter:
-    def __init__(self, stt, *, clock=time.monotonic):
+    def __init__(self, stt, *, clock=time.monotonic,continuous_input=False):
+        if type(continuous_input) is not bool:raise ValueError('Explicit continuous input mode')
+        self.continuous_input=continuous_input
         self.stt, self.clock = stt, clock
         self.lock = threading.RLock()
         self.source = None
@@ -46,9 +48,16 @@ class AudioAdapter:
         self.allowed = False
         self.closed = False
         self.generation = 0
+        self.level=None
         self.pending = self.result = self.job = None
         self.counts = dict(submitted=0, overwritten=0, stale=0, echo=0,
                            started=0, completed=0, no_response=0)
+
+    def same_capture_scope(self,left,right):
+        if self.continuous_input and isinstance(left,Authority) and isinstance(right,Authority):
+            fields=('hub_boot_id','compute_boot_id','robot_boot_id','operator_epoch','microphone_epoch')
+            return all(getattr(left,key)==getattr(right,key) for key in fields)
+        return left==right
 
     def bind_source(self, boot, generation):
         if not isinstance(boot, str) or not 1 <= len(boot) <= 128 or type(generation) is not int:
@@ -64,6 +73,7 @@ class AudioAdapter:
     def _withdraw(self):
         self.generation += 1
         self.pending = self.result = None
+        self.level=None
 
     def advance(self, authority, operator):
         """Only local mailbox work; no HTTP/capture/STT waits on scheduler."""
@@ -76,7 +86,7 @@ class AudioAdapter:
                              operator['quiet'], operator['privacy_all'])
                 allowed = (operator['microphone_enabled'] is True and operator['quiet'] is False
                            and operator['privacy_all'] is False and now < operator['valid_until'])
-            if authority != self.authority or signature != self.operator_signature or not allowed:
+            if not self.same_capture_scope(authority,self.authority) or signature != self.operator_signature or not allowed:
                 self._withdraw()
             self.authority, self.operator_signature, self.allowed = authority, signature, allowed
             self.operator_deadline = operator['valid_until'] if allowed else 0
@@ -132,10 +142,32 @@ class AudioAdapter:
     def _fresh(self, observation, generation):
         now = self.clock()
         return (not self.closed and self.allowed and now < self.operator_deadline
-                and generation == self.generation and observation['authority'] == self.authority
+                and generation == self.generation and self.same_capture_scope(observation['authority'],self.authority)
                 and observation['operator_signature'] == self.operator_signature
-                and observation['source_boot'] == self.source and observation['sequence']==self.latest_utterance_sequence
+                and observation['source_boot'] == self.source
+                and (self.continuous_input or observation['sequence']==self.latest_utterance_sequence)
                 and now < observation['deadline'])
+
+    def observe_level(self, level, *, started, source_boot, authority, operator_binding):
+        with self.lock:
+            now=self.clock()
+            age=level.get('capture_age_s');rms=level.get('rms');delta=level.get('delta')
+            if (type(age) not in (int,float) or not 0<=age<=.25 or type(rms) not in (int,float) or not 0<=rms<=1
+                    or delta is not None and (type(delta) not in (int,float) or not -1<=delta<=1)):
+                raise ValueError('Measured audio level contract')
+            if (not self.allowed or now>=self.operator_deadline or source_boot!=self.source or authority!=self.authority
+                    or tuple(operator_binding)!=self.operator_signature[0] or now-started+age>.5):return False
+            self.level=(dict(type='sensor',id='audio.level',summary=f'rms={rms:.5f}; delta={delta}',
+                source_id=source_boot,ttl_ms=1000),started-age,authority)
+            return True
+
+    def drain_level(self, authority):
+        with self.lock:
+            level,self.level=self.level,None
+            if not level or not self.allowed or authority!=level[2] or self.clock()>=self.operator_deadline:return None
+            event,captured,_=level
+            event['age_ms']=max(0,int((self.clock()-captured)*1000))
+            return event
 
     def submit(self, pcm, *, source_boot, sequence, captured_end, authority,
                operator_binding, origin='unknown', echo_reference=None):

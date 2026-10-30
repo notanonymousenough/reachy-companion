@@ -172,10 +172,11 @@ def main():
             if scope!='endpoint':
                 report['owned_output_frames_excluded']+=value['frames'];endpoint.clear()
                 endpoint=ResponseEndpoint(webrtcvad.Vad(2),**endpoint_settings);continue
+            peer.publish_level(mono,value['captured_end'])
             available_bytes=len(endpoint.pcm)+len(endpoint.pending)+len(mono)
             endpoint.feed(mono);del mono
             if endpoint.reason:
-                if endpoint.reason=='speech_then_silence':
+                if endpoint.reason=='speech_then_silence' or endpoint.reason=='response_deadline' and endpoint.started:
                     # VAD can end inside this read. Do not date the retained
                     # utterance at the later samples that were discarded.
                     unused_frames=(available_bytes-len(endpoint.pcm))//2

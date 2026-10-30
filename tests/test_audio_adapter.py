@@ -13,10 +13,10 @@ def operator(now, epoch=1, enabled=True):
 
 
 class AudioTests(unittest.TestCase):
-    def setup_adapter(self, callback, clock=time.monotonic):
+    def setup_adapter(self, callback, clock=time.monotonic, **kwargs):
         class STT:
             def transcribe(self, pcm):return callback(pcm)
-        adapter=AudioAdapter(STT(), clock=clock)
+        adapter=AudioAdapter(STT(), clock=clock, **kwargs)
         adapter.bind_source('capture', 0)
         self.addCleanup(adapter.close)
         return adapter
@@ -41,6 +41,41 @@ class AudioTests(unittest.TestCase):
         self.assertEqual(event['audio']['lineage_id'],'capture:1')
         self.assertEqual(event['audio']['speaker_identity'],'unknown')
         self.assertFalse(event['audio']['confirmed'])
+
+    def test_continuous_input_keeps_question_when_next_clip_is_noise(self):
+        from dataclasses import replace
+        from reachy_companion.autonomous.contracts import Authority
+        entered=threading.Event();release=threading.Event()
+        def stt(pcm):
+            if pcm[0]==1:entered.set();release.wait(1);return 'Сколько будет три плюс пять?'
+            return ''
+        adapter=self.setup_adapter(stt,continuous_input=True);authority=Authority('hub','compute')
+        adapter.advance(authority,operator(time.monotonic()))
+        def submit(sequence):return adapter.submit(bytes([sequence,0])*320,source_boot='capture',sequence=sequence,
+            captured_end=time.monotonic(),authority=authority,operator_binding=('agent',1,0))
+        self.assertTrue(submit(1));adapter.advance(authority,operator(time.monotonic()))
+        self.assertTrue(entered.wait(.5))
+        self.assertTrue(submit(2));release.set();self.drain(adapter)
+        event=adapter.advance(authority,operator(time.monotonic()))
+        self.assertEqual(event['text'],'Сколько будет три плюс пять?')
+        newer=replace(authority,interaction_epoch=1,speech_epoch=1)
+        adapter.advance(newer,operator(time.monotonic()));self.drain(adapter)
+        self.assertIsNone(adapter.advance(newer,operator(time.monotonic())))
+        self.assertEqual(adapter.status()['counts']['completed'],1)
+        self.assertEqual(adapter.status()['counts']['no_response'],1)
+
+    def test_continuous_input_never_crosses_microphone_authority(self):
+        from dataclasses import replace
+        from reachy_companion.autonomous.contracts import Authority
+        entered=threading.Event();release=threading.Event()
+        adapter=self.setup_adapter(lambda pcm:(entered.set(),release.wait(1),'old question')[-1],continuous_input=True)
+        authority=Authority('hub','compute');adapter.advance(authority,operator(time.monotonic()))
+        adapter.submit(b'\0\0'*320,source_boot='capture',sequence=1,captured_end=time.monotonic(),
+            authority=authority,operator_binding=('agent',1,0))
+        adapter.advance(authority,operator(time.monotonic()));self.assertTrue(entered.wait(.5))
+        newer=replace(authority,microphone_epoch=2)
+        adapter.advance(newer,operator(time.monotonic(),epoch=2));release.set();self.drain(adapter)
+        self.assertIsNone(adapter.advance(newer,operator(time.monotonic(),epoch=2)))
 
     def test_echo_duplicate_and_old_capture_do_not_dispatch(self):
         calls=[];adapter=self.setup_adapter(lambda pcm:calls.append(1) or 'echo')

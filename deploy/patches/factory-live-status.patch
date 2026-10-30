@@ -1,0 +1,10 @@
+--- a/reachy_mini/daemon/backend/robot/backend.py
++++ b/reachy_mini/daemon/backend/robot/backend.py
+@@ -323,6 +323,8 @@
+     def get_status(self) -> "RobotBackendStatus":
+         """Get the current status of the robot backend."""
+         self._status.error = self.error
++        self._status.ready = self.ready.is_set()
++        self._status.last_alive = self.last_alive
+         self._status.motor_control_mode = self.motor_control_mode
+         return self._status

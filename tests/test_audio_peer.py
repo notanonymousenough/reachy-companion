@@ -18,6 +18,16 @@ class Backend(ReplayPCM):
 
 
 class PeerTests(unittest.TestCase):
+    def test_stale_level_during_playback_is_omitted_from_observation(self):
+        peer,_=self.setup_peer()
+        self.call(peer,'/lease')
+        peer.audio_level=dict(rms=.1,delta=0,captured_end=time.monotonic()-.3)
+        result=self.call(peer,'/observation')
+        self.assertNotIn('audio_level',result)
+        self.assertIsNone(result['observation'])
+        peer.audio_level['captured_end']=time.monotonic()
+        self.assertIn('audio_level',self.call(peer,'/observation'))
+
     def setup_peer(self):
         self.actual=dict(agent_boot_id='agent',microphone_epoch=2,microphone_owner_id='owner',
             microphone_enabled=True,microphone_state_error=None,phase='paused',listening=False,

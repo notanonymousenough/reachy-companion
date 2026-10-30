@@ -44,7 +44,7 @@ def load(path):
         raise ValueError('Native Agent owns capture/main/reply; no second executor')
     if native.get('enabled') and config['models']['fast'].get('projection', 'full') != 'full':
         raise ValueError('Native metadata requires full fast projection')
-    if config['version'] != 1 or config['actuators'] not in ('simulated','bounded_native_antenna17') or config['export_enabled']:
+    if config['version'] != 1 or config['actuators'] not in ('simulated','bounded_native_antenna17') or (config['export_enabled'] and not config.get('production')):
         raise ValueError('Unsupported actor mode/export')
     motion=config.get('motion',{'enabled':False})
     if type(motion.get('enabled')) is not bool or (config['actuators']=='bounded_native_antenna17')!=motion['enabled']:
@@ -124,6 +124,7 @@ def load(path):
                 raise ValueError('Token transport requires HTTPS or localhost SSH tunnel')
     for role in ('fast', 'main'):
         model = config['models'][role]
+        if type(model.get('direct_speech',True)) is not bool:raise ValueError('Boolean direct speech permission')
         for key in ('context_tokens', 'input_cap_tokens', 'template_cap_tokens', 'output_tokens', 'reserve_tokens'):
             if type(model[key]) is not int or model[key] < 1:
                 raise ValueError('Invalid model budget')
@@ -163,4 +164,38 @@ def load(path):
             url = urlsplit(model['base_url'])
             if url.scheme not in ('http', 'https') or not url.hostname or url.username or url.password:
                 raise ValueError('Invalid model URL')
+    production=config.get('production',{})
+    if production:
+        import math
+        if not isinstance(production,dict) or set(production)-{'state_path','outbox_cap','overload_latency_s','overload_queue','memory_refresh_s','character_refresh_s','sensors','tools','delivery','updates'}:
+            raise ValueError('Production settings')
+        if not isinstance(production.get('state_path'),str) or not production['state_path']:raise ValueError('Durable state path required')
+        for key,default,low,high in [('overload_latency_s',10,.1,120),('overload_queue',6,1,16),('outbox_cap',10000,10,1000000),('memory_refresh_s',60,10,86400),('character_refresh_s',3600,60,604800)]:
+            value=production.get(key,default)
+            if type(value) not in (int,float) or not math.isfinite(value) or not low<=value<=high:raise ValueError('Production bound '+key)
+        for group in ('sensors','tools'):
+            entries=production.get(group,{})
+            if not isinstance(entries,dict) or len(entries)>(12 if group=='sensors' else 16):raise ValueError('IO capacity')
+            for name,item in entries.items():
+                if not isinstance(name,str) or not 1<=len(name)<=128 or not isinstance(item,dict):raise ValueError('IO identity')
+                from .production import http_reader
+                http_reader(item,tool=group=='tools') # validates only; performs no IO
+                if group=='sensors' and (not isinstance(item.get('source_id'),str) or not 1<=len(item['source_id'])<=128):raise ValueError('Sensor source')
+                for key,default,low,high in [('period_s',.5,.05,60),('timeout_s',2,.05,30)]:
+                    value=item.get(key,default)
+                    if type(value) not in (int,float) or not math.isfinite(value) or not low<=value<=high:raise ValueError('IO timing')
+        updates=production.get('updates',{})
+        if updates:
+            if type(updates.get('enabled')) is not bool:raise ValueError('Updates enable flag')
+            if updates['enabled']:
+                from .production import http_reader
+                http_reader(updates,updates=True)
+        delivery=production.get('delivery',{})
+        if not isinstance(delivery,dict) or set(delivery)-{'s3','vps'}:raise ValueError('Delivery destination')
+        from .durable import Delivery
+        for destination,item in delivery.items():
+            if type(item.get('enabled')) is not bool:raise ValueError('Delivery enable flag')
+            if item['enabled']:
+                if config['export_enabled'] is not True:raise ValueError('Delivery requires explicit export_enabled')
+                Delivery(destination,item)
     return copy.deepcopy(config)

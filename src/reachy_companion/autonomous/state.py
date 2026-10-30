@@ -43,6 +43,9 @@ class State:
         self.speech_attached=False;self.speech_proposals=deque(maxlen=1)
         self.speech_operator_signature=None
         self.audio_source_bound=False
+        self.production=False;self.stopped=False;self.overload='ACTIVE'
+        self.character={};self.durable_revision=-1;self.services=None
+        self.tool_results={};self.working={};self.log_sink=None;self.dialogue_at=None
 
     @property
     def privacy(self):return self._privacy
@@ -59,6 +62,7 @@ class State:
             self.context_received=None;self.memory_items.clear()
             self.candidates.clear();self.candidate_kinds.clear();self.current_utterance=''
             self.speech_proposals.clear()
+            self.tool_results.clear();self.working.clear()
 
     def set_speech_operator(self,receipt):
         signature=(tuple(receipt['binding']),receipt['microphone_enabled'],receipt['quiet'],receipt['privacy_all'])
@@ -69,6 +73,7 @@ class State:
         self.revision+=1;self.candidates.clear();self.candidate_kinds.clear();self.current_utterance=''
         self.speech_proposals.clear()
         self.muted=not receipt['microphone_enabled'];self.quiet=receipt['quiet'];self.privacy=receipt['privacy_all']
+        if self.production and self.muted:self.sensors={k:v for k,v in self.sensors.items() if not k.startswith('audio')}
         self.record('speech_operator_changed')
 
     def set_actor(self,receipt):
@@ -85,7 +90,9 @@ class State:
 
     def record(self, kind, **values):
         self.counts[kind] += 1
-        self.ledger.append(dict(kind=kind, at=utc(), **values))
+        event=dict(kind=kind, at=utc(), **values)
+        self.ledger.append(event)
+        if self.log_sink:self.log_sink(event)
 
     def set_compute_boot(self, boot, generation):
         """Trusted owner handshake only; completions never call this method."""
@@ -103,11 +110,18 @@ class State:
 
     def ingest(self, event, now):
         kind = event.get('type')
+        if kind == 'stop':
+            self.stopped=True
+            self.authority=replace(self.authority,operator_epoch=self.authority.operator_epoch+1)
+            self.candidates.clear();self.speech_proposals.clear();self.motion_proposals.clear()
+            self.record('stop');return
         if kind == 'operator':
             # Even unmute increments epochs; old actions cannot regain authority.
             if not isinstance(event.get('muted'), bool):
                 raise ValueError('operator muted must be boolean')
             self.muted = event['muted']
+            if self.muted and self.production:
+                self.sensors={k:v for k,v in self.sensors.items() if not k.startswith('audio')}
             if 'privacy_all' in event:
                 if type(event['privacy_all']) is not bool:raise ValueError('Privacy flag must be boolean')
                 self.privacy=event['privacy_all']
@@ -135,9 +149,13 @@ class State:
             self.candidates[ref] = text
             self.candidate_kinds[ref] = "main"
             self.current_utterance = text
+            self.dialogue_at=now
+            if self.production:self.working['last_input']=utc()+' historical transcript (speaker unknown): '+text[:400]
             self.record('new_turn')
             if event.get('audio'):
                 audio=event['audio']
+                if self.production:
+                    self.sensors['audio.transcript']=Sensor('audio.transcript',text[:256],now-audio['capture_age_ms']/1000,2,'available',audio['source_boot'])
                 self.record('audio_turn',source_boot=audio['source_boot'],sequence=audio['sequence'],
                     lineage_id=audio['lineage_id'],origin=audio['origin'],
                     speaker_identity='unknown',confirmed=False,capture_age_ms=audio['capture_age_ms'])
@@ -164,8 +182,10 @@ class State:
             age, ttl = event.get('age_ms', 0), event.get('ttl_ms', 5000)
             if type(age) is not int or age < 0 or type(ttl) is not int or not 1 <= ttl <= 60000:
                 raise ValueError('invalid sensor times')
+            source=event.get('source_id','unspecified')
+            if not isinstance(source,str) or not 1<=len(source)<=128:raise ValueError('Sensor source bound')
             captured = now - age / 1000 if availability == 'available' else None
-            self.sensors[name] = Sensor(name, summary if captured is not None else '', captured, ttl / 1000, availability)
+            self.sensors[name] = Sensor(name, summary if captured is not None else '', captured, ttl / 1000, availability, event.get('source_id','unspecified'))
         else:
             raise ValueError('unknown replay event')
         self.revision += 1
@@ -219,7 +239,7 @@ class State:
         return start<=now and (end is None or now<end)
 
     def memory_current(self,task):
-        return all(self.memory_digest(alias)==digest for alias,digest in task.memory_dependencies)
+        return (not self.production or task.durable_revision==self.durable_revision) and all(self.memory_digest(alias)==digest for alias,digest in task.memory_dependencies)
 
     def context_view(self,now):
         sensors=json.loads(json.dumps(self.context_sensors))
@@ -259,7 +279,7 @@ class State:
                 expires = datetime.now(timezone.utc) + timedelta(seconds=max(0, task.expires-now))
                 ready.append(dict(alias=task.task_id, summary=task.result[:256],
                                   expires_at=expires.isoformat().replace('+00:00', 'Z')))
-        view = dict(schema_version='1.1', at=utc(), mode='ACTIVE',
+        view = dict(schema_version='1.1', at=utc(), mode='WITHDRAWN' if self.stopped else 'PRESSURED' if self.overload!='ACTIVE' else 'ACTIVE',
             op=dict(microphone_enabled=not self.muted, privacy_all=self.privacy, quiet=self.quiet,
                     motion_allowed=self.motion_allowed and now<self.actor_deadline and not self.privacy and not self.quiet, operator_epoch=self.authority.operator_epoch,
                     microphone_epoch=self.authority.microphone_epoch, interaction_epoch=self.authority.interaction_epoch,
@@ -274,6 +294,16 @@ class State:
             pending=[] if self.privacy else pending[:8], ready=[] if self.privacy else ready[:4],
             candidates=[dict(alias=k, kind=self.candidate_kinds[k], summary=v[:256]) for k,v in self.candidates.items()][:8],
             evidence_aliases=[])
+        if self.production:
+            view['scene']='Distributed companion. Unknown sensors are unknown; stale observations are historical.'
+            view['personality']='' if self.privacy else self.character.get('personality','')
+            view['principles']='STOP/privacy/ownership/physical guards are enforced outside the model. '+('' if self.privacy else self.character.get('principles',''))[:400]
+            view['goal']=None if self.privacy else self.character.get('goal')
+            if self.dialogue_at is None or now-self.dialogue_at>10:view['dialogue']=''
+            view['runtime']=dict(revision=self.durable_revision,phase=self.overload,
+                memory_inference='' if self.privacy else self.character.get('memory',''),
+                tools=[name for name in self.services.tools if name not in self.services.unresolved] if self.services and not self.privacy else [],
+                results={} if self.privacy else dict(self.tool_results),working={} if self.privacy else dict(self.working))
         return validate('FastView', view)
 
     def dependency_digest(self, alias, now):
@@ -291,20 +321,26 @@ class State:
         ready = tuple(t.task_id for t in self.tasks.values() if t.status == 'ready')[:4]
         return Binding(uid(), self.authority, self.revision, now + timeout,
                        candidates, ready, (),
-                       tuple((alias, self.dependency_digest(alias, now)) for alias in candidates + ready))
+                       tuple((alias, self.dependency_digest(alias, now)) for alias in candidates + ready),durable_revision=self.durable_revision)
 
     def apply(self, value, binding, now):
         validate('FastChoice', value)
-        if binding.authority != self.authority or now > binding.deadline:
+        if self.stopped or self.overload!='ACTIVE' or (self.production and binding.durable_revision!=self.durable_revision) or binding.authority != self.authority or now > binding.deadline:
             self.record('decision_stale', request_id=binding.request_id); return None
         if binding.request_id in self.consumed:
             self.record('decision_duplicate'); return None
         motion=value.get('motion')
         if motion and (motion!='attentive' or not self.motion_allowed or now>=self.actor_deadline or self.quiet or self.privacy
-                or not self.actor_binding or value.get('start') or value.get('commit')):
+                or not self.actor_binding or (not self.production and (value.get('start') or value.get('commit')))):
             self.record('motion_capability_rejected');return None
-        if value.get('say') or value.get('goal_review') or value.get('e'):
+        if (value.get('say') and not self.production) or value.get('goal_review') or value.get('e'):
             self.record('capability_rejected'); return None
+        if (value.get('update') or value.get('tool')) and not (self.production and self.services):
+            self.record('capability_rejected');return None
+        if value.get('say') and (self.muted or self.privacy or self.quiet):
+            self.record('muted_action_rejected');return None
+        if value.get('say') and self.config['models']['fast'].get('direct_speech',True) is False:
+            self.record('capability_rejected');return None
         focus = value.get('focus')
         known = set(binding.candidates) | set(binding.ready)
         if focus is not None and focus not in known:
@@ -312,7 +348,7 @@ class State:
         start, commit = value.get('start'), value.get('commit')
         if start and commit:
             self.record('capability_rejected'); return None
-        if (start or commit) and (self.muted or self.privacy):
+        if (start or commit) and (self.privacy or (self.muted and (commit or not self.production))):
             self.record('muted_action_rejected'); return None
         if start and (start['input_ref'] not in binding.candidates or start['type'] != self.candidate_kinds.get(start['input_ref'])):
             self.record('alias_rejected'); return None
@@ -329,8 +365,20 @@ class State:
         refs = [ref for ref in (focus, start['input_ref'] if start else None, commit) if ref is not None]
         if any(dependencies.get(ref) is None or dependencies[ref] != self.dependency_digest(ref, now) for ref in refs):
             self.record('dependency_changed'); return None
+        if value.get('update'):
+            update=value['update']
+            self.services.update(update['patch'],update['expected_revision'],update['reason'],now)
+        if value.get('tool'):
+            tool=value['tool']
+            self.services.start_tool(tool['name'],tool['argument'],binding,now)
         self.consumed.append(binding.request_id)
+        if value.get('say') and self.speech_attached:
+            if self.production:self.working['last_speech_proposal']=utc()+' '+value['say']
+            self.speech_proposals.append(dict(text=value['say'],request_id=binding.request_id,
+                authority=self.authority,deadline=now+10))
+            self.record('speech_proposed')
         self.previous.append(value['a'] + ': ' + value['why'])
+        if self.production:self.working['last_decision']=utc()+' '+value['a']+': '+value['why']
         self.focus = focus
         self.record('decision_accepted', request_id=binding.request_id, activity=value['a'])
         if motion:
@@ -343,6 +391,7 @@ class State:
                 if task and task.status=='ready':task.status='discarded';task.result=None
                 self.record('proposal_stale'); return None
             task.status = 'committed'
+            if self.production:self.working['last_speech_proposal']=utc()+' '+task.result[:400]
             if self.speech_attached:
                 if isinstance(task.result,str) and 0<len(task.result)<=1024:
                     self.speech_proposals.append(dict(text=task.result,request_id=binding.request_id,authority=self.authority,
@@ -358,12 +407,21 @@ class State:
             task = Task(uid(), uid(), ref, self.candidates.pop(ref), self.authority, now,
                         now+self.config['task_timeout_s'], kind=self.candidate_kinds.pop(ref))
             task.memory_store_id=self.memory_store_id;task.memory_revision=self.memory_revision
+            task.durable_revision=self.durable_revision
             if task.kind=='main' and (self.memory_items or self.context_sensors):
                 active_memory={alias:item for alias,item in self.memory_items.items() if self.memory_valid(item)}
                 observations=[sensor for sensor in self.context_view(now) if sensor['state']=='fresh'
                     and sensor.get('age_bounds_ms',{}).get('upper') is not None and sensor['age_bounds_ms']['upper']<=2000]
                 task.prompt=dict(schema_version='context-1',utterance=task.prompt,memory=list(active_memory.values()),observations=observations)
                 task.memory_dependencies=tuple((alias,hashlib.sha256(json.dumps(item,sort_keys=True,ensure_ascii=False).encode()).hexdigest()) for alias,item in active_memory.items())
+            if self.production and task.kind=='main':
+                active_memory={alias:item for alias,item in self.memory_items.items() if self.memory_valid(item)}
+                task.prompt=dict(schema_version='companion-1',utterance=(task.prompt['utterance'] if isinstance(task.prompt,dict) else task.prompt),
+                    memory=list(active_memory.values()),observations=[sensor for sensor in self.snapshot(now)['sensors'] if sensor['state'] in ('ready','fresh')],
+                    state=dict(character=self.character,recent=list(dict.fromkeys(self.previous))[-4:],
+                        working={key:value for key,value in self.working.items() if key in ('last_input','last_speech_proposal')},tools=dict(self.tool_results),
+                        self_directed=ref.startswith('autonomous:')))
+                task.memory_dependencies=tuple((alias,self.memory_digest(alias)) for alias in active_memory)
             self.tasks[task.task_id] = task
             self.record('task_started', task_id=task.task_id)
             return task
@@ -381,6 +439,10 @@ class State:
             try:task.completion_provenance=checked_final(task,result,provenance)
             except ValueError:
                 task.status='failed';self.record('task_final_provenance_rejected',task_id=task_id);return
+        if self.production:self.working['last_main_result']=utc()+' model inference: '+result[:400]
+        if self.production and task.input_ref.startswith('autonomous:') and result.strip()=='[SILENT]':
+            task.status='discarded';task.result=None
+            self.record('private_reflection_completed',task_id=task_id);return
         task.completed_at=now
         task.status, task.result = 'ready', result
         task.expires = now + self.config['proposal_ttl_s']

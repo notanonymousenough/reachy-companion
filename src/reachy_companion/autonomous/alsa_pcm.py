@@ -14,7 +14,7 @@ class AlsaPCM:
         path=ctypes.util.find_library('asound')
         if not path:raise RuntimeError('libasound unavailable')
         self.lib=C.CDLL(path);self.device=device;self.lock=threading.Lock()
-        self.stream=None;self.handle=None;self.stopped=True;self.written=0;self.cursor=0;self.final={};self.drained=False
+        self.stream=None;self.handle=None;self.stopped=True;self.written=0;self.cursor=0;self.final={};self.drained=False;self.draining=False
         signatures=dict(snd_pcm_open=(C.c_int,[C.POINTER(C.c_void_p),C.c_char_p,C.c_int,C.c_int]),
             snd_pcm_set_params=(C.c_int,[C.c_void_p,C.c_int,C.c_int,C.c_uint,C.c_uint,C.c_int,C.c_uint]),
             snd_pcm_writei=(C.c_long,[C.c_void_p,C.c_void_p,C.c_ulong]),
@@ -27,7 +27,7 @@ class AlsaPCM:
     def reserve(self,stream):
         with self.lock:
             if not self.stopped or self.handle:raise RuntimeError('PCM owner still active')
-            self.stream=stream;self.stopped=False;self.written=self.cursor=0;self.final={};self.drained=False;self.drained=False
+            self.stream=stream;self.stopped=False;self.written=self.cursor=0;self.final={};self.drained=False;self.draining=False
 
     def start(self,stream,rate):
         with self.lock:
@@ -47,9 +47,14 @@ class AlsaPCM:
             self.written+=n;return n
 
     def measured(self):
-        if self.lib.snd_pcm_state(self.handle) not in (2,3,5,6):raise RuntimeError('PCM state/cursor unknown')
+        state=self.lib.snd_pcm_state(self.handle)
+        if state==1 and self.draining:
+            self.drained=True;self.cursor=self.written;return self.cursor
+        if state not in (2,3,5,6):raise RuntimeError('PCM state/cursor unknown')
         delay=C.c_long()
         if self.lib.snd_pcm_delay(self.handle,C.byref(delay))<0 or not 0<=delay.value<=self.written:
+            if self.draining and self.lib.snd_pcm_state(self.handle)==1:
+                self.drained=True;self.cursor=self.written;return self.cursor
             raise RuntimeError('PCM delay unknown')
         cursor=self.written-delay.value
         if cursor<self.cursor:raise RuntimeError('PCM cursor regressed')
@@ -60,7 +65,7 @@ class AlsaPCM:
             if stream!=self.stream or self.stopped:raise RuntimeError('PCM withdrawn')
             if self.drained:return True
             value=self.lib.snd_pcm_drain(self.handle)
-            if value==-11:return False
+            if value==-11:self.draining=True;return False
             if value<0 or self.lib.snd_pcm_state(self.handle)!=1:raise RuntimeError('PCM drain unknown')
             self.drained=True;self.cursor=self.written;return True
 
@@ -89,5 +94,6 @@ class AlsaPCM:
             else:cursor=0  # withdrawn before start, no audio submitted
             self.stopped=True
             self.final=dict(stream_id=stream,verified_stopped=known,verified=cursor is not None,
-                consumed_frames=cursor,provenance='device_consumed_pcm')
+                consumed_frames=cursor,provenance='device_consumed_pcm',
+                cancelled_without_cursor=known and cursor is None)
             return self.final

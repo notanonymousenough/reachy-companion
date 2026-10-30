@@ -45,6 +45,7 @@ def occupied(scheduler,poller,lease,peer_job=None,health_job=None,stop_job=None,
     result.update(audio=scheduler.audio_adapter.status()['execution_busy'],
         speech=scheduler.speech_adapter.status()['execution_busy'],
         peer_poll=poller.status()['execution_busy'],lease=lease.status()['execution_busy'])
+    if scheduler.services:result['background']=bool(scheduler.services.busy())
     if scheduler.motion_adapter:result['motion']=result['motion'] or scheduler.motion_adapter.status()['execution_busy']
     return result
 
@@ -80,7 +81,7 @@ def run_session(scheduler,poller,lease,client,stop_client,source,stop,duration,p
     if lifetime=='lease' and (duration is not None or lease.source_boot!=source):raise ValueError('Explicit owned lease lifetime without finite duration')
     startup=PeerStartup(source);peer_job=health_job=stop_job=None
     retire_job=None;media_close_job=None;retiring_terminal=None;next_retire=0;peer_receipt=None
-    next_peer=next_health=0;started=time.monotonic();last_health=last_operator=started
+    next_peer=next_health=next_publish=0;started=time.monotonic();last_health=last_operator=started
     reason='duration';errors=[];ready_seen=False
     report=dict(mode='normal_joined_companion',continuous=lifetime=='lease',continuous_acceptance=False,lifetime=lifetime,accepted=False,
         device_lifetime_cap_s=180 if lifetime=='finite' else None,device_stream_cap=32 if lifetime=='finite' else 1,raw_audio_retained=False,
@@ -104,7 +105,7 @@ def run_session(scheduler,poller,lease,client,stop_client,source,stop,duration,p
                     startup.observe(peer_receipt,lease.last_accepted is not None)
                 except Exception as exc:peer_receipt=None;startup.failure(type(exc).__name__)
                 peer_job=None
-            if startup.advance()=='WITHDRAWN':reason=startup.reason;break
+            if startup.advance()=='WITHDRAWN' and not scheduler.production:reason=startup.reason;break
             if not peer_job and now>=next_peer:
                 peer_job=Job(client.call,'/status');next_peer=now+.1
             if health_job and health_job.future.done():
@@ -113,7 +114,7 @@ def run_session(scheduler,poller,lease,client,stop_client,source,stop,duration,p
                     raise RuntimeError('Compute owner changed or completion unknown; no automatic reconnect')
                 last_health=now
             if now-last_health>=.5:raise RuntimeError('Compute health expired; occupied calls retained')
-            if lifetime=='lease' and lease.status()['withdrawn']:raise RuntimeError('Lease withdrawal is latched')
+            if lifetime=='lease' and lease.status()['withdrawn'] and not scheduler.production:raise RuntimeError('Lease withdrawal is latched')
             if not health_job and now>=next_health:
                 health_job=Job(scheduler.gateway.call,'/health');next_health=now+.2
             scheduler.speech_adapter.advance(scheduler.state.authority)
@@ -123,6 +124,7 @@ def run_session(scheduler,poller,lease,client,stop_client,source,stop,duration,p
                 if motion_identity is not None and operator['binding'][0]!=motion_identity['agent_boot_id']:
                     raise RuntimeError('Speaker and motor belong to different physical operator boots')
             if now-last_operator>=.5:raise RuntimeError('Local operator receipt expired; no automatic recovery')
+            if scheduler.production and startup.phase!='ACTIVE':scheduler.advance()
             if startup.phase=='ACTIVE':
                 if lifetime=='lease':
                     backend=scheduler.speech_adapter.playback.backend
@@ -162,14 +164,23 @@ def run_session(scheduler,poller,lease,client,stop_client,source,stop,duration,p
                     and current['quiet'] is False and current['privacy_all'] is False
                     and tuple(current['binding'])==(lease.authority['agent_boot_id'],lease.authority['microphone_epoch'],lease.authority['policy_epoch']))
                 if valid:lease.tick(lease.authority)
-                elif lease.armed:lease.close();raise RuntimeError('Fresh complete lease authority required')
-            publish(dict(stage=startup.phase,elapsed_s=now-started,counts=dict(scheduler.state.counts),
-                listening_ready=startup.phase=='ACTIVE' and scheduler.audio_adapter.allowed
-                    and scheduler.speech_adapter.operator_view() is not None,
-                peer=startup.status(),execution_busy=occupied(scheduler,poller,lease,peer_job,health_job,retire_job=retire_job)))
+                elif lease.armed:
+                    lease.close()
+                    if not scheduler.production:raise RuntimeError('Fresh complete lease authority required')
+            if now>=next_publish:
+                next_publish=now+.05
+                publish(dict(stage=startup.phase,elapsed_s=now-started,counts=dict(scheduler.state.counts),
+                    audio=scheduler.audio_adapter.status(),peer_poll=poller.status(),lease=lease.status(),
+                    speech=scheduler.speech_adapter.status(),
+                    cycle_phase=scheduler.state.overload,background=scheduler.services.status() if scheduler.services else None,
+                    listening_ready=startup.phase=='ACTIVE' and scheduler.audio_adapter.allowed
+                        and scheduler.speech_adapter.operator_view() is not None,
+                    peer=startup.status(),execution_busy=occupied(scheduler,poller,lease,peer_job,health_job,retire_job=retire_job)))
             stop.wait(.005)
         if stop.is_set():reason='controller_stop'
     except BaseException as exc:
+        import logging
+        logging.getLogger(__name__).exception('Production session failed')
         reason='runtime_error';errors.append(type(exc).__name__)
     finally:
         stop.set();startup.close()
@@ -195,6 +206,7 @@ def run_session(scheduler,poller,lease,client,stop_client,source,stop,duration,p
             try:peer_stop=stop_job.future.result()
             except Exception as exc:errors.append(type(exc).__name__)
         report.update(reason=reason,errors=errors,elapsed_s=time.monotonic()-started,
+            background=scheduler.services.status() if scheduler.services else None,
             listening_ready_seen=ready_seen,
             counts=dict(scheduler.state.counts),peer_stop=peer_stop,
             peer_stop_execution_busy=not stop_job.future.done(),
@@ -235,6 +247,7 @@ def main():
     parser.add_argument('--lifetime',choices=('finite','lease'),default='finite')
     parser.add_argument('--duration',type=float);parser.add_argument('--status-port',type=int,default=8791)
     parser.add_argument('--lease-datagram-port',type=int);parser.add_argument('--trusted-private-lan',action='store_true')
+    parser.add_argument('--lease-progress-s',type=float,default=.1)
     parser.add_argument('--allow-capture-output',action='store_true');parser.add_argument('--allow-bounded-motion',action='store_true')
     parser.add_argument('--allow-camera-context',action='store_true')
     parser.add_argument('--memory-readback',type=Path);parser.add_argument('--memory-readback-sha256')
@@ -293,15 +306,21 @@ def main():
             if (not isinstance(actor.get('hold'),dict) or actor['hold'].get('verified') is not True
                     or actor['hold'].get('trajectory_updates_after_hold')!=0):raise ValueError('Current physical hold proof required')
             if not motion.refresh()['motion_allowed']:raise ValueError('Current bounded motor owner not ready')
-        audio=AudioAdapter(HttpSTT(companion['network']['compute_url'],companion.token))
+        audio=AudioAdapter(HttpSTT(companion['network']['compute_url'],companion.token),
+            **({'continuous_input':True} if cfg.get('production') else {}))
         pcm=Playback(RemotePCM(client,stop_port=args.peer_stop_port,source_boot=args.source_boot,
             max_streams=32 if args.lifetime=='finite' else None,lifetime=args.lifetime),chunk_frames=4096,motion=motion)
         speech=SpeechAdapter(pcm,HttpTTS(companion['network']['voice_url'],companion.token,
             gain=cfg.get('speech',{}).get('tts_gain',1)),lambda:hub.agent('/operator'))
         poller=AudioPolling(client,audio,args.source_boot)
         scheduler=Scheduler(cfg,gateway,motion,speech,audio)
-        datagram=DatagramRenewal(client,args.source_boot,args.lease_datagram_port,authority=authority) if args.lease_datagram_port is not None else None
-        lease=PeerLease(client,datagram=datagram,**({'source_boot':args.source_boot,'authority':authority} if authority is not None else {}))
+        from .production import attach
+        if cfg.get('production'):
+            attach(scheduler,args.config)
+        datagram=DatagramRenewal(client,args.source_boot,args.lease_datagram_port,authority=authority,
+            retries=1 if cfg.get('production') else 0) if args.lease_datagram_port is not None else None
+        lease=PeerLease(client,datagram=datagram,progress_timeout_s=args.lease_progress_s,
+            **({'source_boot':args.source_boot,'authority':authority} if authority is not None else {}))
         report=run_session(scheduler,poller,lease,client,stop_client,args.source_boot,stop,args.duration,publish,lifetime=args.lifetime)
     except BaseException as exc:
         report=dict(mode='normal_joined_companion',accepted=False,cleanup_verified=False,

@@ -1,7 +1,8 @@
 """Typed authority and bounded projection; wire validation uses the design schema."""
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from functools import lru_cache
 import json
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -60,6 +61,7 @@ class Binding:
     ready: tuple[str, ...]
     evidence: tuple[str, ...]
     dependencies: tuple[tuple[str, str], ...]
+    durable_revision: int = field(default=-1, kw_only=True)
 
 
 @dataclass
@@ -69,6 +71,7 @@ class Sensor:
     captured: float | None
     ttl: float
     availability: str = 'available'
+    source_id: str = 'unspecified'
 
     def view(self, now, muted):
         if muted and self.sensor_id.startswith('audio'):
@@ -78,7 +81,8 @@ class Sensor:
         if state == 'available':
             state = 'no_data' if age is None else ('ready' if now - self.captured <= self.ttl else 'stale')
         return dict(id=self.sensor_id, state=state, age_ms=age,
-                    summary=self.summary if state in ('ready', 'stale') else '')
+                    summary=self.summary if state == 'ready' else '', source_id=self.source_id, ttl_ms=int(self.ttl*1000),
+                    captured_at=None if age is None else (datetime.now(timezone.utc)-timedelta(milliseconds=age)).isoformat().replace('+00:00','Z'))
 
 
 @dataclass
@@ -99,3 +103,4 @@ class Task:
     completion_provenance: dict | None = None
     memory_store_id: str | None = None
     memory_revision: int = -1
+    durable_revision: int = -1

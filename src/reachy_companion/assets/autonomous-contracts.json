@@ -2759,6 +2759,64 @@
             "maxLength": 256
           },
           "maxItems": 4
+        },
+        "update": {
+          "type": "object",
+          "properties": {
+            "expected_revision": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 240
+            },
+            "patch": {
+              "type": "object",
+              "minProperties": 1,
+              "properties": {
+                "personality": {
+                  "type": "string",
+                  "maxLength": 512
+                },
+                "principles": {
+                  "type": "string",
+                  "maxLength": 512
+                },
+                "goal": {
+                  "type": "string",
+                  "maxLength": 512
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "expected_revision",
+            "reason",
+            "patch"
+          ],
+          "additionalProperties": false
+        },
+        "tool": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "argument": {
+              "type": "string",
+              "maxLength": 1024
+            }
+          },
+          "required": [
+            "name",
+            "argument"
+          ],
+          "additionalProperties": false
         }
       },
       "required": [
@@ -2992,6 +3050,61 @@
             "maxLength": 256
           },
           "maxItems": 16
+        },
+        "runtime": {
+          "type": "object",
+          "properties": {
+            "revision": {
+              "type": "integer"
+            },
+            "phase": {
+              "type": "string"
+            },
+            "memory_inference": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "tools": {
+              "type": "array",
+              "maxItems": 16,
+              "items": {
+                "type": "string",
+                "maxLength": 128
+              }
+            },
+            "results": {
+              "type": "object",
+              "maxProperties": 16,
+              "additionalProperties": {
+                "type": "string",
+                "maxLength": 2048
+              }
+            },
+            "latency_s": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "number",
+                "minimum": 0
+              }
+            },
+            "queue_depth": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "background_busy": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "working": {
+              "type": "object",
+              "maxProperties": 8,
+              "additionalProperties": {
+                "type": "string",
+                "maxLength": 512
+              }
+            }
+          },
+          "additionalProperties": false
         }
       },
       "required": [
@@ -3156,6 +3269,18 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 128
+        },
+        "ttl_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 60000
+        },
+        "captured_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
         }
       },
       "required": [
