@@ -10,8 +10,8 @@ import types
 import unittest
 from unittest.mock import patch
 
-from reachy_companion.r42 import semantic_observer as S
-from reachy_companion.r42 import snapshot_vision as V
+from reachy_companion import semantic_observer as S
+from reachy_companion import snapshot_vision as V
 
 
 def frame(now=None, ttl=10):
@@ -215,7 +215,7 @@ class SemanticChecks(unittest.TestCase):
         processes = []
         def popen(command, **kwargs):
             self.assertEqual(command[0],'/venvs/mini_daemon/bin/python')
-            self.assertEqual(kwargs['env']['PYTHONPATH'],str(S.Path(S.__file__).resolve().parents[2]))
+            self.assertEqual(kwargs['env']['PYTHONPATH'],str(S.Path(S.__file__).resolve().parents[1]))
             process = subprocess.Popen([sys.executable, '-c', script], **kwargs)
             if cleanup_failure:
                 original=process.stdin

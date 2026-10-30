@@ -13,10 +13,10 @@ try:
 except ImportError:
     sys.modules['webrtcvad'] = types.SimpleNamespace(Vad=Mock())
 
-from reachy_companion.r42.agent import Agent
-from reachy_companion.r42.sensory_bridge import SensoryBridge,raw_decision_payload,SYSTEM
-from reachy_companion.r42.sound_monitor import SoundMonitor
-from reachy_companion.r42 import snapshot_vision
+from reachy_companion.agent import Agent
+from reachy_companion.sensory_bridge import SensoryBridge,raw_decision_payload,SYSTEM
+from reachy_companion.sound_monitor import SoundMonitor
+from reachy_companion import snapshot_vision
 
 
 class Fixture(Agent):
@@ -120,7 +120,7 @@ class BridgeChecks(unittest.TestCase):
         inventory = dict(models=[dict(key='already-loaded', loaded_instances=[dict(id='loaded-instance')], capabilities={})])
         for patcher in (patch.object(snapshot_vision, 'native_address', return_value=('127.0.0.1', 1234)),
                         patch.object(snapshot_vision, 'get_models', return_value=inventory),
-                        patch('reachy_companion.r42.sensory_bridge.http.client.HTTPConnection', NativeConnection)):
+                        patch('reachy_companion.sensory_bridge.http.client.HTTPConnection', NativeConnection)):
             patcher.start()
             self.addCleanup(patcher.stop)
 

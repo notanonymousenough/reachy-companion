@@ -223,7 +223,8 @@ class NormalCameraTests(unittest.TestCase):
         self.assertTrue(self.gateway.main_entered.wait(1))
         before=(len(self.gateway.fast_ids),self.produced,self.poller.calls)
         accepted_before=self.scheduler.state.counts['decision_accepted']
-        self.wait(lambda:len([v for v in self.gateway.views if v['pending']])>=5)
+        self.wait(lambda:len([v for v in self.gateway.views if v['pending']])>=5
+            and self.produced>before[1] and self.poller.calls>before[2])
         pending=[v for v in self.gateway.views if v['pending']]
         frames={s['source_id'] for v in pending for s in v['sensors'] if s.get('source_id')}
         self.assertGreaterEqual(len(frames),2)

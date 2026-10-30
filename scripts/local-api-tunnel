@@ -1,5 +1,5 @@
 #!/bin/sh
-# Requires the verified reachy-mini SSH alias described in docs/local-security.md.
+# Requires a configured reachy-mini SSH alias.
 exec ssh -N -T -o BatchMode=yes -o ExitOnForwardFailure=yes \
   -o ServerAliveInterval=15 -o ServerAliveCountMax=3 \
   -L 127.0.0.1:18000:127.0.0.1:8000 \

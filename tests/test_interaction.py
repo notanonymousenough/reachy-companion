@@ -84,9 +84,9 @@ class InteractionTests(unittest.TestCase):
 
     def test_empty_interruption_waits_until_deadline_then_continues_saved_reply(self):
         a = self.agent()
-        saved = {'pcm':b'original audio','cursor':2,'cursor_verified':True,'epoch':0,'deadline':time.monotonic()+3}
+        saved = {'pcm':b'original audio','cursor':2,'cursor_verified':True,'conversation_mode':'normal','epoch':a.microphone_epoch,'deadline':time.monotonic()+3}
         a.resume_audio = saved
-        a.pending_pcm = (0, b'\x00\x00'*1600)
+        a.pending_pcm = (a.microphone_epoch, b'\x00\x00'*1600)
         def request(base, path, *args, **kwargs):
             if path == '/health': return {'ok':True}
             if path == '/status': return {'ownership':{'state':'free'}}
@@ -117,7 +117,7 @@ class InteractionTests(unittest.TestCase):
     def test_spoken_stop_drops_saved_reply_and_mutes_microphone(self):
         a = self.agent()
         a.resume_audio = {'pcm':b'old answer'}
-        a.pending_pcm = (0, b'\x00\x00'*1600)
+        a.pending_pcm = (a.microphone_epoch, b'\x00\x00'*1600)
         def request(base, path, *args, **kwargs):
             if path == '/health': return {'ok':True}
             if path == '/status': return {'ownership':{'state':'free'}}

@@ -14,9 +14,9 @@ try:
     import webrtcvad
 except ImportError:
     sys.modules['webrtcvad']=types.SimpleNamespace(Vad=Mock())
-from reachy_companion.r42.agent import Agent
-from reachy_companion.r42.capture_pump import CapturePump
-from reachy_companion.r42.barge_candidate import BargeCandidate,waveform_match,REFERENCE_BYTES,REFERENCE_MARKS,own_text_veto
+from reachy_companion.agent import Agent
+from reachy_companion.capture_pump import CapturePump
+from reachy_companion.barge_candidate import BargeCandidate,waveform_match,REFERENCE_BYTES,REFERENCE_MARKS,own_text_veto
 
 
 def pcm(frequency=213,amplitude=2000):
@@ -95,7 +95,7 @@ class CandidateTests(unittest.TestCase):
             now[0]+=.06
             c.written(future,99,'a'*32,c.reference_end,16000)
             # Simulates delayed worker after the next actual playback write.
-            with patch('reachy_companion.r42.barge_candidate.waveform_match',wraps=waveform_match) as match:
+            with patch('reachy_companion.barge_candidate.waveform_match',wraps=waveform_match) as match:
                 c._measure((own,received,c.serial,c.generation))
             self.assertTrue(match.called)
             self.assertTrue(match.call_args.args[1].endswith(own))
@@ -245,10 +245,10 @@ class CandidateTests(unittest.TestCase):
             def close(self):pass
         writes=[];original=BargeCandidate.written
         def written(c,data,*args):writes.append((data,args));return original(c,data,*args)
-        with patch('reachy_companion.r42.agent.subprocess.Popen',return_value=Player()) as popen, \
-             patch('reachy_companion.r42.agent.os.set_blocking'), \
-             patch('reachy_companion.r42.agent.os.write',side_effect=lambda fd,data:min(1600,len(data))), \
-             patch('reachy_companion.r42.agent.selectors.DefaultSelector',Selector), \
+        with patch('reachy_companion.agent.subprocess.Popen',return_value=Player()) as popen, \
+             patch('reachy_companion.agent.os.set_blocking'), \
+             patch('reachy_companion.agent.os.write',side_effect=lambda fd,data:min(1600,len(data))), \
+             patch('reachy_companion.agent.selectors.DefaultSelector',Selector), \
              patch.object(BargeCandidate,'written',written):
             result=a.voice('/text',dict(text='Вопрос'))
         self.assertTrue(result['ok'])
@@ -276,7 +276,7 @@ class CandidateTests(unittest.TestCase):
         # Exercise the actual worker -> blocking confirmation while reader offers.
         c.own_matches=3;c.echo_rms=100;c.seen=7;c.novel_run=3
         c.written(pcm(),99,'a'*32,0,16000)
-        with patch('reachy_companion.r42.barge_candidate.waveform_match',return_value=0.):
+        with patch('reachy_companion.barge_candidate.waveform_match',return_value=0.):
             c.thread.start()
             try:
                 p._publish(pcm(719,10000),time.monotonic())

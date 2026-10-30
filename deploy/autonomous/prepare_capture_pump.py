@@ -45,7 +45,7 @@ def candidate():
         if digest(output) != post:
             raise ValueError('Exact capture output mismatch')
         data[name] = output
-    helper = (ROOT/'src/reachy_companion/capture_pump.py').read_bytes()
+    helper = subprocess.check_output(['git', 'show', '73abbf37b2e62dd9be0fed8e46c49d9940d892f2:src/reachy_companion/capture_pump.py'], cwd=ROOT)
     if digest(helper) != HELPER:
         raise ValueError('Exact capture helper mismatch')
     data['capture_pump.py'] = helper

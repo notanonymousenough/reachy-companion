@@ -51,6 +51,7 @@ class StockAgentVoiceTests(unittest.TestCase):
             def do_GET(self):
                 if self.path=='/health':self.reply(dict(ok=True))
                 elif self.path=='/status':self.reply(fixture.hub.status())
+                elif self.path=='/api/move/running':self.reply([])
                 else:self.send_error(404)
             def reply(self,value,status=200):
                 body=json.dumps(value).encode()
@@ -71,10 +72,12 @@ class StockAgentVoiceTests(unittest.TestCase):
                     try:self.reply(fixture.hub.expression(payload))
                     except Exception as exc:self.reply(dict(error=type(exc).__name__),409)
                     return
-                if self.path=='/stream/turn':
+                if self.path=='/transcribe':
+                    self.reply(fixture.pipeline.transcribe_response(payload));return
+                if self.path in ('/stream/turn','/stream/text'):
                     fixture.assertFalse(fixture.agent.capture_active)
                     self.send_response(200);self.send_header('Content-Type','application/x-ndjson');self.end_headers()
-                    for event in fixture.pipeline.stream(payload,'/turn'):
+                    for event in fixture.pipeline.stream(payload,self.path.removeprefix('/stream')):
                         self.wfile.write(json.dumps(event).encode()+b'\n');self.wfile.flush()
                     return
                 self.send_error(404)
@@ -82,7 +85,7 @@ class StockAgentVoiceTests(unittest.TestCase):
         self.server_thread=threading.Thread(target=self.server.serve_forever,daemon=True);self.server_thread.start()
         self.addCleanup(self.cleanup_server)
         url='http://127.0.0.1:'+str(self.server.server_port)
-        self.config.data['network'].update(voice_url=url,hub_url=url)
+        self.config.data['network'].update(voice_url=url,hub_url=url,robot_url=url)
 
     def cleanup_agent(self):
         if self.rpc_release:self.rpc_release.set()
@@ -196,7 +199,8 @@ class StockAgentVoiceTests(unittest.TestCase):
         with patch('reachy_companion.agent.subprocess.Popen',side_effect=popen):
             actual=self.agent.capture()
         self.assertEqual(actual,capture)
-        self.assertTrue(self.rpc_entered.is_set())
+        self.assertFalse(self.rpc_entered.is_set())
+        self.assertIsNotNone(self.agent.expressions.last_error)
         self.assertEqual(self.writes,[])
         self.assertTrue(all(process.poll() is not None for process in processes))
         self.assertFalse(self.agent.capture_active)
@@ -298,7 +302,7 @@ class StockAgentVoiceTests(unittest.TestCase):
         self.assertEqual(pipeline.transcribe.call_args.args[0],capture)
         backend.assert_called_once()
         self.assertEqual(backend.call_args.args[1][-1]['content'],'fixture fresh microphone question')
-        self.assertTrue(any(path=='/stream/turn' for path,_ in self.rpc))
+        self.assertTrue(any(path=='/stream/text' for path,_ in self.rpc))
         self.assertTrue(any(path=='/actions/expression' for path,_ in self.rpc))
         self.assertTrue(self.writes)
         self.assertTrue(all('operator_binding' in body for path,body in self.rpc if path=='/actions/expression'))
@@ -346,7 +350,7 @@ class StockAgentVoiceTests(unittest.TestCase):
 
     def test_agent_profile_address_forwarded_explicitly_for_unary_and_stream_without_payload_mutation(self):
         self.config.data['conversation']['expressions']['enabled']=False
-        self.config.data['conversation']['speech_address_prefix']='Алиса, '
+        self.agent.conversation_mode.save('alice_test',self.agent.conversation_mode.snapshot()['generation'])
         payload=dict(text='Вопрос')
         self.config.data['streaming']['enabled']=False
         with patch.object(self.agent,'request',return_value=dict(ok=True,audio_base64='')) as request:
@@ -355,7 +359,7 @@ class StockAgentVoiceTests(unittest.TestCase):
         self.assertEqual(payload,dict(text='Вопрос'))
         self.config.data['streaming']['enabled']=True
         for prefix in ('Алиса, ',''):
-            self.config.data['conversation']['speech_address_prefix']=prefix
+            self.agent.conversation_mode.save('alice_test' if prefix else 'normal',self.agent.conversation_mode.snapshot()['generation'])
             response=io.BytesIO(b'{"type":"reply","reply":"fixture"}\n{"type":"done","ok":true}\n')
             response.headers=Message();response.headers['Content-Type']='application/x-ndjson'
             with patch.object(self.agent.http,'open',return_value=response) as opened:self.agent.voice('/turn',{})

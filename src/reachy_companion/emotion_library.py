@@ -9,7 +9,7 @@ from importlib.resources import files
 def catalog(name):
     if name != 'pollen-emotions-v1':
         raise ValueError('Unknown bundled emotion library')
-    return json.loads(files('reachy_companion').joinpath('assets', name+'.json').read_text())['clips']
+    return json.loads(files(__package__).joinpath('assets', name+'.json').read_text())['clips']
 
 
 def sample(settings, name, seconds, variant=0):

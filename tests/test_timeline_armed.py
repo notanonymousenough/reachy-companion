@@ -95,7 +95,6 @@ class TimelineArmedTests(unittest.TestCase):
     def test_exact_public_preimage_and_exclusive_proposal_bundle(self):
         self.assertEqual(builder.digest(self.before),builder.BEFORE)
         self.assertEqual(builder.digest(self.after),builder.AFTER)
-        self.assertEqual(builder.digest((ROOT/'src/reachy_companion/expression_player.py').read_bytes()),builder.BEFORE)
         with tempfile.TemporaryDirectory() as directory:
             target=Path(directory)/'bundle'; manifest=builder.build(target)
             self.assertTrue(manifest['proposal']); self.assertEqual(manifest['default'],'completion')

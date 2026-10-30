@@ -10,13 +10,13 @@ import types
 import unittest
 from unittest.mock import Mock, patch
 
-from reachy_companion.r42.conversation_mode import ConversationMode
+from reachy_companion.conversation_mode import ConversationMode
 with patch.dict(sys.modules, {'webrtcvad': types.SimpleNamespace(Vad=Mock())}):
-    from reachy_companion.r42.agent import Agent
-from reachy_companion.r42.durable_intent import DurableIntent
-from reachy_companion.r42.initiative import Initiative
-from reachy_companion.r42.microphone import MicrophoneState
-from reachy_companion.r42.motion_policy import MotionPolicy
+    from reachy_companion.agent import Agent
+from reachy_companion.durable_intent import DurableIntent
+from reachy_companion.initiative import Initiative
+from reachy_companion.microphone import MicrophoneState
+from reachy_companion.motion_policy import MotionPolicy
 from reachy_companion.hub import Hub
 
 
@@ -47,7 +47,7 @@ class ConversationModeTests(unittest.TestCase):
         a.phase = 'listening'
         a.config = types.SimpleNamespace(token='local-test-only')
         a.config = type('Config', (dict,), {'token': 'local-test-only'})(
-            network={'voice_url': 'http://worker.invalid'}, streaming={'enabled': False},
+            logging={}, network={'voice_url': 'http://worker.invalid'}, streaming={'enabled': False},
             limits={'max_speech_chars': 2000, 'max_text_chars': 2000},
             timeouts={'client': 1}, conversation={'speech_address_prefix': 'Алиса, '})
         a._capture_enabled = lambda: False

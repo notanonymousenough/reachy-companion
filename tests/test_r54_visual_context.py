@@ -7,8 +7,8 @@ from unittest.mock import patch
 from tests.test_r53_sensory_bridge import Fixture
 from tests.test_conversation_mode import ConversationModeTests
 from tests.test_semantic_observer import frame
-from reachy_companion.r42.semantic_observer import semantic_result
-from reachy_companion.r42.sensory_bridge import SensoryBridge
+from reachy_companion.semantic_observer import semantic_result
+from reachy_companion.sensory_bridge import SensoryBridge
 
 
 class VisualIntegration(unittest.TestCase):
@@ -23,7 +23,7 @@ class VisualIntegration(unittest.TestCase):
         ticket=b.ticket()
         observation=b.observe_sound(dict(kind='sound',top_class=67),a.microphone_epoch,time.monotonic(),.5,ticket)
         self.assertIsNotNone(observation)
-        with patch('reachy_companion.r42.sensory_bridge.http.client.HTTPConnection',side_effect=AssertionError('no model')):
+        with patch('reachy_companion.sensory_bridge.http.client.HTTPConnection',side_effect=AssertionError('no model')):
             result=b.decide(b.loop.snapshot(),threading.Event())
         self.assertEqual(result['action'],'wait')
         self.assertFalse(b.status()['sound_decisions_enabled'])
@@ -105,7 +105,7 @@ class VisualIntegration(unittest.TestCase):
         self.assertIsNone(b.visual_context())
 
     def test_privacy_clears_at_read_and_observer_withdraws_without_control_lock_reentry(self):
-        from reachy_companion.r42.semantic_observer import SemanticObserver
+        from reachy_companion.semantic_observer import SemanticObserver
         a=self.agent();b=a.sensory;b.camera_enabled=True
         release=threading.Event()
         b.camera=SemanticObserver(a.config,b.camera_authority,b.loop.publish,

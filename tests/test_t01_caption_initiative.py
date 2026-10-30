@@ -6,9 +6,9 @@ import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock,patch
-from tests import r42_fixture as f
-from reachy_companion.r42 import caption_initiative as C
-from reachy_companion.r42 import initiative as I
+from tests import initiative_fixture as f
+from reachy_companion import caption_initiative as C
+from reachy_companion import initiative as I
 
 
 class CaptionChecks(unittest.TestCase):
@@ -138,7 +138,7 @@ class CaptionChecks(unittest.TestCase):
 
     def test_knob_is_typed_and_defaults_FALSE_in_real_bridge(self):
         from tests.test_r53_sensory_bridge import Fixture
-        from reachy_companion.r42.sensory_bridge import SensoryBridge
+        from reachy_companion.sensory_bridge import SensoryBridge
         a=Fixture();self.addCleanup(a.close)
         self.assertFalse(a.sensory.caption_initiative_enabled)
         a.config['conversation']['sensory_loop']['caption_initiative_enabled']='true'
@@ -200,7 +200,7 @@ class CaptionChecks(unittest.TestCase):
 
     def test_actual_Agent_voice_authority_callback_has_no_MIC_reentry(self):
         from tests.test_conversation_mode import ConversationModeTests
-        from reachy_companion.r42.sensory_bridge import SensoryBridge
+        from reachy_companion.sensory_bridge import SensoryBridge
         fixture=ConversationModeTests();fixture.setUp();self.addCleanup(fixture.doCleanups)
         a=fixture.agent()
         a.motion_policy.save(dict(motor_enabled=True,quiet=False,privacy_all=False))
@@ -231,7 +231,7 @@ class CaptionChecks(unittest.TestCase):
         config=dict(network=dict(llm_base_url='http://127.0.0.1:1234/v1'),llm=dict(model='loaded',mode='completion',api_path='/completions',
             message_template='<|im_start|>{role}\n{content}<|im_end|>\n',assistant_prefix='<|im_start|>assistant\n<think>\n\n</think>\n\n',stop=['<|im_end|>']))
         inventory=dict(models=[dict(key='loaded',capabilities=dict(vision=True),loaded_instances=[dict(id='instance',config=dict(parallel=4))])])
-        from reachy_companion.r42 import snapshot_vision as V
+        from reachy_companion import snapshot_vision as V
         for mode in ('question','wait','invalid','transport'):
             calls=[];timeouts=[]
             answer='Что это за белая чашка?' if mode=='question' else 'НЕТ_ОСНОВАНИЯ'

@@ -123,10 +123,10 @@ class CapturePumpTests(unittest.TestCase):
         self.assertFalse(replacement.fresh(packet))
         pump.retire(); self.assertIsNone(pump.latest); self.assertEqual(pump.assembler.frames, [])
 
-    def test_return_to_idle_drops_unconfirmed_reply_tail(self):
+    def test_output_end_drops_unconfirmed_reply_tail(self):
         a, clock, pump = self.pump(); pump.mode(True)
         packet = phrase(pump, clock); self.assertIsNotNone(packet)
-        pump.mode(False)
+        pump.output(False)
         self.assertIsNone(pump.latest); self.assertEqual(pump.assembler.frames, [])
 
     def test_latest_event_probe_superseded_by_final(self):
@@ -322,7 +322,7 @@ class CapturePumpTests(unittest.TestCase):
         pump.start()
         self.assertIsNone(pump.process); self.assertEqual(len(opened), 1)
 
-    def test_read_gap_and_backlog_retire_source_without_reaging_pcm(self):
+    def test_read_gap_retires_and_backlog_discards_old_pcm_before_eof(self):
         for backlog in (False, True):
             a = agent(); clock = Clock(); process = Mock()
             process.poll.return_value = None
@@ -334,11 +334,14 @@ class CapturePumpTests(unittest.TestCase):
             selector.select.side_effect = select
             with patch('reachy_companion.capture_pump.selectors.DefaultSelector', return_value=selector), \
                     patch('reachy_companion.capture_pump.os.set_blocking'), \
-                    patch('reachy_companion.capture_pump.os.read', return_value=LOUD*2):
+                    patch('reachy_companion.capture_pump.os.read', side_effect=[LOUD*8, b'']):
                 pump._read()
             self.assertTrue(pump.retired.is_set()); self.assertIsNone(pump.latest)
             self.assertIsNone(pump.process); self.assertFalse(a.capture_active)
             self.assertEqual(pump.error, 'Capture source unavailable')
+            self.assertEqual(pump.counters['gap_events'], 0 if backlog else 1)
+            self.assertEqual(pump.counters['overflow_bytes'], len(LOUD)*7 if backlog else 0)
+            self.assertEqual(pump.counters['chunks'], 1 if backlog else 0)
             process.terminate.assert_called_once(); process.wait.assert_called_once()
 
     def test_prime_listen_false_never_opens_pump(self):

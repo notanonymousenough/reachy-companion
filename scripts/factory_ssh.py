@@ -1,10 +1,8 @@
-"""Bounded SSH/scp using the documented factory credential only in RAM."""
-import os,pathlib,pty,re,select,signal,sys,time
-readme=(pathlib.Path(__file__).resolve().parents[1] / 'README.md').read_text()
-line=next(s for s in readme.splitlines() if 'заводской пароль' in s)
-values=re.findall(r'`([^`]*)`',line)
-if len(values)!=2:raise SystemExit('Documented credential format changed')
-password=values[1];args=sys.argv[1:]
+"""Bounded SSH/scp using an environment-provided credential only in RAM."""
+import os,pty,re,select,signal,sys,time
+password=os.environ.get('REACHY_FACTORY_SSH_PASSWORD', '')
+if not password:raise SystemExit('Set REACHY_FACTORY_SSH_PASSWORD')
+args=sys.argv[1:]
 if not args or args[0] not in ('ssh','scp'):raise SystemExit('SSH/scp only')
 duration=int(os.environ.get('REACHY_FACTORY_SSH_LIFETIME_SECONDS','65'))
 if not 10<=duration<=600:raise SystemExit('Finite SSH lifetime must be 10..600 seconds')

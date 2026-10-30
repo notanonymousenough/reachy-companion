@@ -22,13 +22,8 @@ def main():
     voice.add_argument('text', nargs='?')
     agent = commands.add_parser('agent')
     agent.add_argument('action', choices=('serve', 'test-speaker'))
-    agent.add_argument('--runtime-profile', choices=('default', 'r42'))
     initiative = commands.add_parser('initiative')
     initiative.add_argument('action', choices=('status', 'arm', 'off', 'auto-status', 'auto-on', 'auto-off'))
-    initiative.add_argument('--runtime-profile', choices=('r42',), required=True)
-    runtime = commands.add_parser('runtime-profile')
-    runtime.add_argument('name', choices=('r42',))
-    runtime.add_argument('action', choices=('verify',))
     worker = commands.add_parser('worker')
     worker.add_argument('action', choices=('serve', 'prepare', 'code-identity'))
     worker.add_argument('--code-manifest', help='Expected reviewed source manifest; defaults to image manifest environment')
@@ -57,12 +52,6 @@ def main():
             if args.action == 'code-identity' or not identity['ok']:
                 print(json.dumps(identity, sort_keys=True))
                 return 0 if identity['ok'] else 2
-    if args.group == 'runtime-profile':
-        from .r42 import verify
-        manifest = verify()
-        print(json.dumps(dict(profile=manifest['profile'], version=manifest['version'],
-                              verified_files=len(manifest['files']), automatic_schedule_default=False)))
-        return 0
     from .config import Config, initialize
     if args.group == 'config' and args.action == 'init':
         print(initialize(Path.cwd()))
@@ -102,18 +91,13 @@ def main():
             from .voice import main
             main(config, worker=True)
     elif args.group == 'agent':
-        profile = args.runtime_profile or config['deployment']['robot'].get('agent_runtime_profile', 'default')
-        if profile not in ('default', 'r42'):
-            raise ValueError('Unknown robot Agent runtime profile')
-        if profile == 'r42':
-            from .r42 import serve
-            serve(config, test_speaker=args.action == 'test-speaker')
-        else:
-            from .agent import main as run
-            run(config, test_speaker=args.action == 'test-speaker')
+        from .agent import main as run
+        run(config, test_speaker=args.action == 'test-speaker')
     elif args.group == 'initiative':
-        from .r42 import control
-        control(config, args.action)
+        from .initiative import control
+        enabled = {'auto-on': True, 'auto-off': False, 'auto-status': None,
+                   'arm': True, 'off': False, 'status': None}[args.action]
+        control(enabled, schedule=args.action.startswith('auto-'), config=config)
     elif args.group == 'firewall':
         from .firewall import main as run
         run(config, args.action)

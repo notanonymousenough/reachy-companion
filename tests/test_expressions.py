@@ -260,7 +260,8 @@ class ExpressionTests(unittest.TestCase):
     def test_muted_manual_voice_and_play_never_start_compute_audio_or_motion(self):
         a=self.agent();a.set_microphone(False);a.expressions=Mock();a.request=Mock()
         with patch('reachy_companion.agent.subprocess.Popen') as popen:
-            self.assertTrue(a.manual('/say',{'text':'fixture'})['cancelled'])
+            with self.assertRaisesRegex(RuntimeError, 'authority withdrawn'):
+                a.manual('/say',{'text':'fixture'})
             a.play('not decoded because muted',a.microphone_epoch)
         popen.assert_not_called();a.request.assert_not_called();a.expressions.set.assert_not_called()
 

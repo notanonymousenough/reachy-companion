@@ -40,7 +40,11 @@ class SoundMonitor:
             except queue.Empty:continue
             if not self.agent.microphone.enabled or epoch!=self.agent.microphone_epoch:continue
             try:
+                bridge=getattr(self.agent,'sensory',None)
+                ticket=bridge.ticket() if bridge is not None else None
                 result=self.agent.request(self.agent.config['network']['voice_url'],'/sound/classify',{'pcm_base64':base64.b64encode(pcm).decode()},timeout=3)
+                if bridge is not None:
+                    bridge.observe_sound(result,epoch,at,len(pcm)/(self.agent.audio['sample_rate']*2),ticket)
                 if not self.agent.microphone.enabled or epoch!=self.agent.microphone_epoch or self.agent.phase in ('speaking','processing'):continue
                 self.last_error=None
                 self.enter=self.enter+1 if result['kind']=='music' else 0
@@ -52,5 +56,8 @@ class SoundMonitor:
                     self.agent.phase='music'
                     if result['kind']=='music':self.agent.expressions.dance(result,at)
                 elif result['kind']=='sound' and time.monotonic()-self.last_sound>self.settings['sound_cooldown_seconds']:
-                    self.last_sound=time.monotonic();self.agent.expressions.set('reacting','surprised',force=True)
+                    self.last_sound=time.monotonic()
+                    # With the new explicit opt-in, attention is selected by the
+                    # bounded model bridge rather than duplicated by this rule.
+                    if bridge is None or not bridge.configured:self.agent.expressions.set('reacting','surprised',force=True)
             except Exception as exc:self.last_error=str(exc)

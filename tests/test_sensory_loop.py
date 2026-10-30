@@ -3,7 +3,7 @@ import threading
 import time
 import unittest
 
-from reachy_companion.r42.sensory_loop import SensoryLoop
+from reachy_companion.sensory_loop import SensoryLoop
 
 
 class Clock:

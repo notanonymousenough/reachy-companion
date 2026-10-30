@@ -26,6 +26,11 @@ class OperatorAuthorityTests(unittest.TestCase):
         self.agent.microphone_lock=threading.Lock();self.agent.listening=threading.Event()
         self.agent.capture_active=False;self.agent.expressions=Mock();self.agent.sounds=Mock()
         self.agent.stop_speaker=Mock()
+        from reachy_companion.durable_intent import DurableIntent
+        from reachy_companion.motion_policy import MotionPolicy
+        self.agent.config={'conversation': {}}
+        self.agent.durable_intent=DurableIntent(Path(self.tmp.name)/'intent.json')
+        self.agent.motion_policy=MotionPolicy(Path(self.tmp.name)/'policy.json')
 
     def test_stale_cleanup_preserves_newer_operator_state_and_file(self):
         agent=self.agent

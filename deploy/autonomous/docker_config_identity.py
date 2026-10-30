@@ -67,7 +67,7 @@ def candidate_config_matches(expected, actual, *, engine_version=None, api_versi
     owned_start is retained ONLY from the verified private receipt for this own
     204 start under its pending lifetime: exactly {Id, StartedAt, Pid}. Never
     infer it from an arbitrary running inspect. This pure helper cannot attest
-    receipt issuance; see content-stream-engine-oom-comparison.md issuer contract.
+    receipt issuance; its caller must verify that separately.
     Both validation and compensation must call this same function, preserving
     their separate image/owner/mount/network/state/source-fence checks.
     """

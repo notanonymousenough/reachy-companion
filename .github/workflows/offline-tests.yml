@@ -21,6 +21,5 @@ jobs:
       - run: python -m pip install --no-deps -e .
       - run: python -m unittest discover -s tests -v
         timeout-minutes: 10
-      - run: python -m reachy_companion runtime-profile r42 verify
       - run: node tests/test_conversation_mode_page.cjs
       - run: python -m build --no-isolation

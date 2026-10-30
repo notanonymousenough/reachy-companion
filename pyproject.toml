@@ -28,4 +28,3 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 reachy_companion = ["assets/*.json", "assets/*.txt"]
-"reachy_companion.r42" = ["manifest.json", "assets/*.json", "assets/*.txt"]

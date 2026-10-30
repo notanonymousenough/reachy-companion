@@ -70,9 +70,6 @@ class WindowsMemoryGateContractTests(unittest.TestCase):
                 if isinstance(call,ast.Call):
                     name=call.func.attr if isinstance(call.func,ast.Attribute) else call.func.id if isinstance(call.func,ast.Name) else None
                     self.assertNotIn(name,('skipTest','SkipTest'))
-        runbook=(ROOT/'docs/autonomous-companion/windows-fixture-cleanup.md').read_text()
-        self.assertIn('test_windows_fixture_cleanup.NativeWindowsCleanupTests',runbook)
-        for name in REQUIRED_WORKFLOW:self.assertIn('test_voice_memory_acceptance.VoiceMemoryTests.'+name,runbook)
         self.assertEqual(len(REQUIRED_NATIVE)+len(REQUIRED_WORKFLOW),17)
 
     def test_windows_parent_is_required_existing_absolute_and_validated_before_use(self):

@@ -4,7 +4,7 @@ import types
 import unittest
 from unittest.mock import Mock
 import test_u08_barge_candidate as candidate_fixture
-from reachy_companion.r42.barge_trial import BargeTrial,EitherEvent,TEXT
+from reachy_companion.barge_trial import BargeTrial,EitherEvent,TEXT
 
 class TrialTests(unittest.TestCase):
     def setUp(self):

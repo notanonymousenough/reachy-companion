@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -37,7 +38,7 @@ def candidate():
     # verify every layer including original Git bytes, S1 and bound listening.
     _, agent = module('a0_bound_base', 'prepare_bound_listening.py').candidate()
     before = {'agent.py': agent,
-              'capture_pump.py': (ROOT/'src/reachy_companion/capture_pump.py').read_bytes()}
+              'capture_pump.py': subprocess.check_output(['git', 'show', '73abbf37b2e62dd9be0fed8e46c49d9940d892f2:src/reachy_companion/capture_pump.py'], cwd=ROOT)}
     patcher = module('a0_exact_patch', 'prepare_content_stream.py')
     data = {}
     for name, (pre, patch_name, patch_sha, post) in PINS.items():

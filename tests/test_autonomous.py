@@ -48,7 +48,7 @@ class StateTests(unittest.TestCase):
         self.assertIsNotNone(task)
         return task
     def test_schema_copy_does_not_drift(self):
-        self.assertEqual(json.loads((ROOT/'docs/autonomous-companion/schemas/contracts.schema.json').read_text()),
+        self.assertEqual(json.loads((ROOT/'tests/fixtures/contracts/schemas/contracts.schema.json').read_text()),
                          json.loads((ROOT/'src/reachy_companion/assets/autonomous-contracts.json').read_text()))
     def test_long_silence_keeps_bounded_projection_and_ledger(self):
         for i in range(2000):
