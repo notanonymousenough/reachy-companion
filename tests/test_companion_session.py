@@ -226,8 +226,8 @@ class SessionTests(unittest.TestCase):
         from reachy_companion.autonomous import companion_session as module
         from reachy_companion.autonomous.audio_session_control import create_server as control_server
         root=Path(__file__).resolve().parents[1];created=[]
-        def audio(stt):
-            adapter=AudioAdapter(stt);created.append(adapter);return adapter
+        def audio(stt,**kwargs):
+            adapter=AudioAdapter(stt,**kwargs);created.append(adapter);return adapter
         def control(*args,**kwargs):return control_server(*args,**{**kwargs,'port':0})
         with tempfile.TemporaryDirectory() as directory:
             path=Path(directory);(path/'token').write_text('t'*32)

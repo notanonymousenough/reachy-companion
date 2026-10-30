@@ -155,7 +155,7 @@ class State:
             if event.get('audio'):
                 audio=event['audio']
                 if self.production:
-                    self.sensors['audio.transcript']=Sensor('audio.transcript',text[:256],now-audio['capture_age_ms']/1000,2,'available',audio['source_boot'])
+                    self.sensors['audio.transcript']=Sensor('audio.transcript',text[:256],now-audio['capture_age_ms']/1000,audio['ttl_ms']/1000,'available',audio['source_boot'])
                 self.record('audio_turn',source_boot=audio['source_boot'],sequence=audio['sequence'],
                     lineage_id=audio['lineage_id'],origin=audio['origin'],
                     speaker_identity='unknown',confirmed=False,capture_age_ms=audio['capture_age_ms'])
@@ -286,11 +286,11 @@ class State:
                     speech_epoch=self.authority.speech_epoch),
             sim=dict(origin='simulated', mood=0, arousal=0.2, fatigue=0, curiosity=0.5,
                      confidence=None, social_need=0, transition_reasons=[]),
-            scene='Actual bounded antenna17 owner; any fixture sensors are synthetic. Camera semantics unavailable.' if self.actor_binding else 'Authenticated audio capture source and measured device playback; speaker identity unknown. Camera semantics unavailable.' if self.audio_source_bound else 'Shadow actors; camera observations include age bounds and provenance.' if self.context_sensors else 'Shadow/replay. No physical sensor or actuator connected.',
+            scene='Stock daemon controls finite head/antenna expressions; completion is UUID disappearance, not measured pose. Camera unavailable.' if self.actor_binding and self.actor_binding.get('transport')=='stock' else 'Actual bounded antenna17 owner; any fixture sensors are synthetic. Camera semantics unavailable.' if self.actor_binding else 'Authenticated audio capture source and measured device playback; speaker identity unknown. Camera semantics unavailable.' if self.audio_source_bound else 'Shadow actors; camera observations include age bounds and provenance.' if self.context_sensors else 'Shadow/replay. No physical sensor or actuator connected.',
             sensors=([s.view(now, self.muted) for s in list(self.sensors.values())[:12-len(self.context_sensors)]]+self.context_view(now)),
             prev=[] if self.privacy else list(self.previous), dialogue='' if self.muted or self.privacy else self.current_utterance,
             memory=[] if self.privacy else [dict(alias=alias,type=item['epistemic_type'],summary=item['content']) for alias,item in self.memory_items.items() if self.memory_valid(item)], personality='Ричи: краткий, прямой, любопытный.',
-            principles='No invented perception. Muted blocks speech. Motion attentive means only a finite antenna17 target <=2 degrees, never head/body; only when motion_allowed.' if self.actor_binding else 'No invented perception. Muted blocks speech. Simulated actions only.', goal=None,
+            principles='No invented perception. Muted blocks speech. Motion attentive is a finite gentle head and antenna glance, only when motion_allowed.' if self.actor_binding and self.actor_binding.get('transport')=='stock' else 'No invented perception. Muted blocks speech. Motion attentive means only a finite antenna17 target <=2 degrees, never head/body; only when motion_allowed.' if self.actor_binding else 'No invented perception. Muted blocks speech. Simulated actions only.', goal=None,
             pending=[] if self.privacy else pending[:8], ready=[] if self.privacy else ready[:4],
             candidates=[dict(alias=k, kind=self.candidate_kinds[k], summary=v[:256]) for k,v in self.candidates.items()][:8],
             evidence_aliases=[])

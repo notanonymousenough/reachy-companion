@@ -1,7 +1,7 @@
 import threading
 import time
 import unittest
-from reachy_companion.autonomous.audio_peer import AudioPeer, PeerClient, PeerLease, RemotePCM, create_server,PeerStartup
+from reachy_companion.autonomous.audio_peer import AudioPeer, PeerClient, PeerLease, RemotePCM, create_server,PeerStartup,AudioPolling,PersistentPeer
 from reachy_companion.autonomous.playback import Playback, ReplayPCM
 
 
@@ -42,6 +42,32 @@ class PeerTests(unittest.TestCase):
         result=peer.dispatch(path,dict(controller='controller',**body))
         if path=='/lease':wait(lambda:not peer.playback.status()['execution_busy'])
         return result
+
+    def test_status_and_observation_reuse_two_bounded_connections(self):
+        peer,_=self.setup_peer();server=create_server(peer,'t'*32,port=0)
+        threading.Thread(target=server.serve_forever,daemon=True).start()
+        self.addCleanup(server.server_close);self.addCleanup(server.shutdown)
+        client=PeerClient('http://127.0.0.1:'+str(server.server_address[1]),'t'*32,'controller')
+        status=PersistentPeer(client);self.addCleanup(status.close)
+        class Adapter:
+            def bind_source(self,*args):pass
+            def same_capture_scope(self,*args):return True
+        polling=AudioPolling(client,Adapter(),'source',persistent=True)
+        self.addCleanup(polling.close)
+        operator=dict(binding=('agent',2,1),microphone_enabled=True,privacy_all=False,
+                      valid_until=time.monotonic()+1)
+        sockets=None
+        for _ in range(4):
+            client.call('/lease')
+            status.call('/status')
+            polling.advance(None,operator)
+            wait(lambda:not polling.status()['execution_busy'])
+            current=(status.connection.sock,polling.transport.connection.sock)
+            if sockets is None:sockets=current
+            else:self.assertEqual(current,sockets)
+            time.sleep(.055)
+        self.assertEqual(polling.status()['errors'],0)
+        polling.close();self.assertIsNone(polling.transport.connection)
 
     def test_rpc_queues_but_cursor_is_only_measured_backend_consumption(self):
         peer,backend=self.setup_peer();server=create_server(peer,'t'*32,port=0)

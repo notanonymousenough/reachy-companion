@@ -110,6 +110,8 @@ class Hub:
         self.stock_scope.expression_version=None
 
     def stock_check(self):
+        cancel=getattr(self,'stock_cancel',None)
+        if cancel is not None and cancel.is_set():raise RuntimeError('Stock controller stopped')
         binding=getattr(self.stock_scope,'binding',None)
         if binding is None:raise RuntimeError('Stock command binding changed: missing_binding')
         self.stock_compare(binding,self.stock_operator())

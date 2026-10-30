@@ -112,7 +112,12 @@ class Services:
                 patch=decode(result['output'])
                 if set(patch)-({'personality','principles'} if character else {'memory'}):raise ValueError('Maintenance capability')
                 self.update(patch,revision,'periodic reflection (model inference)',now)
+                self.errors.pop('maintenance',None)
             except Exception as exc:self.errors['maintenance']=type(exc).__name__
+            # Cadence is measured from completion, just like last_changed in
+            # the durable store; slow inference must not make the next update early.
+            if character:self.next_character=now+self.scheduler.config.get('production',{}).get('character_refresh_s',3600)
+            else:self.next_memory=now+self.scheduler.config.get('production',{}).get('memory_refresh_s',60)
             self.maintenance=None
         if self.update_job and self.update_job[0].future.done():
             job,started,authority=self.update_job
@@ -144,7 +149,7 @@ class Services:
         # Same main model/permit, bounded context; reflections are explicitly inferences.
         prompt=dict(schema_version='companion-1',
             utterance='Return ONLY JSON patch '+('personality/principles (strings <=512)' if character else 'memory (inference summary string <=2048)'),
-            state=dict(current=state.character,recent=list(state.previous),historical_working=dict(state.working)),memory=[],observations=[])
+            state=dict(maintenance='character' if character else 'memory',current=state.character,recent=list(state.previous),historical_working=dict(state.working)),memory=[],observations=[])
         task=Task(uid(),uid(),'maintenance',prompt,state.authority,now,now+30)
         self.maintenance_task=task
         self.maintenance=(Job(self.scheduler.gateway.main,task),now,state.authority,state.durable_revision,character)

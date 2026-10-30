@@ -648,8 +648,9 @@ class RemotePCM:
 
 class AudioPolling:
     """One actual peer poll slot; scheduler only consumes its latest receipt."""
-    def __init__(self, client, adapter, source_boot):
+    def __init__(self, client, adapter, source_boot, *, persistent=False):
         self.client,self.adapter,self.source_boot=client,adapter,source_boot
+        self.transport=PersistentPeer(client) if persistent else None
         self.adapter.bind_source(source_boot,0)
         self.lock=threading.Lock();self.job=None;self.result=None;self.next_poll=0
         self.closed=False;self.calls=self.errors=self.rejected=0
@@ -688,15 +689,19 @@ class AudioPolling:
                 binding=tuple(operator['binding']);self.calls+=1;self.next_poll=now+.05
                 def work():
                     try:
-                        packet=self.client.call('/observation')
+                        packet=(self.transport or self.client).call('/observation')
                         with self.lock:
                             if not self.closed:self.result=authority,binding,now,packet
                     except Exception:
                         with self.lock:self.errors+=1
+                    finally:
+                        if self.closed and self.transport:self.transport.close()
                 self.job=threading.Thread(target=work,daemon=True);self.job.start()
 
     def close(self):
-        with self.lock:self.closed=True;self.result=None
+        with self.lock:
+            self.closed=True;self.result=None
+            if self.transport and (not self.job or not self.job.is_alive()):self.transport.close()
 
     def status(self):
         with self.lock:return dict(execution_busy=bool(self.job and self.job.is_alive()),

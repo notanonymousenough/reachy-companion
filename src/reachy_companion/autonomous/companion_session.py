@@ -13,7 +13,7 @@ from .signal_stop import SignalStop
 import threading
 import time
 from .audio_adapter import AudioAdapter,HttpSTT
-from .audio_peer import AudioPolling,PeerClient,PeerLease,PeerStartup,RemotePCM,lease_authority
+from .audio_peer import AudioPolling,PeerClient,PersistentPeer,PeerLease,PeerStartup,RemotePCM,lease_authority
 from .audio_session_control import create_server
 from .config import load
 from .lease_datagram import DatagramRenewal
@@ -73,7 +73,7 @@ def session_context(config,*,allow_camera=False,readback=None,readback_sha256=No
     return None
 
 
-def run_session(scheduler,poller,lease,client,stop_client,source,stop,duration,publish,*,lifetime='finite'):
+def run_session(scheduler,poller,lease,client,stop_client,source,stop,duration,publish,*,lifetime='finite',status_transport=None):
     """Reducer-owned loop. Each remote operation keeps one real occupied slot."""
     if lifetime not in ('finite','lease') or type(lifetime) is not str:raise ValueError('Explicit normal lifetime')
     if lifetime=='finite' and (type(duration) not in (int,float) or not math.isfinite(duration) or not 1<=duration<=180):
@@ -107,7 +107,7 @@ def run_session(scheduler,poller,lease,client,stop_client,source,stop,duration,p
                 peer_job=None
             if startup.advance()=='WITHDRAWN' and not scheduler.production:reason=startup.reason;break
             if not peer_job and now>=next_peer:
-                peer_job=Job(client.call,'/status');next_peer=now+.1
+                peer_job=Job((status_transport or client).call,'/status');next_peer=now+.1
             if health_job and health_job.future.done():
                 health=health_job.future.result();health_job=None
                 if health.get('compute_boot_id')!=scheduler.state.authority.compute_boot_id or health.get('quarantined'):
@@ -124,6 +124,7 @@ def run_session(scheduler,poller,lease,client,stop_client,source,stop,duration,p
                 if motion_identity is not None and operator['binding'][0]!=motion_identity['agent_boot_id']:
                     raise RuntimeError('Speaker and motor belong to different physical operator boots')
             if now-last_operator>=.5:raise RuntimeError('Local operator receipt expired; no automatic recovery')
+            if stop.is_set():reason='controller_stop';break
             if scheduler.production and startup.phase!='ACTIVE':scheduler.advance()
             if startup.phase=='ACTIVE':
                 if lifetime=='lease':
@@ -171,6 +172,8 @@ def run_session(scheduler,poller,lease,client,stop_client,source,stop,duration,p
                 next_publish=now+.05
                 publish(dict(stage=startup.phase,elapsed_s=now-started,counts=dict(scheduler.state.counts),
                     audio=scheduler.audio_adapter.status(),peer_poll=poller.status(),lease=lease.status(),
+                    motion=dict(allowed=scheduler.state.motion_allowed,receipts=list(scheduler.motion_adapter.receipts)[-4:],
+                        **scheduler.motion_adapter.status()) if scheduler.motion_adapter else None,
                     speech=scheduler.speech_adapter.status(),
                     cycle_phase=scheduler.state.overload,background=scheduler.services.status() if scheduler.services else None,
                     listening_ready=startup.phase=='ACTIVE' and scheduler.audio_adapter.allowed
@@ -195,6 +198,10 @@ def run_session(scheduler,poller,lease,client,stop_client,source,stop,duration,p
             while (speech.status()['tts_execution_busy'] or speech.status()['cancellation_execution_busy']
                     or playback.status()['execution_busy']):time.sleep(.005)
             playback.backend.close_transport()
+            if status_transport:
+                try:
+                    if peer_job:peer_job.future.result()
+                finally:status_transport.close()
             return True
         media_close_job=Job(close_media)
         stop_job=Job(lambda:stop_client.call('/stop',source_boot=source))
@@ -301,18 +308,26 @@ def main():
             native=cfg['motion'];motor_hub=Hub(Config(args.companion_config))
             motor_hub.config.data['guarded_motion']['enabled']=True
             motor_hub.config.data['network']['agent_url']=native['agent_url']
-            motion=MotionAdapter(motor_hub,cooldown_s=native['cooldown_s'],heartbeat_s=native['heartbeat_s'])
-            current=motor_hub.agent('/status');actor=current['motion_actor']
-            if (not isinstance(actor.get('hold'),dict) or actor['hold'].get('verified') is not True
-                    or actor['hold'].get('trajectory_updates_after_hold')!=0):raise ValueError('Current physical hold proof required')
+            if cfg['actuators']=='bounded_stock':
+                from .stock_motion_adapter import StockMotionAdapter
+                motor_hub.stock_dependencies()
+                motion=StockMotionAdapter(motor_hub,cooldown_s=native['cooldown_s'])
+            else:
+                motion=MotionAdapter(motor_hub,cooldown_s=native['cooldown_s'],heartbeat_s=native['heartbeat_s'])
+                current=motor_hub.agent('/status');actor=current['motion_actor']
+                if (not isinstance(actor.get('hold'),dict) or actor['hold'].get('verified') is not True
+                        or actor['hold'].get('trajectory_updates_after_hold')!=0):raise ValueError('Current physical hold proof required')
             if not motion.refresh()['motion_allowed']:raise ValueError('Current bounded motor owner not ready')
-        audio=AudioAdapter(HttpSTT(companion['network']['compute_url'],companion.token),
+        stt_deadline=cfg.get('production',{}).get('stt_deadline_s',2)
+        audio=AudioAdapter(HttpSTT(companion['network']['compute_url'],companion.token,timeout=stt_deadline),
+            result_ttl_s=stt_deadline,
             **({'continuous_input':True} if cfg.get('production') else {}))
         pcm=Playback(RemotePCM(client,stop_port=args.peer_stop_port,source_boot=args.source_boot,
-            max_streams=32 if args.lifetime=='finite' else None,lifetime=args.lifetime),chunk_frames=4096,motion=motion)
+            max_streams=32 if args.lifetime=='finite' else None,lifetime=args.lifetime),chunk_frames=4096,
+            motion=motion if cfg['actuators']!='bounded_stock' else None)
         speech=SpeechAdapter(pcm,HttpTTS(companion['network']['voice_url'],companion.token,
             gain=cfg.get('speech',{}).get('tts_gain',1)),lambda:hub.agent('/operator'))
-        poller=AudioPolling(client,audio,args.source_boot)
+        poller=AudioPolling(client,audio,args.source_boot,persistent=True)
         scheduler=Scheduler(cfg,gateway,motion,speech,audio)
         from .production import attach
         if cfg.get('production'):
@@ -321,8 +336,10 @@ def main():
             retries=1 if cfg.get('production') else 0) if args.lease_datagram_port is not None else None
         lease=PeerLease(client,datagram=datagram,progress_timeout_s=args.lease_progress_s,
             **({'source_boot':args.source_boot,'authority':authority} if authority is not None else {}))
-        report=run_session(scheduler,poller,lease,client,stop_client,args.source_boot,stop,args.duration,publish,lifetime=args.lifetime)
+        report=run_session(scheduler,poller,lease,client,stop_client,args.source_boot,stop,args.duration,publish,lifetime=args.lifetime,status_transport=PersistentPeer(client))
     except BaseException as exc:
+        import logging
+        logging.getLogger(__name__).exception('Companion startup failed')
         report=dict(mode='normal_joined_companion',accepted=False,cleanup_verified=False,
             reason='startup_error',errors=[type(exc).__name__],source_boot=args.source_boot,
             raw_audio_retained=False,transcripts_retained=False,continuous=False)

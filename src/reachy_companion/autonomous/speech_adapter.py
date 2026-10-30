@@ -68,9 +68,13 @@ class SpeechAdapter:
 
     def advance(self,authority):
         with self.lock:
-            changed=self.current_authority is not None and self.current_authority!=authority
+            previous=self.current_authority
+            changed=previous is not None and previous!=authority
+            physical=('hub_boot_id','compute_boot_id','robot_boot_id','operator_epoch','microphone_epoch')
+            same_capture=(isinstance(previous,Authority) and isinstance(authority,Authority)
+                          and all(getattr(previous,key)==getattr(authority,key) for key in physical))
             self.current_authority=authority
-        if changed:self.interrupt('authority',False)
+        if changed:self.interrupt('interaction' if same_capture else 'authority',False)
 
     def _launch_refresh(self):
         with self.lock:
@@ -190,7 +194,7 @@ class SpeechAdapter:
         if reason=='echo':return self.status()
         with self.lock:
             self.generation+=1;self.pending=None;self.cancelled.set()
-            if reason not in ('human_activity',):self.policy_deadline=0;self.policy_live=False
+            if reason not in ('human_activity','human_utterance','interaction'):self.policy_deadline=0;self.policy_live=False
             if not self.cancel_job or not self.cancel_job.is_alive():
                 self.cancel_job=threading.Thread(target=self.tts.cancel,daemon=True);self.cancel_job.start()
         self.playback.interrupt(reason,preserve=preserve,wait=False)

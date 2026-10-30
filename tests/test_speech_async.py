@@ -33,6 +33,35 @@ class SpeechAsyncTests(unittest.TestCase):
         a=SpeechAdapter(p,tts or TTS(),operator);self.addCleanup(a.close)
         return a,p,backend
 
+    def test_new_utterance_cancels_output_without_discarding_following_stt_fragment(self):
+        from dataclasses import replace
+        from reachy_companion.autonomous.contracts import Authority
+        from reachy_companion.autonomous.audio_adapter import AudioAdapter
+        entered=threading.Event();release=threading.Event()
+        class STT:
+            def transcribe(self,pcm):entered.set();release.wait(1);return 'Как тебя зовут?'
+        speech,_,_=self.adapter(actual)
+        authority=Authority('hub','compute');speech.advance(authority)
+        wait(lambda:speech.operator_view() is not None)
+        audio=AudioAdapter(STT(),continuous_input=True);self.addCleanup(audio.close)
+        audio.bind_source('capture',0);operator=speech.operator_view();audio.advance(authority,operator)
+        self.assertTrue(audio.submit(bytes(640),source_boot='capture',sequence=1,captured_end=time.monotonic(),
+            authority=authority,operator_binding=operator['binding']))
+        audio.advance(authority,operator);self.assertTrue(entered.wait(1))
+        try:
+            speech.interrupt('human_utterance',False)
+            next_authority=replace(authority,interaction_epoch=1,speech_epoch=1)
+            speech.advance(next_authority)
+            self.assertIsNotNone(speech.operator_view())
+            audio.advance(next_authority,speech.operator_view());release.set()
+            wait(lambda:not audio.status()['execution_busy'])
+            event=audio.advance(next_authority,speech.operator_view())
+            self.assertEqual(event['text'],'Как тебя зовут?')
+            with speech.lock:
+                speech.advance(replace(next_authority,microphone_epoch=1))
+                self.assertIsNone(speech.operator_view())
+        finally:release.set()
+
     def test_blocked_http_keeps_ticks_completions_and_ingestion_for_one_second(self):
         release=threading.Event();entered=threading.Event();calls=[]
         def operator():calls.append(1);entered.set();release.wait(2);return actual()

@@ -35,8 +35,11 @@ class HttpSTT:
 
 
 class AudioAdapter:
-    def __init__(self, stt, *, clock=time.monotonic,continuous_input=False):
+    def __init__(self, stt, *, clock=time.monotonic,continuous_input=False,result_ttl_s=2):
         if type(continuous_input) is not bool:raise ValueError('Explicit continuous input mode')
+        if type(result_ttl_s) not in (int,float) or not math.isfinite(result_ttl_s) or not .5<=result_ttl_s<=15:
+            raise ValueError('Bounded recognition result TTL required')
+        self.result_ttl_s=result_ttl_s
         self.continuous_input=continuous_input
         self.stt, self.clock = stt, clock
         self.lock = threading.RLock()
@@ -108,7 +111,7 @@ class AudioAdapter:
                                 origin='unknown', speaker_identity='unknown', speaker_confidence=0,
                                 echo_reference=observation['echo_reference'],
                                 capture_age_ms=int((now-observation['captured_end'])*1000),
-                                ttl_ms=2000, confirmed=False))
+                                ttl_ms=int(self.result_ttl_s*1000), confirmed=False))
                             event['audio']['stt_provenance']='pc_http_stt' if type(self.stt) is HttpSTT else 'fixture_or_unverified_stt'
                     else:
                         self.counts['stale'] += 1
@@ -198,7 +201,7 @@ class AudioAdapter:
                 self.counts['overwritten'] += 1
             self.pending = dict(pcm=pcm, pcm_sha256=hashlib.sha256(pcm).hexdigest(),
                 source_boot=source_boot, sequence=sequence, captured_end=captured_end,
-                deadline=captured_end+2, authority=authority,
+                deadline=captured_end+self.result_ttl_s, authority=authority,
                 operator_signature=self.operator_signature, echo_reference=echo_reference,
                 lineage_id=source_boot+':'+str(sequence))
             self.counts['submitted'] += 1

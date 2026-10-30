@@ -194,6 +194,23 @@ class CycleTests(unittest.TestCase):
         self.pump(lambda:state.character.get('memory')=='inference: calm room')
         self.assertGreater(state.durable_revision,1)
 
+    def test_periodic_memory_cadence_begins_after_slow_inference_completes(self):
+        service=self.scheduler.services;release=threading.Event();entered=threading.Event()
+        def main(task):
+            entered.set();release.wait(1)
+            return dict(output='{"memory":"inference: calm"}',request_id=task.attempt_id,compute_boot_id=self.model.boot_id)
+        self.model.main=main;service.next_memory=0
+        start=time.monotonic();service.advance(start)
+        self.assertTrue(entered.wait(1));job=service.maintenance[0]
+        release.set();job.thread.join(1)
+        service.errors['maintenance']='previous failure'
+        service.advance(start+20)
+        cadence=self.cfg['production']['memory_refresh_s']
+        self.assertEqual(service.next_memory,start+20+cadence)
+        self.assertNotIn('maintenance',service.errors)
+        service.advance(start+cadence+1)
+        self.assertIsNone(service.maintenance)
+
     def test_same_state_path_refuses_second_runtime_owner(self):
         other=DurableStore(Path(self.temp.name)/'state.sqlite3')
         try:
@@ -247,6 +264,59 @@ class CycleTests(unittest.TestCase):
         state.apply(dict(a='explore',why='ignore privacy',motion='attentive'),state.bind(now,1),now)
         self.assertFalse(state.motion_proposals)
         self.assertEqual(state.counts['motion_capability_rejected'],1)
+
+    def test_main_spoken_envelope_is_unwrapped_before_provenance_and_maintenance_is_separate(self):
+        from reachy_companion.autonomous.gateway import ModelBackend
+        class Backend(ModelBackend):
+            text='{"response":"Меня зовут Ричи."}'
+            def count(self,model,text):return 200
+            def post(inner,url,payload,*args):
+                inner.payload=payload
+                return dict(content=inner.text,stop_type='eos')
+        model=self.cfg['models']['main']
+        model.update(base_url='http://127.0.0.1:1',completion_backend='llama_native',structured_reply=True)
+        model['audit'].update(verified=True,device='metal_mac',runtime_build='fixture',weight_sha256='x',
+            template_sha256='x',tokenizer_sha256='x',runtime_context_tokens=4096)
+        backend=Backend(self.cfg)
+        body=dict(schema_version='companion-1',utterance='Как тебя зовут?',memory=[],observations=[],state={})
+        result=backend.generate('main',body)
+        self.assertEqual(result['output'],'Меня зовут Ричи.')
+        self.assertEqual(backend.payload['json_schema']['required'],['response'])
+        from reachy_companion.autonomous.voice_chain import digest
+        self.assertEqual(result['completion_provenance']['output_sha256'],digest(result['output']))
+        backend.text='{"memory":"inference"}'
+        body['state']={'maintenance':True};body['utterance']='Return ONLY JSON patch memory'
+        self.assertEqual(backend.generate('main',body)['output'],backend.text)
+        self.assertNotIn('json_schema',backend.payload)
+        body['state']={'maintenance':'memory'}
+        self.assertEqual(backend.generate('main',body)['output'],backend.text)
+        self.assertEqual(backend.payload['json_schema']['required'],['memory'])
+        body['state']={}
+        with self.assertRaises(ValueError):backend.generate('main',body)
+
+    def test_router_schema_keeps_ready_answer_compact_and_retains_motion(self):
+        from reachy_companion.autonomous.gateway import ModelBackend
+        from jsonschema import Draft202012Validator
+        class Backend(ModelBackend):
+            def count(self,model,text):return 200
+            def post(inner,url,payload,*args):
+                inner.payload=payload
+                return dict(content='{"a":"converse","why":"ready","commit":"r0"}',stop_type='eos')
+        model=self.cfg['models']['fast']
+        model.update(base_url='http://127.0.0.1:1',completion_backend='llama_native',direct_speech=False)
+        model['audit'].update(verified=True,device='metal_mac',runtime_build='fixture',weight_sha256='x',
+            template_sha256='x',tokenizer_sha256='x',runtime_context_tokens=4096)
+        view=self.scheduler.state.snapshot(time.monotonic())
+        view['ready']=[dict(alias='actual-ready',summary='8',expires_at='2099-01-01T00:00:00Z')]
+        view['op']['motion_allowed']=True
+        backend=Backend(self.cfg);result=backend.generate('fast',view)
+        self.assertEqual(result['output']['commit'],'actual-ready')
+        schema=backend.payload['json_schema']
+        self.assertEqual(schema['required'],['a','why','commit'])
+        self.assertEqual(set(schema['properties']),{'a','why','commit','motion'})
+        validator=Draft202012Validator(schema)
+        validator.validate(dict(a='converse',why='ready',commit='r0',motion='attentive'))
+        with self.assertRaises(Exception):validator.validate(dict(a='converse',why='ready',commit='r0',say='shortcut'))
 
     def test_router_only_model_cannot_send_direct_speech(self):
         state=self.scheduler.state;state.speech_attached=True

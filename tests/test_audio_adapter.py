@@ -33,6 +33,20 @@ class AudioTests(unittest.TestCase):
         while adapter.status()['execution_busy']:
             self.assertLess(time.monotonic(),end);time.sleep(.002)
 
+    def test_configured_recognition_deadline_accepts_slow_result_but_expires(self):
+        for elapsed,accepted in ((3,True),(8.01,False)):
+            clock=[0.];release=threading.Event()
+            def transcribe(pcm):
+                release.wait(1)
+                return 'recognized'
+            adapter=self.setup_adapter(transcribe,clock=lambda:clock[0],result_ttl_s=8)
+            self.poll(adapter);self.assertTrue(self.submit(adapter));self.poll(adapter)
+            clock[0]=elapsed;self.poll(adapter);release.set();self.drain(adapter)
+            event=self.poll(adapter)
+            self.assertEqual(event is not None,accepted)
+        for invalid in (True,0,16,float('nan')):
+            with self.assertRaises(ValueError):AudioAdapter(None,result_ttl_s=invalid)
+
     def test_fresh_result_has_unknown_identity_lineage_and_no_confirmation(self):
         adapter=self.setup_adapter(lambda pcm:'Четыре')
         self.poll(adapter);self.assertTrue(self.submit(adapter));self.poll(adapter);self.drain(adapter)

@@ -20,7 +20,7 @@ def command(*args, check=True):
 def health():
     result={}
     token=(ROOT/'secrets/autonomous-mac.token').read_text().strip()
-    for name,port in [('llama-9b',18097),('router',18098),('worker',8082),('gateway',8097)]:
+    for name,port in [('llm',18097),('router',18098),('worker',8082),('gateway',8097)]:
         try:
             request=Request('http://127.0.0.1:%s/health'%port,
                 headers={'Authorization':'Bearer '+token} if name=='gateway' else {})
@@ -71,6 +71,13 @@ def main():
             if time.monotonic()>=deadline:raise RuntimeError('Mac services did not become ready; inspect data/mac-runtime logs')
             time.sleep(1)
         active=command('ssh','reachy-hub','systemctl is-active reachy-production',check=False)
+        state=session()
+        if active.stdout.strip()=='active' and state.get('stage') in ('WITHDRAWN','STOPPED'):
+            # This explicit start authorizes a fresh session; a withdrawn owner
+            # is never reused or restarted by a background watchdog.
+            command('ssh','reachy-hub','sudo -n systemctl stop reachy-production')
+            command('ssh','reachy-mini','sudo -n systemctl stop reachy-production-audio')
+            active=command('ssh','reachy-hub','systemctl is-active reachy-production',check=False)
         if active.stdout.strip()!='active':
             command('ssh','reachy-mini','sudo -n systemctl start reachy-production-audio')
             command('ssh','reachy-hub','sudo -n systemctl start reachy-production')

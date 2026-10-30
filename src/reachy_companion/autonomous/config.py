@@ -44,10 +44,10 @@ def load(path):
         raise ValueError('Native Agent owns capture/main/reply; no second executor')
     if native.get('enabled') and config['models']['fast'].get('projection', 'full') != 'full':
         raise ValueError('Native metadata requires full fast projection')
-    if config['version'] != 1 or config['actuators'] not in ('simulated','bounded_native_antenna17') or (config['export_enabled'] and not config.get('production')):
+    if config['version'] != 1 or config['actuators'] not in ('simulated','bounded_native_antenna17','bounded_stock') or (config['export_enabled'] and not config.get('production')):
         raise ValueError('Unsupported actor mode/export')
     motion=config.get('motion',{'enabled':False})
-    if type(motion.get('enabled')) is not bool or (config['actuators']=='bounded_native_antenna17')!=motion['enabled']:
+    if type(motion.get('enabled')) is not bool or (config['actuators'] in ('bounded_native_antenna17','bounded_stock'))!=motion['enabled']:
         raise ValueError('Explicit bounded native motion opt-in required')
     if motion['enabled']:
         if (not isinstance(motion.get('hub_config_path'),str) or not motion['hub_config_path']
@@ -167,10 +167,10 @@ def load(path):
     production=config.get('production',{})
     if production:
         import math
-        if not isinstance(production,dict) or set(production)-{'state_path','outbox_cap','overload_latency_s','overload_queue','memory_refresh_s','character_refresh_s','sensors','tools','delivery','updates'}:
+        if not isinstance(production,dict) or set(production)-{'state_path','outbox_cap','overload_latency_s','overload_queue','memory_refresh_s','character_refresh_s','sensors','tools','delivery','updates','stt_deadline_s'}:
             raise ValueError('Production settings')
         if not isinstance(production.get('state_path'),str) or not production['state_path']:raise ValueError('Durable state path required')
-        for key,default,low,high in [('overload_latency_s',10,.1,120),('overload_queue',6,1,16),('outbox_cap',10000,10,1000000),('memory_refresh_s',60,10,86400),('character_refresh_s',3600,60,604800)]:
+        for key,default,low,high in [('stt_deadline_s',2,.5,15),('overload_latency_s',10,.1,120),('overload_queue',6,1,16),('outbox_cap',10000,10,1000000),('memory_refresh_s',60,10,86400),('character_refresh_s',3600,60,604800)]:
             value=production.get(key,default)
             if type(value) not in (int,float) or not math.isfinite(value) or not low<=value<=high:raise ValueError('Production bound '+key)
         for group in ('sensors','tools'):

@@ -86,6 +86,8 @@ def main():
                 '--peer-url', client.url, '--peer-stop-port', str(args.peer_stop_port),
                 '--source-boot', peer['source_boot'], '--lifetime', 'lease',
                 '--allow-capture-output', '--status-port', '8791', '--lease-progress-s', '.2']
+    if json.loads(args.config.read_text()).get('motion',{}).get('enabled'):
+        sys.argv.append('--allow-bounded-motion')
     if args.lease_datagram_port:
         sys.argv += ['--lease-datagram-port', str(args.lease_datagram_port)]
     if args.trusted_private_lan:
