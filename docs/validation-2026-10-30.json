@@ -1,0 +1,38 @@
+{
+  "date": "2026-10-30",
+  "scope": "Local source, environment, packaging and clean Git checkout only; no hardware actions",
+  "tested_source_commit": "2f34dd26ead86088d2adef70ec628a3a34582dea",
+  "python": "3.13.18",
+  "unittest": {
+    "executed_in_clean_clone": true,
+    "cases": 1592,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 26,
+    "duration_s": 137.19,
+    "skip_reasons": {
+      "Set FINITE_ALICE_BASELINE to the pinned source directory": 10,
+      "No cached SDK source; no download or install performed": 1,
+      "Native local fixed NTFS proof requires Windows": 2,
+      "Requires actual Windows kernel/local fixed NTFS/operator-only parent ACL": 13
+    }
+  },
+  "javascript_control_page": "PASS",
+  "r42": {
+    "version": 11,
+    "verified_files": 34,
+    "hardware_acceptance": false
+  },
+  "packaging": {
+    "wheel_and_sdist": "PASS",
+    "separate_wheel_install": "PASS",
+    "runtime_source_files": 129,
+    "missing_runtime_files": [],
+    "wheel_sha256": "ec3911b0dd3e4d03438cbdb84e582db3068901fdcef398e6b457ee4aee24f709"
+  },
+  "git_connectivity": "PASS",
+  "pip_check": "PASS",
+  "archive_entries_moved": 268,
+  "configuration_and_token_unchanged": true,
+  "historical_runtime_source_files_missing": 0
+}
