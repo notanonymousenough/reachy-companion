@@ -6,9 +6,11 @@ values=re.findall(r'`([^`]*)`',line)
 if len(values)!=2:raise SystemExit('Documented credential format changed')
 password=values[1];args=sys.argv[1:]
 if not args or args[0] not in ('ssh','scp'):raise SystemExit('SSH/scp only')
+duration=int(os.environ.get('REACHY_FACTORY_SSH_LIFETIME_SECONDS','65'))
+if not 10<=duration<=600:raise SystemExit('Finite SSH lifetime must be 10..600 seconds')
 pid,fd=pty.fork()
 if pid==0:os.execvp(args[0],args)
-buffer=bytearray();pending='';answered=False;deadline=time.monotonic()+65;status=None
+buffer=bytearray();pending='';answered=False;deadline=time.monotonic()+duration;status=None
 try:
  while time.monotonic()<deadline:
   if select.select([fd],[],[],.1)[0]:

@@ -1,0 +1,189 @@
+--- a/capture_pump.py
++++ b/capture_pump.py
+@@ -1,4 +1,4 @@
+-"""Opt-in mono AEC capture owner; receipt timestamps are not hardware timestamps.
++"""Opt-in existing mono capture owner; receipts do not prove AEC or acoustic age.
+ 
+ The reader performs no HTTP, expression actions or interruption callbacks. There
+ is one bounded assembler and one latest event; consumers perform control work.
+@@ -116,6 +116,44 @@
+         self.claimed = 0
+         self.reply = False
+         self.assembler = Assembler(agent)
++        self.accepted = None
++        self.output_active = False
++        self.suppress_until = 0.
++        self.counters = dict(read_bytes=0, read_frames=0, read_calls=0, chunks=0,
++            overflow_events=0, overflow_bytes=0, superseded_events=0,
++            suppressed_frames=0, gap_events=0, max_read_gap_seconds=0.,
++            last_read_monotonic=None, raw_buffer_peak_bytes=0)
++
++    def snapshot(self):
++        """Actual os.read receipts, per source generation; never acoustic time."""
++        with self.condition:
++            return dict(self.counters, source_generation=self.generation,
++                clock='monotonic_read_receipt', retired=self.retired.is_set(),
++                output_suppressed=self.output_active or self.clock() < self.suppress_until,
++                pending_events=int(self.latest is not None),
++                overflow_frames=self.counters['overflow_bytes'] // 2,
++                assembler_bytes=sum(map(len, self.assembler.frames)),
++                raw_overflow_threshold_bytes=self.agent.chunk_bytes * 4,
++                raw_capacity_bytes=self.agent.chunk_bytes * 9 - 1)
++
++    def admitted(self, packet):
++        # Queue TTL gates admission, not the duration of an already admitted
++        # synchronous STT request. Its existing HTTP timeout still applies.
++        with self.condition:
++            return packet is not None and packet is self.accepted and self.permitted()
++
++    def output(self, active):
++        """Mask own output and a bounded tail. This is not AEC or barge-in."""
++        with self.condition:
++            self.output_active = active
++            if not active:
++                tail = self.agent.audio.get('echo_tail_seconds', .3)
++                self.suppress_until = self.clock() + max(.3, min(2., tail))
++            self.assembler.clear()
++            self.assembler.number += 1
++            self.assembler.revision = 0
++            self.latest = None
++            self.condition.notify_all()
+ 
+     def current_binding(self):
+         a = self.agent
+@@ -150,6 +188,7 @@
+         self.retired.set()
+         with self.condition:
+             self.latest = None
++            self.accepted = None
+             self.assembler.clear()
+             self.assembler.noise.clear()
+             self.condition.notify_all()
+@@ -169,6 +208,11 @@
+     def _publish(self, chunk, now):
+         with self.condition:
+             if not self.permitted():
++                return
++            if self.output_active or now < self.suppress_until:
++                self.counters['suppressed_frames'] += len(chunk) // 2
++                self.assembler.clear()
++                self.latest = None
+                 return
+             # SoundMonitor.feed is bounded queue work; its existing separate
+             # worker owns classification HTTP, never this reader.
+@@ -181,8 +225,10 @@
+             previous = self.assembler.number
+             result = self.assembler.feed(chunk, self.reply)
+             if self.assembler.number != previous:
++                self.counters['superseded_events'] += int(self.latest is not None)
+                 self.latest = None
+             if result is not None:
++                self.counters['superseded_events'] += int(self.latest is not None)
+                 number, revision, pcm, final = result
+                 self.latest = Utterance(self.binding, self.generation, number, revision, pcm, now, now+2., final)
+             self.condition.notify_all()
+@@ -207,6 +253,7 @@
+             if not packet.final or packet.number <= self.claimed or not self.fresh(packet):
+                 return False
+             self.claimed = packet.number
++            self.accepted = packet
+             self.latest = None
+             return True
+ 
+@@ -223,8 +270,9 @@
+             if self.reply != reply:
+                 self.reply = reply
+                 self.assembler.seen = 0
+-                self.assembler.clear()
+-                self.latest = None
++                if reply:
++                    self.assembler.clear()
++                    self.latest = None
+ 
+     def _read(self):
+         a = self.agent
+@@ -247,24 +295,50 @@
+                 ready = selector.select(timeout=.05)
+                 now = self.clock()
+                 if now-last > gap:
++                    with self.condition:
++                        self.counters['gap_events'] += 1
++                        self.counters['max_read_gap_seconds'] = max(
++                            self.counters['max_read_gap_seconds'], now-last)
+                     raise RuntimeError('Capture receipt continuity lost')
+                 if not ready:
+                     if process.poll() is not None:
+                         raise RuntimeError('Capture process exited')
+                     continue
+                 try:
+-                    data = os.read(process.stdout.fileno(), a.chunk_bytes * 2)
++                    data = os.read(process.stdout.fileno(), a.chunk_bytes * 8)
+                 except BlockingIOError:
+                     continue
+                 if not data:
+                     raise RuntimeError('Capture stream ended')
++                now = self.clock()
++                with self.condition:
++                    self.counters['read_bytes'] += len(data)
++                    self.counters['read_frames'] = self.counters['read_bytes'] // 2
++                    self.counters['read_calls'] += 1
++                    self.counters['last_read_monotonic'] = now
++                    self.counters['max_read_gap_seconds'] = max(
++                        self.counters['max_read_gap_seconds'], now-last)
++                last = now
+                 buffered.extend(data)
+-                if len(buffered) >= a.chunk_bytes * 2:
+-                    raise RuntimeError('Capture receipt backlog unknown')
+-                if len(buffered) >= a.chunk_bytes:
++                with self.condition:
++                    self.counters['raw_buffer_peak_bytes'] = max(
++                        self.counters['raw_buffer_peak_bytes'], len(buffered))
++                    if len(buffered) > a.chunk_bytes * 4:
++                        # Keep the latest complete chunk plus partial tail;
++                        # never assemble an utterance across discarded PCM.
++                        dropped = (len(buffered) // a.chunk_bytes - 1) * a.chunk_bytes
++                        del buffered[:dropped]
++                        self.counters['overflow_events'] += 1
++                        self.counters['overflow_bytes'] += dropped
++                        self.assembler.clear()
++                        self.assembler.number += 1
++                        self.assembler.revision = 0
++                        self.latest = None
++                while len(buffered) >= a.chunk_bytes and self.permitted():
+                     chunk = bytes(buffered[:a.chunk_bytes])
+                     del buffered[:a.chunk_bytes]
+-                    last = now
++                    with self.condition:
++                        self.counters['chunks'] += 1
+                     self._publish(chunk, now)
+         except Exception:
+             # Fixed class only: no ALSA private device/error text in status.
+@@ -273,14 +347,20 @@
+             self.retire()
+             selector.close()
+             if process is not None:
+-                if process.poll() is None:
+-                    process.terminate()
+-                    try:
+-                        process.wait(timeout=a.config['timeouts']['process_stop'])
+-                    except subprocess.TimeoutExpired:
+-                        process.kill()
+-                        process.wait(timeout=a.config['timeouts']['process_stop'])
+-                process.stdout.close()
++                try:
++                    if process.poll() is None:
++                        process.terminate()
++                        try:
++                            process.wait(timeout=a.config['timeouts']['process_stop'])
++                        except subprocess.TimeoutExpired:
++                            process.kill()
++                            process.wait(timeout=a.config['timeouts']['process_stop'])
++                    process.stdout.close()
++                except (OSError, subprocess.TimeoutExpired):
++                    # Keep ownership and capture_active truthful after unknown
++                    # reap; _capture_get/close must refuse a second child.
++                    self.error = 'Capture reap unavailable'
++                    return
+             self.process = None
+             a.capture_active = False
+ 

@@ -67,6 +67,7 @@ class PixelTests(unittest.TestCase):
             self.assertIsNone(producer.packet())
             with patch.object(module.time,'monotonic',return_value=10):
                 producer.set_policy(message)
+                producer.operator_deadline=10.3  # This test isolates remote policy fencing.
                 producer.latest=({},b'fixture pixels')
                 self.assertIsNotNone(producer.packet())
                 with self.assertRaises(ValueError):producer.set_policy(message)

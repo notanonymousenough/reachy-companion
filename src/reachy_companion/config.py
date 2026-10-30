@@ -189,6 +189,8 @@ class Config:
                     validate_steps(plan(expressions, phase, emotion)['steps'], expressions)
         for role in ('hub', 'robot', 'worker'):
             item = self.data['deployment'][role]
+            if role == 'robot' and item.get('agent_runtime_profile', 'default') not in ('default', 'r42'):
+                raise ValueError('Unknown robot Agent runtime profile')
             # These SSH/apt/systemd targets are Linux, regardless of the
             # operator host. Do not interpret remote roots as Windows paths.
             root = item['root']

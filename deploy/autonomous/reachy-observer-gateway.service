@@ -1,0 +1,20 @@
+[Unit]
+Description=Reachy observer gateway to existing fast CPU backend
+Requires=reachy-observer-forward.service
+BindsTo=reachy-observer-forward.service
+After=reachy-observer-forward.service
+
+[Service]
+Type=simple
+User=deploy
+WorkingDirectory=/home/deploy/reachy-shadow/observer-service
+Environment=PYTHONPATH=/home/deploy/reachy-shadow/observer-service/src
+EnvironmentFile=/home/deploy/reachy-shadow/observer-service/paths.local.env
+UMask=0077
+ExecStart=/home/deploy/reachy-shadow/.venv/bin/python -B /home/deploy/reachy-shadow/observer-service/deploy/autonomous/observer_service.py gateway --config ${OBSERVER_CONFIG} --token-file ${OBSERVER_TOKEN_FILE}
+Restart=no
+KillMode=control-group
+TimeoutStopSec=10s
+LimitCORE=0
+StandardOutput=null
+StandardError=null

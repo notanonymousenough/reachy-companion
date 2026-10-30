@@ -1,0 +1,192 @@
+--- a/controller.py
++++ b/controller.py
+@@ -2,7 +2,7 @@
+ Exact own synchronous terminal + pinned producer cleanup order, no UUID claim.
+ Requires reviewed patched Agent; never starts capture, speech or motion itself.
+ """
+-import argparse,hashlib,importlib.util,json,stat,time,uuid,threading
++import argparse,hashlib,importlib.util,json,signal,stat,time,uuid,threading
+ from pathlib import Path
+ WATCH='4cd31192df4b1b360d55f63348a23df9c269a8b5f097e30f190a02177ecfae03'
+ AGENT_SHA='4e2dcafdde29ba667ae40c240723954d48b8462f9641e50ffb32e56fe0ce575a'
+@@ -83,6 +83,45 @@
+  for key,value in result['counts'].items():ROLE_OBSERVATIONS[key]=min(1000000,ROLE_OBSERVATIONS[key]+value)
+  if require_absence:need(result['absence_verified'],'unknown_ALSA_role')
+  return result['playbacks']
++
++def failure_metadata(error,io):
++ # Only structured guard metadata and endpoint names; never exception text,
++ # operator values, request payloads, transcripts, credentials or owner nonces.
++ endpoints=dict(getattr(io,'last_endpoint_by_thread',{}))
++ return dict(error_class=type(error).__name__,failure_code=getattr(error,'code',None),
++  changed_operator_keys=list(getattr(error,'changed',[])),operator_GET_elapsed=getattr(error,'elapsed',None),
++  last_endpoint=endpoints.get(threading.get_ident()),last_endpoint_by_thread=endpoints)
++
++class CleanupBudgetExpired(BaseException):pass
++
++def finish_failed_controller(m,io,p,run,out,cleanup_seconds=4):
++ def expired(signum,frame):raise CleanupBudgetExpired()
++ original_req=io.req
++ def cleanup_req(*args,**kwargs):
++  try:return original_req(*args,**kwargs)
++  except m.GuardDenied as error:
++   out.setdefault('cleanup_guard_failures',[]).append(failure_metadata(error,io))
++   raise
++ previous=signal.signal(signal.SIGALRM,expired)
++ io.req=cleanup_req
++ out['cleanup_budget_seconds']=cleanup_seconds
++ try:
++  signal.setitimer(signal.ITIMER_REAL,cleanup_seconds)
++  c=m.cleanup(io,p)
++  out['cleanup']={k:c[k] for k in ('final_OFF','admission_retired','microphone_epoch','policy_epoch','volume_percent','volume_preserved','factory_running_empty','stock_unknown','aplay_absent','newer_owner_preserved') if k in c}
++  verified=(all(c.get(k) is True for k in ('final_OFF','admission_retired','volume_preserved','factory_running_empty','aplay_absent'))
++   and c.get('stock_unknown') is False and type(c.get('volume_percent')) is int and 1<=c['volume_percent']<=100)
++  out['cleanup_status']='verified' if verified else 'unverified'
++ except BaseException as error:
++  out['cleanup_error_class']=type(error).__name__
++  out['cleanup_failure']=failure_metadata(error,io)
++  out['cleanup_status']='unknown'
++ finally:
++  signal.setitimer(signal.ITIMER_REAL,0);signal.signal(signal.SIGALRM,previous);io.req=original_req
++  # Even a denied/timed-out cleanup must release the independent watch to run
++  # its own guarded cleanup. This marker never asserts that OFF was verified.
++  try:m.save(run/'controller.done',{'done':True});out['controller_done_saved']=True
++  except BaseException as error:out.update(controller_done_saved=False,controller_done_error_class=type(error).__name__)
+ 
+ def main():
+  parser=argparse.ArgumentParser();parser.add_argument('--case',choices=tuple(CASES),required=True);parser.add_argument('--agent-pid',type=int,required=True);parser.add_argument('--boot-sha256',required=True);parser.add_argument('--microphone-epoch',type=int,required=True);parser.add_argument('--policy-epoch',type=int,required=True);args=parser.parse_args()
+@@ -167,14 +206,13 @@
+    if a.get('last_error'):raise RuntimeError('Finite Alice Agent error')
+    time.sleep(.08)
+   if not out['accepted']:out['outcome']='NO_TRUE_REPLY_PLAYBACK_WITHIN_OBSERVER_BUDGET'
+- except BaseException as e:out.update(accepted=False,outcome='EXPECTED_RESPONSE_NOT_EXERCISED',error_class=type(e).__name__,stage=stage,failure_reason=str(e) if str(e) in ('controller_check','Agent_identity_changed','agent_identity_changed','unknown_ALSA_role','cue_sampler_error','reply_playback_end_unknown','obvious_cue_echo','worker_agent_join','input_target','context_reply','reply_interrupted','capture_playback_prefix_or_pause_proof') else 'OTHER')
++ except BaseException as e:out.update(accepted=False,outcome='EXPECTED_RESPONSE_NOT_EXERCISED',error_class=type(e).__name__,stage=stage,failure_reason=e.code if isinstance(e,getattr(locals().get('m'),'GuardDenied',())) else str(e) if str(e) in ('controller_check','Agent_identity_changed','agent_identity_changed','unknown_ALSA_role','cue_sampler_error','reply_playback_end_unknown','obvious_cue_echo','worker_agent_join','input_target','context_reply','reply_interrupted','capture_playback_prefix_or_pause_proof') else 'OTHER');out.update(failure_metadata(e,io))
+  finally:
+   out['role_observations']=dict(ROLE_OBSERVATIONS)
+   if chosen is not None and io is not None:
+    if not out['accepted']:
+-    try:
+-     c=m.cleanup(io,p);out['cleanup']={k:c[k] for k in ('final_OFF','admission_retired','microphone_epoch','policy_epoch','volume_percent','factory_running_empty','stock_unknown','aplay_absent','newer_owner_preserved') if k in c};m.save(run/'controller.done',{'done':True})
+-    except BaseException as e:out['cleanup_error_class']=type(e).__name__
++    finish_failed_controller(m,io,p,run,out)
++   out['elapsed_seconds']=round(time.monotonic()-started,6)
+    try:m.save(run/'natural-Alice-phase.public.json',out)
+    except OSError:out['durable_controller_receipt_unknown']=True
+   out['elapsed_seconds']=round(time.monotonic()-started,6);print(json.dumps(out))
+--- a/controller-driver.py
++++ b/controller-driver.py
+@@ -4,8 +4,8 @@
+ """
+ import argparse,base64,hashlib,json,os,pathlib,shlex,shutil,stat,subprocess,sys,tempfile,time,zlib
+ R=pathlib.Path('/Users/notanonenough/.codex/visualizations/2026/10/10/01a12596-fe7e-7592-ae4d-27652600c257/runner-20261015')
+-INSTALLER=pathlib.Path('/Users/notanonenough/.codex/visualizations/2026/10/10/01a12596-fe7e-7592-ae4d-27652600c257/runner-20261015/Alice-factual-resume/controller.py')
+-INSTALLER_SHA='c8e05779b4ed8e6903281ca9046cd37ae4b4284bc919d2090907098f60f852c4'
++INSTALLER=pathlib.Path(__file__).resolve().with_name('controller.py')
++INSTALLER_SHA='c5c521cb7f94a60dc95fa19be4a24043ff37130596ac53355f8f6561d1db97f4'
+ HELPER=R/'factory_ssh.py'
+ HELPER_SHA='57930724255d0fd19599426de2397acca705b60bade8d03013925b685f47eb60'
+ DESTINATION='pollen@192.168.2.158'
+@@ -31,7 +31,7 @@
+  global CONTROLLER_ARGV
+  CONTROLLER_ARGV=['controller','--case',args.case,'--agent-pid',str(args.agent_pid),'--boot-sha256',args.boot_sha256,'--microphone-epoch',str(args.mic),'--policy-epoch',str(args.policy)]
+  raw=b'';installer=INSTALLER.read_bytes();require(sha(installer)==INSTALLER_SHA and sha(HELPER.read_bytes())==HELPER_SHA)
+- start=time.monotonic();deadline=start+61;local=pathlib.Path(tempfile.mkdtemp(prefix='phaseb-readonly-cause-control-',dir='/private/tmp'));os.chmod(local,0o700);socket_path=local/'mux';setup,transfer,check,close=commands(socket_path,installer)
++ start=time.monotonic();deadline=start+65;local=pathlib.Path(tempfile.mkdtemp(prefix='phaseb-readonly-cause-control-',dir='/private/tmp'));os.chmod(local,0o700);socket_path=local/'mux';setup,transfer,check,close=commands(socket_path,installer)
+  report=dict(kind='phase-b-readonly-cause-driver-result',on_head_result_unknown=True,phase='setup_spawn',phases=[],retry_performed=False,local_control_directory=str(local));helper=None;helper_eof=False;close_known=False;forced_cleanup=False
+  def event(phase,**data):report['phase']=phase;report['phases'].append(dict(phase=phase,**data))
+  def run(args,seconds,phase,**kwargs):
+@@ -55,7 +55,7 @@
+     if time.monotonic()>=socket_deadline:raise TimeoutError('owned mux socket absent')
+     time.sleep(.05)
+   require(helper.poll() is None);probe=run(check,3,'mux_check');require(probe.returncode==0 and helper.poll() is None);event('connect_ready',owned_socket_checked=True,foreground_helper_alive=True)
+-  result=run(transfer,56,'transfer',input=raw);require(len(result.stdout)<=131072 and len(result.stderr)<=65536);lines=[v for v in result.stdout.decode('utf-8',errors='strict').splitlines() if v.startswith('{')];require(len(lines)==1);value=result_schema(json.loads(lines[0]));report.update(on_head_result_unknown=False,ssh_returncode=result.returncode,result=value);event('transfer_validated',source_reply_received=True)
++  result=run(transfer,60,'transfer',input=raw);require(len(result.stdout)<=131072 and len(result.stderr)<=65536);lines=[v for v in result.stdout.decode('utf-8',errors='strict').splitlines() if v.startswith('{')];require(len(lines)==1);value=result_schema(json.loads(lines[0]));report.update(on_head_result_unknown=False,ssh_returncode=result.returncode,result=value);event('transfer_validated',source_reply_received=True)
+  except BaseException as error:report['first_failure']=dict(phase=report['phase'],type=type(error).__name__,errno=getattr(error,'errno',None))
+  finally:
+   try:
+--- a/run.py
++++ b/run.py
+@@ -9,9 +9,9 @@
+ R=HERE.parent
+ POSTHOC='7a6c8137abb12e9797b24c93eaa5f03536f1369ce5480289236a537c00ea43b7'
+ POSTHOC_DRIVER='e7d80fc61ef13b3a4fbe2f67aae3ee084ecc2ea291b307c5726c5643ad92eaa8'
+-PINS={'scripts/companion_demo.py':'052b84b5ba9febb07c7b95dab81e1f5d6591c8de0cbe046fc9f61ba7dd01b376','deploy/autonomous/demo_watch.py':'4cd31192df4b1b360d55f63348a23df9c269a8b5f097e30f190a02177ecfae03','src/reachy_companion/client.py':'adc324fc93ec4dfc1d88249deaa4a7925e8d44e92dc15946877cef574fac1c4f','scripts/factory_ssh.py':'2f551395100032327fc8ffb88ee03b13c7a19d37e1a1d9467a043a1f5cc37897'}
+-CONTROLLER='c8e05779b4ed8e6903281ca9046cd37ae4b4284bc919d2090907098f60f852c4'
+-DRIVER='2688e1749d13e919af2c11d2c13b804b53ae892d65cf992dee9fa469e4cee239'
++PINS={'scripts/companion_demo.py':'9571b76942ab81e7ea9e3335944926d467480b21b9239ee596ae5077c25dc69e','deploy/autonomous/demo_watch.py':'4cd31192df4b1b360d55f63348a23df9c269a8b5f097e30f190a02177ecfae03','src/reachy_companion/client.py':'adc324fc93ec4dfc1d88249deaa4a7925e8d44e92dc15946877cef574fac1c4f','scripts/factory_ssh.py':'2f551395100032327fc8ffb88ee03b13c7a19d37e1a1d9467a043a1f5cc37897'}
++CONTROLLER='c5c521cb7f94a60dc95fa19be4a24043ff37130596ac53355f8f6561d1db97f4'
++DRIVER='126147bf7fe98928fafe2405c7b1a2d3f1e7e43e71a1cc1c0f0e4af3f5108cf6'
+ def source(path,pin):
+  raw=path.read_bytes()
+  if hashlib.sha256(raw).hexdigest()!=pin:raise ValueError('Source changed')
+@@ -35,27 +35,50 @@
+   if b['microphone_epoch']!=expected_mic or b['policy_epoch']!=expected_policy:raise ValueError('Operator changed between cycles; sequence stopped')
+   prefix=json.loads((R/'actual-bound-listening-Agent-baseline.json').read_text())['result']
+   if prefix.get('accepted') is not True or prefix.get('effective_prefix_Alice') is not True or hashlib.sha256(b['agent_boot_id'].encode()).hexdigest()!=prefix['boot_SHA256']:raise ValueError('Reviewed Alice baseline boot changed')
++  state['controller_began']=time.monotonic()
+   state['controller']=subprocess.Popen([sys.executable,'-u',str(HERE/'controller-driver.py'),'--case',case,'--agent-pid',str(prefix['Agent_PID']),'--boot-sha256',prefix['boot_SHA256'],'--mic',str(b['microphone_epoch']),'--policy',str(b['policy_epoch'])],stdout=subprocess.PIPE,stderr=subprocess.PIPE,start_new_session=True)
+   return original_hub(config)
+  module.robot_call=robot_call;module.hub_command=hub_command
+  return module,state
++
++def collect_controller(state,timeout=10):
++ if 'phase' in state:return state['phase']
++ child=state.get('controller');phase={}
++ if child is not None:
++  try:
++   out,err=child.communicate(timeout=timeout)
++   if child.returncode!=0 or len(out)>131072:raise ValueError('Bounded phase receipt')
++   row=json.loads(out);phase=row.get('result',{})
++   if type(phase) is not dict:phase={}
++  except Exception:
++   try:
++    child.terminate()
++    try:child.communicate(timeout=2)
++    except subprocess.TimeoutExpired:child.kill();child.communicate(timeout=2)
++   except (OSError,subprocess.TimeoutExpired):state['controller_reap_unknown']=True
++ state['phase']=phase
++ return phase
++
++def controller_failed(state):
++ child=state.get('controller')
++ if child is None:return False
++ if child.poll() is None:
++  # Driver's 65 s deadline plus bounded local SSH teardown.
++  if time.monotonic()-state['controller_began']<=72:return False
++  state['controller_wait_expired']=True
++  return True
++ phase=collect_controller(state,timeout=.5)
++ return not (phase.get('accepted') is True and phase.get('phase_handshake_accepted') is True
++  and phase.get('run_id')==state.get('ready',{}).get('run_id'))
+ 
+ def main():
+  parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--execute',action='store_true');parser.add_argument('--case',required=True);parser.add_argument('--expected-mic',type=int,required=True);parser.add_argument('--expected-policy',type=int,required=True);args=parser.parse_args();module,state=prepare(args.case,args.expected_mic,args.expected_policy)
+  if not args.execute:
+   print(json.dumps({'kind':'working-normal-Alice-source-selfcheck','accepted':True,'hardware_executed':False,'turns':1,'hard_seconds':180,'prime_paused':True,'motor_policy':True,'source_installation':False}));return 0
+  sys.path.insert(0,str(ROOT/'src'));from reachy_companion.config import Config
+- code=module.launch(Config(ROOT/'config.local.json',require_token=False),R/'reachy-known-hosts',turns=1,seconds=180,prime_paused=True)
+- child=state.get('controller');phase={};phase_ok=False
+- if child is not None:
+-  try:
+-   out,err=child.communicate(timeout=10)
+-   if len(out)>131072:raise ValueError('Bounded phase receipt')
+-   row=json.loads(out);phase=row.get('result',{});phase_ok=(phase.get('accepted') is True and phase.get('phase_handshake_accepted') is True and phase.get('run_id')==state.get('ready',{}).get('run_id'))
+-  except Exception:
+-   child.terminate()
+-   try:child.communicate(timeout=2)
+-   except subprocess.TimeoutExpired:child.kill();child.communicate(timeout=2)
++ code=module.launch(Config(ROOT/'config.local.json',require_token=False),R/'reachy-known-hosts',turns=1,seconds=180,prime_paused=True,stop_requested=lambda:controller_failed(state))
++ phase=collect_controller(state)
++ phase_ok=(phase.get('accepted') is True and phase.get('phase_handshake_accepted') is True and phase.get('run_id')==state.get('ready',{}).get('run_id'))
+  finish=state.get('finish',{}).get('cleanup',{});ready=state.get('ready',{});rid=ready.get('run_id','no-ready')
+  native_ok=(code==0 and phase_ok and finish.get('final_OFF') is True and finish.get('microphone_epoch')==args.expected_mic+2 and finish.get('policy_epoch')==args.expected_policy+2)
+  post={}
+@@ -67,7 +90,7 @@
+   except Exception:post={'accepted':False,'postnative_read_unknown':True}
+  completed=(native_ok and post.get('accepted') is True)
+  short_target=(completed and type(phase.get('cue_sampled_playback_span_seconds')) in (int,float) and phase['cue_sampled_playback_span_seconds']<=5 and type(phase.get('reply_sampled_playback_span_seconds')) in (int,float) and phase['reply_sampled_playback_span_seconds']<=5 and phase.get('reply_playback_end_observed') is True and type(post.get('reply_spoken_word_count')) is int and 1<=post['reply_spoken_word_count']<=11 and post.get('reply_complete_sentence') is True)
+- final={'kind':'natural-Alice-terminal','run_id':rid,'case':args.case,'completed':completed,'native_returncode':code,'phase_handshake_accepted':phase_ok,'postnative_accepted':post.get('accepted') is True,'scenario_topic_match':post.get('scenario_topic_match'),'final_microphone_epoch':finish.get('microphone_epoch'),'final_policy_epoch':finish.get('policy_epoch'),'final_OFF':finish.get('final_OFF'),'volume_percent':finish.get('volume_percent'),'elapsed_watch_seconds':time.monotonic()-state.get('arm_began',time.monotonic()),'physical_motion_verified':False,'acoustic_onset_verified':False,'short_sample_target_met':short_target,'physical_duration_target_met':None,'reply_spoken_word_count':post.get('reply_spoken_word_count'),'cue_sampled_playback_span_seconds':phase.get('cue_sampled_playback_span_seconds'),'reply_sampled_playback_span_seconds':phase.get('reply_sampled_playback_span_seconds'),'measurement':'SAMPLED_PROCESS_SPAN_LOWER_BOUND_NOT_DURATION_UPPER_BOUND'}
++ final={'kind':'natural-Alice-terminal','run_id':rid,'case':args.case,'completed':completed,'native_returncode':code,'phase_handshake_accepted':phase_ok,'postnative_accepted':post.get('accepted') is True,'controller_wait_expired':state.get('controller_wait_expired',False),'controller_reap_unknown':state.get('controller_reap_unknown',False),'controller_failure_code':phase.get('failure_code'),'controller_stage':phase.get('stage'),'controller_cleanup_status':phase.get('cleanup_status'),'cleanup_verified':all(finish.get(k) is True for k in ('final_OFF','admission_retired','volume_preserved','factory_running_empty','aplay_absent')) and finish.get('stock_unknown') is False and type(finish.get('volume_percent')) is int and 1<=finish['volume_percent']<=100,'scenario_topic_match':post.get('scenario_topic_match'),'final_microphone_epoch':finish.get('microphone_epoch'),'final_policy_epoch':finish.get('policy_epoch'),'final_OFF':finish.get('final_OFF'),'volume_percent':finish.get('volume_percent'),'elapsed_watch_seconds':time.monotonic()-state.get('arm_began',time.monotonic()),'physical_motion_verified':False,'acoustic_onset_verified':False,'short_sample_target_met':short_target,'physical_duration_target_met':None,'reply_spoken_word_count':post.get('reply_spoken_word_count'),'cue_sampled_playback_span_seconds':phase.get('cue_sampled_playback_span_seconds'),'reply_sampled_playback_span_seconds':phase.get('reply_sampled_playback_span_seconds'),'measurement':'SAMPLED_PROCESS_SPAN_LOWER_BOUND_NOT_DURATION_UPPER_BOUND'}
+  (R/('actual-natural-Alice-'+rid+'-terminal.json')).write_text(json.dumps(final,indent=2)+'\n');print(json.dumps(final),flush=True)
+  return (0 if post.get('scenario_topic_match') is True else 2) if short_target else (3 if completed else 1)
+ if __name__=='__main__':sys.exit(main())

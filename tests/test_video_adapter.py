@@ -132,6 +132,7 @@ class ScopeTests(unittest.TestCase):
                 producer.set_policy(dict(scope=scope,seq=0,privacy_all=False,admission_id='a'));generation=producer.generation
                 producer.set_policy(dict(scope=scope,seq=1,privacy_all=True,admission_id='b'))
                 producer.set_policy(dict(scope=scope,seq=2,privacy_all=False,admission_id='c'))
+                producer.operator_deadline=10.3  # Local operator gate tested with the producer loop.
                 self.assertFalse(producer.publish_frame(meta(),RAW,scope,generation,10))
                 self.assertTrue(producer.publish_frame(meta(),RAW,scope,producer.generation,9.6))
                 packet=producer.packet();n=struct.unpack('!I',packet[:4])[0];metadata=json.loads(packet[4:4+n])

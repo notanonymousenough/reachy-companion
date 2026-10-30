@@ -1,0 +1,65 @@
+{
+  "source_only": true,
+  "payload": {
+    "capture_pump.py": {
+      "before": "5fe20c69d7becc63571e76e0c9ea05094d86f562d4762feec5b5a942ec0ff7c6",
+      "origin": "/Users/notanonenough/.codex/visualizations/2026/10/17/01a1476b-c451-7361-a82d-c25202dce0dd/A1-evidence/capture_pump.py",
+      "after": "cd377513d83559b7fc63e70576f14a299b4cf04b3f8c785ce4d784e756c7d54a",
+      "bytes": 22088
+    },
+    "agent.py": {
+      "before": "1f4e52a6b54b6c12de2bd325e094625ebdf4e2e341df2fa5e2230a51ee660a19",
+      "origin": "/Users/notanonenough/.codex/visualizations/2026/10/17/01a14870-e4c6-7233-a575-c78fd3971835/R15-evidence/candidate/agent.py",
+      "after": "89cf4f3eb442f7d606d8ce4e8aede95fa27fee904040ced574667e7cc5acd325",
+      "bytes": 71645
+    },
+    "autonomous/native_agent.py": {
+      "before": "b284f55b1afb4a7a8ac050fd5473de46359b01fc6164480b6595cc1e5ba4e004",
+      "origin": "src/reachy_companion/autonomous/native_agent.py",
+      "after": "3d4c3b0976079cae2aeb9e9f252a194ed9e0565a4641ebe36605d7e134c07a16",
+      "bytes": 49892
+    }
+  },
+  "unchanged": {
+    "autonomous/config.py": "c7193c6a62e140ca34cb2a5a6e821d86dcdb5621897ad3d1b2acb72d30202f9d",
+    "autonomous/state.py": "6294b232587853d4aba026aeaeae8ebee1163fc06d88f63461210605f0ce3141",
+    "autonomous/runtime.py": "feadc9588682490269a02533e9dfc7f68c11958b015efff00eef2e2c48b8f0f1",
+    "autonomous/gateway.py": "8f75faaf4ec4636a800b1c170cf44220dbefbc6e4c4d0207e2a7744502379fbc",
+    "autonomous/native_agent_session.py": "3900f61d01b655daa815f21c70b1ce1e34fd6be82c2f9a1246725777d661575c",
+    "autonomous/contracts.py": "a77df6933babffad8c193eaf2de00e79f446507b6e278ac2d7735eaaf06d81fd",
+    "assets/autonomous-contracts.json": "86773719014f7404010004759f073ad069b999507f627456ae231093d26dad7a",
+    "client.py": "adc324fc93ec4dfc1d88249deaa4a7925e8d44e92dc15946877cef574fac1c4f",
+    "config.py": "8433bdac7a3ef6f23e7ba24685d21a7f970a8df90e44163f95fe1e8cb6fe1e6d"
+  },
+  "required_installed_unchanged": {
+    "expression_player.py": "4b2ea1039145da87a381b3da04ea64693842547d159e3afd65e393247c516e66",
+    "microphone.py": "d35ef6d3e0cc289e8043a0da68480ecd110ef3fff98afb81da0afad25e416129",
+    "motion_policy.py": "d224385e999a0c6056db42e1fc3a3c90afaa2009336eaf1ef364037dc98a8466"
+  },
+  "patch_sha256": "72264aed3dcf853ef1eaed9db2be7bb04e3bc81fe04c28c32128f6ea8b2ab77c",
+  "effect_basis": "UNKNOWN: installed source has no bounded physical capture age",
+  "next_effect_dependency": "Measured upper bound on existing capture-to-read latency, bound to the same source generation/window",
+  "next_source_handoff": "Camera integration must use candidate/autonomous/native_agent.py as its preimage; checkout Native remains R13",
+  "accepted": {
+    "offline_plumbing": true,
+    "live_hearing": false,
+    "model_choice": false,
+    "physical_effect": false
+  },
+  "checkout_untouched": {
+    "agent.py": "0cc3e643117f2f491f03b3a93f5efff3dba80c2f532ba6adaabdf6b244cbd386",
+    "capture_pump.py": "b7b1ffa551d8b3ad4346cc2920f0e17d04e37c2300d8583abf336ea90fb9e5b0",
+    "autonomous/native_agent.py": "b284f55b1afb4a7a8ac050fd5473de46359b01fc6164480b6595cc1e5ba4e004"
+  },
+  "regression": {
+    "tests/test_acoustic_fastview.py": "28b2a4571782647f44fb2a938a4f1e04d59d2624e768d97183f57ffed4a255a1"
+  },
+  "offline": {
+    "tests": 51,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "model_calls": 0,
+    "device_calls": 0
+  }
+}

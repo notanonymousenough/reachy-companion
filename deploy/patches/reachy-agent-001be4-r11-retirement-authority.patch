@@ -1,0 +1,159 @@
+--- a/agent.py
++++ b/agent.py
+@@ -185,7 +185,8 @@
+                     raise RuntimeError('Microphone authority changed')
+                 if expected_owner_id is not None and expected_owner_id!=self.microphone_owner_id:
+                     raise RuntimeError('Microphone owner changed')
+-                self.microphone_epoch += 1
++                exhausted = self.microphone_epoch >= 2**63-1
++                if not exhausted: self.microphone_epoch += 1
+                 retired_capture = self._capture_retire() if self._capture_enabled() else None
+                 self.microphone_owner_id=owner_id
+                 self.listening.clear()
+@@ -196,6 +197,10 @@
+                     self.resume_audio = None
+                     self.stop_speaker()
+                 try:
++                    if exhausted:
++                        self.microphone.enabled = False
++                        self.microphone.error = 'Microphone epoch exhausted'
++                        raise ValueError(self.microphone.error)
+                     self.microphone.save(enabled)
+                 except (OSError, ValueError):
+                     self.expressions.hold()
+@@ -1004,6 +1009,11 @@
+ 
+     def set_listening(self, enabled, payload, *, require_paused=False):
+         """Bind automated pause/resume to existing authority at event mutation."""
++        return self._set_listening(enabled, payload, require_paused=require_paused)[0]
++
++    def _set_listening(self, enabled, payload, *, require_paused=False):
++        # The private receipt belongs to this mutation, before any close/wait.
++        # It lets legacy manual restore only its own still-current authority.
+         if type(enabled) is not bool or type(payload) is not dict:
+             raise ValueError('Listening control object required')
+         binding = None
+@@ -1020,39 +1030,62 @@
+                     or not math.isfinite(binding['expires_at_monotonic'])):
+                 raise ValueError('Exact listening operator binding required')
+         # Same lock order as operator snapshots. Check and mutate atomically
+-        # with microphone OFF/new owner and MotionPolicy.save, without I/O.
++        # with microphone OFF/new owner and MotionPolicy.save. Persistence is
++        # inside this boundary; child close/reap is always outside both locks.
+         retired_capture = None
+-        with self.microphone_lock, self.motion_policy.lock:
+-            if binding is not None:
++        try:
++            with self.microphone_lock, self.motion_policy.lock:
++                if binding is not None:
++                    policy = self.motion_policy.snapshot()
++                    if (self.agent_boot_id != binding['agent_boot_id']
++                            or self.microphone_epoch != binding['microphone_epoch']
++                            or policy['epoch'] != binding['policy_epoch']
++                            or self.microphone_owner_id != binding['owner_id']
++                            or self.motion_policy.owner_id != binding['owner_id']
++                            or not self.microphone.enabled or self.microphone.error is not None
++                            or policy['motor_enabled'] is not True or policy['quiet'] is not False
++                            or policy['privacy_all'] is not False or self.stopping.is_set()
++                            or not 0 < binding['expires_at_monotonic'] - time.monotonic() <= 60
++                            or ((enabled or require_paused) and (self.phase != 'paused' or self.capture_active))
++                            or (require_paused and self.listening.is_set())):
++                        raise RuntimeError('Listening operator or snapshot changed')
++                was_listening = self.listening.is_set() if binding is None else False
++                if enabled:
++                    if not self.microphone.enabled:
++                        raise RuntimeError('Microphone is muted; enable it with the microphone switch')
++                    self.listening.set()
++                else:
++                    self.listening.clear()
++                    retired_capture = getattr(self, '_capture_pump', None)
++                    if retired_capture is not None:
++                        # Only set the Event while holding policy.lock: the reader
++                        # may hold its condition while taking a policy snapshot.
++                        first_retirement = (not retired_capture.retired.is_set()
++                            and not (binding is not None and require_paused))
++                        retired_capture.retired.set()
++                        self._capture_packet = self.pending_pcm = None
++                        if first_retirement:
++                            try:
++                                if self.microphone_epoch >= 2**63-1:
++                                    self.microphone.enabled = False
++                                    self.microphone.error = 'Microphone epoch exhausted'
++                                    raise ValueError(self.microphone.error)
++                                self.microphone_epoch += 1
++                                # Preserve enabled and owner; this is authority
++                                # withdrawal, not another microphone switch.
++                                self.microphone.save(self.microphone.enabled)
++                            except (OSError, ValueError):
++                                self.expressions.hold()
++                                self.resume_audio = None
++                                self.stop_speaker()
++                                raise
+                 policy = self.motion_policy.snapshot()
+-                if (self.agent_boot_id != binding['agent_boot_id']
+-                        or self.microphone_epoch != binding['microphone_epoch']
+-                        or policy['epoch'] != binding['policy_epoch']
+-                        or self.microphone_owner_id != binding['owner_id']
+-                        or self.motion_policy.owner_id != binding['owner_id']
+-                        or not self.microphone.enabled or self.microphone.error is not None
+-                        or policy['motor_enabled'] is not True or policy['quiet'] is not False
+-                        or policy['privacy_all'] is not False or self.stopping.is_set()
+-                        or not 0 < binding['expires_at_monotonic'] - time.monotonic() <= 60
+-                        or ((enabled or require_paused) and (self.phase != 'paused' or self.capture_active))
+-                        or (require_paused and self.listening.is_set())):
+-                    raise RuntimeError('Listening operator or snapshot changed')
+-            if enabled:
+-                if not self.microphone.enabled:
+-                    raise RuntimeError('Microphone is muted; enable it with the microphone switch')
+-                self.listening.set()
+-            else:
+-                self.listening.clear()
+-                retired_capture = getattr(self, '_capture_pump', None)
+-                if retired_capture is not None:
+-                    # Only set the Event while holding policy.lock: the reader
+-                    # may hold its condition while taking a policy snapshot.
+-                    retired_capture.retired.set()
+-                    self._capture_packet = self.pending_pcm = None
+-            result = {'ok': True, 'listening': enabled}
+-        if retired_capture is not None:
+-            retired_capture.close()
+-        return result
++                restoration = (was_listening, self.agent_boot_id, self.microphone_epoch,
++                    self.microphone_owner_id, policy['epoch'], self.motion_policy.owner_id)
++                return {'ok': True, 'listening': enabled}, restoration
++        finally:
++            if retired_capture is not None:
++                retired_capture.close()
+ 
+     def manual(self, path, payload):
+         binding = payload.get('operator_binding')
+@@ -1082,14 +1115,16 @@
+             was_listening = False
+             self.set_listening(False, {'operator_binding': binding}, require_paused=True)
+         else:
+-            was_listening = self.listening.is_set()
+-            self.set_listening(False, {})
++            _, restoration = self._set_listening(False, {})
++            was_listening = restoration[0]
+         def restore_listening():
+             if was_listening:
+                 with self.microphone_lock, self.motion_policy.lock:
+                     policy = self.motion_policy.snapshot()
+-                    if (self.microphone.enabled and not self.stopping.is_set()
+-                            and not policy['quiet'] and not policy['privacy_all']):
++                    current = (True, self.agent_boot_id, self.microphone_epoch,
++                        self.microphone_owner_id, policy['epoch'], self.motion_policy.owner_id)
++                    if (current == restoration and self.microphone.enabled and self.microphone.error is None
++                            and not self.stopping.is_set() and not policy['quiet'] and not policy['privacy_all']):
+                         self.listening.set()
+         acquired = self.audio_lock.acquire(timeout=self.config['timeouts']['manual_audio_lock'])
+         if not acquired:
+@@ -1097,6 +1132,8 @@
+             raise RuntimeError('Robot is processing a voice turn; try again when idle')
+         try:
+             options = dict(allow_barge_in=was_listening)
++            if binding is None:
++                options.update(expected_epoch=restoration[2], expected_policy_epoch=restoration[4])
+             if binding is not None:
+                 if not same_owner():raise RuntimeError('Speech operator or snapshot changed')
+                 options.update(expected_epoch=binding['microphone_epoch'], expected_policy_epoch=binding['policy_epoch'],

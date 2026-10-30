@@ -1,0 +1,46 @@
+{
+  "status": "ONE_WHOLE_PRICED_INTEGRATION_PROPOSAL_ONLY_NOT_GO",
+  "basis": "Known U103 source gap and retained U102 useful ordinary continuity; no further reads/calls/tests for this proposal",
+  "objective": "One source-qualified fresh physical external Alice input -> current normal ASR -> useful Russian PUBLIC reply/FULL/reap/release/fresh capture on one minimally integrated retained pipeline",
+  "minimal_change": {
+    "component": "Existing Agent capture/ASR/voice bookkeeping only; keep PCaaba/ASRdecoder/controller unchanged unless a concrete compatibility need is established before WHOLE",
+    "link": "When existing run() passes its claimed current CapturePump Utterance to tracked_compute(/transcribe), attach a bounded contentfree witness to that exact existing ASR control row: boot/MIC/policy/sourcegeneration/packetidentity/PCM digest and monotonic receive basis. After fresh authority revalidation and real decode, add transcript digest; tie existing normal voice request internally to exact ASR ID+digest. Existing PC ordinary_context_receipt.input_sha256/reply_sha256 then completes downstream ID/PCboot link. No raw PCM/transcripts/history in public receipt. Fields carry observed basis; no acoustic-onset or speaker identity inferred from read clock.",
+    "simpler_first": "Prefer an equivalent smaller existing internal ID association if it supplies the same actual source/ASR/current-request causality. Do not add packet/hash fields on every layer as a separate goal.",
+    "no_new_control_plane": true,
+    "default_behavior": "Metadata cannot grant admission, cancel controls, refresh stale input, bypass directedness or change model/decoder behavior; no new positive route"
+  },
+  "physical_path": {
+    "existing": "Use existing bounded normal /say playback only as an Alice-addressed physical cue after qualifying current owned negative/return and source boundaries; no new speaker/controller/emitter platform.",
+    "cue_limit": 2,
+    "cue_shape": "At most two short cues, each strictly starts with Алиса,. A first cue may ask Alice to pose a short arithmetic question addressed to Richie, so the external spoken question contains fresh content absent from the robot cue. A second connected cue is allowed only after first semanticPASS/FULL/reap/same-PCbootrelease/currentmodelready/freshcapture.",
+    "source_basis": "Actual new capture after robot cue playback/tail and existing own output suppression; source-linked decoded content, fresh independent external response and directedness must be judged by TL. Do not call Alice input human; do not accept cue echo or arbitrary background as addressed input.",
+    "dependency": "Alice physical availability and a real intelligible external addressed response remain unknown until native trial. No qualifying external response means END/no gain, not a hardware failure; no second passive window/user QA."
+  },
+  "whole_transaction": "Before any runtime selection/physicalcue, freeze full Agentwheel/filemap/source manifest and exact parent U102 selector; qualify old producer terminal/release/cgroupreap, latest negative authority and newbootMICoff migration. Restart only changed Agent once. Return only OWN MIC/capture, run ONE bounded physical trial on retained PC/model; return originalhumanrequestedAUTO LAST after terminal/reap/release/freshcapture. No forced creativeapp qualification.",
+  "fallback": "First actual producer/control/authority/semanticnegative/genuineUNKNOWN/deadline -> END. Only frozen exactU102Agent source selector rollback after known owned negative and canonical old-ID drain/wholecgroupreap; preserve later human STOP/OFF/privacy/quiet and genuineUNKNOWN fences. No restart heal/manualclear/modelreload/sourcevariant/cue retry. Parent PCaaba/c019/ba96/U96/model remain unchanged.",
+  "price": {
+    "cap_minutes": 60,
+    "WHOLE_before_minute": 20,
+    "FIRST_native_before_minute": 40,
+    "actual_end_and_retained_before_minute": 50,
+    "HARD_including_cleanup_and_handoff": 60,
+    "cleanup_minutes_included": 8,
+    "handoff_minutes_included": 2,
+    "maximum_native_ordinary_generations": 2,
+    "maximum_Alice_cues": 2,
+    "windows": 1,
+    "prior_closed_cumulative": 1472.37,
+    "proposed_max_cumulative_if_GO": 1532.37
+  },
+  "preserve": [
+    "Latest human STOP/OFF/privacy/quiet/owners/mode/volume or newer dominate",
+    "U16/U06/U08/U09/U04/R34/U79 RAM/controls/quotes/all parents",
+    "No model load/unload/JIT/TTL/provider/paid spend",
+    "No decoder/guard/body/camera/Hub/SDK changes",
+    "No user speaking/silence/music QA requests",
+    "No observability-only acceptance: install must deliver actual physical useful reply or END/qualified fallback",
+    "Only own temporary files cleaned; active code/PC9bundle-preimages/ba96/U96/model retained"
+  ],
+  "U103_closed": true,
+  "new_GO": false
+}

@@ -15,6 +15,10 @@ autonomous = ["jsonschema>=4.23,<5"]
 autonomous-pc = ["jsonschema>=4.23,<5", "lmstudio==1.5.0"]
 worker = ["vosk==0.3.45", "piper-tts==1.8.0", "faster-whisper==1.2.1", "onnx==1.23.2"]
 robot = ["webrtcvad-wheels==2.0.14.post1"]
+dev = [
+    "jsonschema>=4.23,<5", "build>=1.2,<2", "setuptools>=68", "wheel>=0.45,<1",
+    "numpy>=2,<3", "fastapi>=0.115,<1", "httpx>=0.27,<1",
+]
 
 [project.scripts]
 companion = "reachy_companion.__main__:main"
@@ -24,3 +28,4 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 reachy_companion = ["assets/*.json", "assets/*.txt"]
+"reachy_companion.r42" = ["manifest.json", "assets/*.json", "assets/*.txt"]

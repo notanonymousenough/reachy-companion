@@ -3,6 +3,7 @@ config.*.local.json
 secrets/
 .env
 .env.*
+*.private.json
 models/
 data/
 .venv/
@@ -27,3 +28,13 @@ models
 # Remote-only n8n owner/session material and bootstrap credentials.
 deploy/workflows/*.local.json
 deploy/workflows/bootstrap/
+
+# Local tools, credentials and historical device experiments stay outside Git.
+yacloud.s3.key.*
+text-api.json
+.coverage
+htmlcov/
+*.log
+
+# Private backups of local device configuration.
+*.local.json.before-*

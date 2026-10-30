@@ -1,0 +1,37 @@
+{
+  "status": "ONE_KNOWNMATERIAL_PRICED_PRODUCT_REPAIR_PROPOSAL_NOT_GO_NO_NEW_READS_OPS_TESTS",
+  "prior": 1550.37,
+  "cap_minutes": 45,
+  "maximum": 1595.37,
+  "goal": "Resolve currently identified native503 failure boundary and demonstrate resumed useful ordinary speech and one genuine scheduled selfactivity without blind AUTO rearm.",
+  "premise": {
+    "failed_request": "8e3a72bc32554c1e00000000000000cc",
+    "origin": "92b33ed4b7264ed1b285c6893c740efb",
+    "at_utc": "2026-10-21T02:46:53.778280+00:00",
+    "phase": "processing",
+    "HTTP": 503,
+    "producer_terminal_matched": true,
+    "producer_outcome": "failed",
+    "execution_unknown": false,
+    "original_model_profile_loaded": true,
+    "root_cause": "UNKNOWN"
+  },
+  "clocks_relative_minutes": {
+    "causal_localization": 8,
+    "WHOLE_before_source_selection_or_generation": 20,
+    "FIRST_saved": 30,
+    "actual_end_retained": 35,
+    "HARD_including_cleanup8_handoff2": 45
+  },
+  "maximum_model_requests": 2,
+  "planned_native": [
+    "one useful ordinary answer with current normal operator_text provenance/FULL/reap/release/freshcapture",
+    "one genuine scheduled ownactivity after specifically authorized source-bound repair/currenthumanrequestedON recovery; no forcedwake/cadencechange"
+  ],
+  "localization": "ONE bounded matched-failure localization: current boot/source/request metadata and exact relevant PC/router failure primary/log slice only, tied to …00cc and processing503. No broadcauseaudit or acoustic/decoder branch. Existing model loaded profile is not inference success. If cause absent/unqualified within8, END with concrete evidence gap, no diagnostic-only acceptance or extra cap.",
+  "repair": "Only one source-localized correction in the existing failing admission/processing path, whole transaction/source/currentauthority/drain/knownrelease/install/partialfallback/native/cleanup frozen BEFORE selection/generation. No new controller/schema/API/model/provider/resourceops. No source variant/retry after unexpected negative. If failure is upstream resource/unload/hardware/unknown rather than locally correctable permitted path, END and price different product course.",
+  "recovery": "CurrentfailclosedOFF is deliberate, never genericrearm/UNKNOWNclear. Only after concrete causalrepair, exactknownterminaldrain/newsourcehealth/currenthumanrequestedON-latestprivacy/STOP authority, one explicitly authorized sourcebound recovery via existing controls. Latesthumannegativewins. Planned source restart only if necessary; exactbaseline fallback separately qualified, no healing restart loops. Preserve capture/originalloadedmodel/hardwarebounds.",
+  "fallback": "Exact U106code/config/model/parents + current intent/privacy fences; no DB/privacy/oldboot/RAM restore or blindAUTOenable. If repair not accepted, baselinecurrentfailclosed retained. No userQA.",
+  "not_claimed": "This proposal does not establish literal-topicloop/physicalASR/root503cause before localization and does not reopen U108 memory qualification.",
+  "automatic_GO": false
+}

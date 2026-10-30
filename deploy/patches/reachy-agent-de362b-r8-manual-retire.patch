@@ -1,0 +1,37 @@
+--- a/src/reachy_companion/agent.py
++++ b/src/reachy_companion/agent.py
+@@ -1083,15 +1083,17 @@
+             self.set_listening(False, {'operator_binding': binding}, require_paused=True)
+         else:
+             was_listening = self.listening.is_set()
+-            self.listening.clear()
+-            pump = getattr(self, '_capture_pump', None)
+-            if pump is not None:
+-                self._capture_retire()
+-                pump.close()
++            self.set_listening(False, {})
++        def restore_listening():
++            if was_listening:
++                with self.microphone_lock, self.motion_policy.lock:
++                    policy = self.motion_policy.snapshot()
++                    if (self.microphone.enabled and not self.stopping.is_set()
++                            and not policy['quiet'] and not policy['privacy_all']):
++                        self.listening.set()
+         acquired = self.audio_lock.acquire(timeout=self.config['timeouts']['manual_audio_lock'])
+         if not acquired:
+-            if was_listening and self.microphone.enabled:
+-                self.listening.set()
++            restore_listening()
+             raise RuntimeError('Robot is processing a voice turn; try again when idle')
+         try:
+             options = dict(allow_barge_in=was_listening)
+@@ -1105,8 +1107,7 @@
+         finally:
+             self.phase = 'paused'
+             self.audio_lock.release()
+-            if was_listening and self.microphone.enabled:
+-                self.listening.set()
++            restore_listening()
+ 
+ 
+ def main(config, test_speaker=False):

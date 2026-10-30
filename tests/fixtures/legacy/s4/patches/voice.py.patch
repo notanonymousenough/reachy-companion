@@ -1,0 +1,106 @@
+--- a/voice.py
++++ b/voice.py
+@@ -13,6 +13,7 @@
+ import wave
+ import uuid
+ import unicodedata
++from enum import Enum
+ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+ from urllib.request import Request, build_opener, ProxyHandler
+ from urllib.error import HTTPError
+@@ -48,28 +49,51 @@
+ )
+ 
+ 
++class AliceRejectionReason(str, Enum):
++    """Stable, content-free first-failing predicate; never input-derived values."""
++    TEXT_TYPE = 'text_type'
++    EDGE_WHITESPACE = 'edge_whitespace'
++    CHARACTER_LIMIT = 'character_limit'
++    FORBIDDEN_SYMBOL = 'forbidden_symbol'
++    SENTENCE_SHAPE = 'sentence_shape'
++    WORD_COUNT = 'word_count'
++    WAKE_NAME = 'wake_name'
++    STYLE_WORD_BOUNDARY = 'style_word_boundary'
++
++
+ class AlicePhraseRejected(RuntimeError):
+-    """No TTS dispatch: the explicit Alice reply was not one short sentence."""
++    """Expected format rejection with bounded metadata and no rejected text."""
++    def __init__(self, reason):
++        if type(reason) is not AliceRejectionReason:
++            raise TypeError('Typed Alice rejection reason required')
++        self.reason = reason
++        super().__init__('alice_phrase_rejected:' + reason.value)
+ 
+ 
+ def validate_alice_phrase(text):
+     """Validate the whole phrase; never truncate, select a later fact or retry."""
+     if type(text) is not str:
+-        raise AlicePhraseRejected('Alice reply must be text')
++        raise AlicePhraseRejected(AliceRejectionReason.TEXT_TYPE)
+     # Only a single existing address may be normalized to the canonical prefix.
+     body = re.sub(r'^алиса,\s+', '', text, count=1, flags=re.I)
+     spoken = 'Алиса, ' + body
+-    if (body != body.strip() or len(spoken) > 120
+-            or re.search(r'[\x00-\x1f<>*#`\[\]{}|]', body)
+-            or not re.fullmatch(r'[^.!?…？؟！。．]+[.!?]', body)
+-            or not 1 <= len(re.findall(r'[^\W_]+', body)) <= 10):
+-        raise AlicePhraseRejected('One complete Alice phrase of at most 11 words required')
++    # Keep S2 predicate order: report only the first failure, not all failures.
++    if body != body.strip():
++        raise AlicePhraseRejected(AliceRejectionReason.EDGE_WHITESPACE)
++    if len(spoken) > 120:
++        raise AlicePhraseRejected(AliceRejectionReason.CHARACTER_LIMIT)
++    if re.search(r'[\x00-\x1f<>*#`\[\]{}|]', body):
++        raise AlicePhraseRejected(AliceRejectionReason.FORBIDDEN_SYMBOL)
++    if not re.fullmatch(r'[^.!?…？؟！。．]+[.!?]', body):
++        raise AlicePhraseRejected(AliceRejectionReason.SENTENCE_SHAPE)
++    if not 1 <= len(re.findall(r'[^\W_]+', body)) <= 10:
++        raise AlicePhraseRejected(AliceRejectionReason.WORD_COUNT)
+     # Reject duplicate/malformed addresses and wake names inside the body.
+     normalized = ''.join(c for c in unicodedata.normalize('NFKD', body.casefold())
+                          if not unicodedata.combining(c))
+     mixed = normalized.translate(str.maketrans({'a':'а','l':'л','i':'и','s':'с','c':'с','e':'е'}))
+     if re.search('alice|alisa|алис', normalized) or 'алис' in mixed:
+-        raise AlicePhraseRejected('Exactly one leading Alice address required')
++        raise AlicePhraseRejected(AliceRejectionReason.WAKE_NAME)
+     return body
+ 
+ 
+@@ -307,7 +331,7 @@
+             unstyled = CONTROL.sub('', original_reply)
+             aggregate = ' '.join(segment['text'] for segment in segments)
+             if re.findall(r'[^\W_]+', unstyled) != re.findall(r'[^\W_]+', aggregate):
+-                raise AlicePhraseRejected('Alice style split must preserve all words')
++                raise AlicePhraseRejected(AliceRejectionReason.STYLE_WORD_BOUNDARY)
+         reply, emotion = spoken_expression(reply)
+         if reply_constraints is not None:
+             validate_text(reply,reply_constraints)
+@@ -558,6 +582,9 @@
+                 else:
+                     value = pipeline.turn(payload, self.path)
+                 self.reply(200, value)
++            except AlicePhraseRejected as exc:
++                LOG.warning('alice_phrase_rejected reason=%s headers_sent=%s', exc.reason.value, False)
++                self.reply(422, {'ok': False, 'error': 'alice_phrase_rejected', 'reason': exc.reason.value})
+             except HTTPError as exc:
+                 LOG.exception('upstream_http_error code=%s', exc.code)
+                 self.reply(502, {'ok': False, 'error': 'Upstream HTTP %s' % exc.code})
+@@ -592,6 +619,16 @@
+                 event(first)
+                 for value in iterator:
+                     event(value)
++            except AlicePhraseRejected as exc:
++                LOG.warning('alice_phrase_rejected reason=%s headers_sent=%s', exc.reason.value, sent)
++                rejection = {'ok': False, 'error': 'alice_phrase_rejected', 'reason': exc.reason.value}
++                if sent:
++                    try:
++                        event(dict(rejection, type='error'))
++                    except OSError:
++                        pass
++                else:
++                    self.reply(422, rejection)
+             except (BrokenPipeError, ConnectionResetError):
+                 LOG.info('stream_client_disconnected')
+             except Exception:

@@ -138,6 +138,8 @@ class WindowsCleanPCTests(unittest.TestCase):
         shutil.copy(ROOT/'config.example.json',self.path);shutil.copytree(ROOT/'profiles',self.path/'profiles')
         initialize(self.path);config=Config(self.path/'config.local.json')
         before=config.filename.read_bytes();token=config.path(config['paths']['token_file']).read_bytes()
+        self.assertEqual(check_pc.check(config,self.path),[])
+        config.data['security']['robot']['policy']='legacy_hub'
         self.assertIn('explicit_hub_ipv4_required',check_pc.check(config,self.path))
         config.data['security']['robot']['hub_source_ipv4']='192.0.2.10'
         self.assertEqual(check_pc.check(config,self.path),[])

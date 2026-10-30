@@ -12,9 +12,11 @@ import sysconfig
 
 
 MODULES = {'reachy_companion'} | {'reachy_companion.' + name for name in (
-    '__main__ agent barge_in brains client code_identity config control_page deployment '
+    '__main__ agent alsa_role_observer barge_in brains capture_pump client code_identity '
+    'config control_diagnostics control_page conversation_context deployment experience finite_alice_trial '
     'emotion_library expression_player expressions firewall hub intents logging_utils microphone '
-    'motion_limits motion_policy motion_proxy recognition replay router sound_events sound_monitor '
+    'imu_readout motion_limits motion_policy motion_proxy owned_http provisional_stt '
+    'recognition replay router sound_events sound_monitor '
     'speech_clock speech_motion spoken_reply spoken_reply_sdk spoken_vision token_stream voice volume worker_container').split()}
 
 

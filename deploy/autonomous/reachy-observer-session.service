@@ -1,0 +1,23 @@
+# Candidate only. No [Install]: explicit coordinator start after fresh preflight.
+[Unit]
+Description=Reachy native observation-only session (single consumed arm)
+Requires=reachy-observer-gateway.service
+BindsTo=reachy-observer-gateway.service
+After=reachy-observer-gateway.service
+
+[Service]
+Type=simple
+User=deploy
+WorkingDirectory=/home/deploy/reachy-shadow/observer-service
+Environment=PYTHONPATH=/home/deploy/reachy-shadow/observer-service/src
+EnvironmentFile=/home/deploy/reachy-shadow/observer-service/paths.local.env
+UMask=0077
+ExecStart=/home/deploy/reachy-shadow/.venv/bin/python -B /home/deploy/reachy-shadow/observer-service/deploy/autonomous/observer_service.py session --config ${OBSERVER_CONFIG} --token-file ${OBSERVER_TOKEN_FILE} --companion-config ${OBSERVER_COMPANION_CONFIG} --arm-file /home/deploy/reachy-shadow/observer-service/arm.local.json --output /home/deploy/reachy-shadow/observer-service/report.local.json --metadata /home/deploy/reachy-shadow/observer-service/metadata.local.json
+Restart=no
+KillSignal=SIGTERM
+KillMode=control-group
+TimeoutStopSec=10s
+LimitCORE=0
+# Routine metadata uses two bounded snapshots; avoid journal accumulation/content.
+StandardOutput=null
+StandardError=null

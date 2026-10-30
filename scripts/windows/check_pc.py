@@ -17,8 +17,9 @@ def check(config,repo):
     if config.root!=Path(repo).resolve():errors.append('config_must_be_in_checkout_root')
     if config['voice']['mode']!='remote':errors.append('remote_voice_mode_required')
     if config['streaming']['enabled'] is not True:errors.append('streaming_required')
-    try:ipaddress.IPv4Address(config['security']['robot']['hub_source_ipv4'])
-    except ValueError:errors.append('explicit_hub_ipv4_required')
+    if config['security']['robot'].get('policy', 'legacy_hub') == 'legacy_hub':
+        try:ipaddress.IPv4Address(config['security']['robot'].get('hub_source_ipv4', ''))
+        except ValueError:errors.append('explicit_hub_ipv4_required')
     for key in ('hub_url','voice_url','compute_url','agent_url','robot_url'):
         value=urlsplit(config['network'][key])
         if value.scheme!='http' or not value.hostname or value.username or value.password or value.query or value.fragment:

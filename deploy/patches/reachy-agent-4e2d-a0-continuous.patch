@@ -1,0 +1,113 @@
+--- a/agent.py
++++ b/agent.py
+@@ -291,6 +291,8 @@
+                              'volume_percent': self.volume.percent,
+                              'volume_control_enabled': self.audio.get('playback_mixer', {}).get('enabled', False),
+                              'capture_active': self.capture_active,
++                             'capture_pcm': (self._capture_pump.snapshot()
++                                 if getattr(self, '_capture_pump', None) is not None else None),
+                              'sound_mode': 'music' if self.sounds.music else 'conversation', 'sound_error': self.sounds.last_error,
+                              'microphone_state_error': self.microphone.error,
+                              'expression': self.expressions.last_expression,
+@@ -385,7 +387,7 @@
+ 
+     def _capture_fresh(self):
+         pump = getattr(self, '_capture_pump', None)
+-        return pump is not None and pump.fresh(getattr(self, '_capture_packet', None))
++        return pump is not None and pump.admitted(getattr(self, '_capture_packet', None))
+ 
+     def _capture_pending(self, value):
+         from .capture_pump import Utterance
+@@ -648,11 +650,10 @@
+                 # Spoken visual child has returned before it calls voice('/say').
+                 self._capture_suspended = False
+                 capture_source = self._capture_get()
+-                if allow_barge_in:
+-                    from .capture_pump import barge_monitor
+-                    monitor = barge_monitor(self, capture_source)
+-                    monitor.start()
+-                    self._stream_timing_mark(timing,'monitor_start_return')
++                # A0 only drains PCM during output. No additional STT request
++                # and no acoustic barge-in claim without hardware acceptance.
++            if cancelled():
++                return cancelled_result()
+             self._stream_timing_mark(timing,'response_open_begin')
+             response_context = self.http.open(item, timeout=self.config['timeouts']['client']) if replay is None else ReplayResponse(replay, settings)
+             self._stream_timing_mark(timing,'response_open_end')
+@@ -713,6 +714,8 @@
+                             if not all_cues:
+                                 self.expressions.set('speaking', (result or {}).get('emotion', 'neutral'))
+                             self._stream_timing_mark(timing,'aplay_popen_begin')
++                            if capture_source is not None:
++                                capture_source.output(True)
+                             process = subprocess.Popen(['aplay', '-q', '-D', self.audio['playback_device'],
+                                 '--buffer-time='+str(settings['playback_buffer_us']), '--period-time='+str(settings['playback_period_us']),
+                                 '-t', 'raw', '-f', 'S16_LE', '-r', str(settings['sample_rate']), '-c', '1'],
+@@ -811,6 +814,8 @@
+                     process.stdin.close()
+                 process.stderr.close()
+             self.playback_process = None
++            if capture_source is not None:
++                capture_source.output(False)
+             try:
+                 if (epoch != self.microphone_epoch or not self.microphone.enabled
+                         or (capture_source is not None and not capture_source.permitted())):
+@@ -972,6 +977,11 @@
+                             response['transcript'] = text
+                         else:
+                             continue
++                    if self._capture_enabled() and (response.get('cancelled')
++                            or not self.microphone.enabled or not self.listening.is_set()
++                            or epoch != self.microphone_epoch or self.stopping.is_set()
++                            or captured_operator['policy_epoch'] != self.motion_policy.snapshot()['epoch']):
++                        continue
+                     self.last_transcript = response.get('transcript', '')
+                     if self.last_transcript:
+                         self.turns += 1
+@@ -987,6 +997,9 @@
+                 self.phase = 'error'
+                 LOG.exception('conversation_error')
+                 self.stopping.wait(self.config['conversation']['retry_seconds'])
++        pump = self._capture_retire() if self._capture_enabled() else None
++        if pump is not None:
++            pump.close()
+         self.phase = 'stopped'
+ 
+     def set_listening(self, enabled, payload, *, require_paused=False):
+@@ -1008,6 +1021,7 @@
+                 raise ValueError('Exact listening operator binding required')
+         # Same lock order as operator snapshots. Check and mutate atomically
+         # with microphone OFF/new owner and MotionPolicy.save, without I/O.
++        retired_capture = None
+         with self.microphone_lock, self.motion_policy.lock:
+             if binding is not None:
+                 policy = self.motion_policy.snapshot()
+@@ -1029,7 +1043,16 @@
+                 self.listening.set()
+             else:
+                 self.listening.clear()
+-            return {'ok': True, 'listening': enabled}
++                retired_capture = getattr(self, '_capture_pump', None)
++                if retired_capture is not None:
++                    # Only set the Event while holding policy.lock: the reader
++                    # may hold its condition while taking a policy snapshot.
++                    retired_capture.retired.set()
++                    self._capture_packet = self.pending_pcm = None
++            result = {'ok': True, 'listening': enabled}
++        if retired_capture is not None:
++            retired_capture.close()
++        return result
+ 
+     def manual(self, path, payload):
+         binding = payload.get('operator_binding')
+@@ -1061,6 +1084,10 @@
+         else:
+             was_listening = self.listening.is_set()
+             self.listening.clear()
++            pump = getattr(self, '_capture_pump', None)
++            if pump is not None:
++                self._capture_retire()
++                pump.close()
+         acquired = self.audio_lock.acquire(timeout=self.config['timeouts']['manual_audio_lock'])
+         if not acquired:
+             if was_listening and self.microphone.enabled:

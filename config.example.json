@@ -90,8 +90,7 @@
   "security": {
     "robot": {
       "restrict_to_hub": true,
-      "hub_source_ipv4": "",
-      "hub_source_ipv6": [],
+      "policy": "local_ssh",
       "nft_table": "reachy_companion",
       "service": "reachy-companion-firewall",
       "allow_dhcp": true,

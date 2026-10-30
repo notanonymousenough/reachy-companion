@@ -1,0 +1,16 @@
+[Unit]
+Description=Reachy existing Mac bridge bounded health sentinel
+
+[Service]
+Type=notify
+NotifyAccess=main
+User=deploy
+UMask=0077
+ExecStart=/home/deploy/reachy-shadow/.venv/bin/python -B /home/deploy/reachy-shadow/observer-service/deploy/autonomous/mac_bridge_sentinel.py --identity /home/deploy/reachy-shadow/observer-service/bridge-identity.local.json --metadata /home/deploy/reachy-shadow/observer-service/sentinel.local.json
+Restart=no
+KillMode=control-group
+TimeoutStartSec=5s
+TimeoutStopSec=5s
+LimitCORE=0
+StandardOutput=null
+StandardError=journal

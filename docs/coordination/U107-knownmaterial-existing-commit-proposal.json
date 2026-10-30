@@ -1,0 +1,42 @@
+{
+  "status": "ONE_PRICED_INTEGRATED_PROPOSAL_NOT_GO_NO_NEW_READS_OR_OPERATIONS",
+  "basis": "U107 closed due pre-publication private-counter observation requirement; PM recognizes atomic fail-closed guarded operation + source-bound durable result can serve equivalent proof without exporting counters.",
+  "prior": 1545.37,
+  "cap_minutes": 45,
+  "maximum": 1590.37,
+  "clocks_relative_minutes": {
+    "WHOLE_before_publication_restart_generation": 15,
+    "FIRST_saved": 28,
+    "actual_end_and_retained": 35,
+    "HARD_including_cleanup8_handoff2": 45
+  },
+  "goal": "Durable memory of one currently valid actually-authored scene survives ONE same-code worker/RAM-owner restart; meaningful source-grounded new continuation then unrelated useful ordinary answer clears fictional context.",
+  "runtime": "Exact U106 Agent63b-PCaaba-configc019-readonlyba96/E7-U96/originalHauhau-model baseline; no runtime/controller/schema/endpoint/provider changes.",
+  "requests": {
+    "preliminary_source_generation": 0,
+    "postrestart_continuation": 1,
+    "postrestart_unrelated_ordinary": 1,
+    "maximum": 2,
+    "PC_logical_stop_start": 1,
+    "Agent_SDK_Hub_restart": 0
+  },
+  "method": [
+    "Before WHOLE qualify full existing operator maintenance/CAS/commit-readback/restart/only-owned-return/partial-fallback/cleanup transaction and originalmodel/currentON/knownrelease; freeze once. No requirement to export numeric private forget counters.",
+    "At final gate select ONE current completed/reaped/released application scene under matched sourceID-origin-bodySHA-native PCboot and Agentboot/MIC/policy. Read exact original producer body for TL semantic review; no substitute body or generating source. A later source/privacy/control mismatch ends without selecting another root.",
+    "If same current source already valid durable, skip publication. Otherwise captured-current-humanON -> only-owned AUTOoff while MIC enabled, latestbinding/knownrelease/source revalidation -> ONE existing activity_complete(request_id,service_boot_id,native9). Server itself reads exact private original body, validates capturedprivacy and captured/currentforget under experience lock and atomically publishes. Refusal/transportunknown/mismatch ends; no retry or alternate root.",
+    "Successful actual source-bound result must match root/bodySHA/nativeproof/exactselectedversions/normalnamespace/currentprivacy; independent existing status and readonly SQLite group readback before RAM loss establish durable commit. Readback mismatch ends before restart. Existing guard semantics retained; no guessed counter zero or privacy restore.",
+    "Then only-owned MICoff -> canonical ALL old producers terminal/reaped/released plus capture/expression/stockknownretired; ONE identical Docker image/code/config/mount stop -> verify old process gone -> start -> newboot/newprocess/health/initialRAMempty and same DB logical rows. LMStudio outsideworker stays loaded unchanged; old terminalIDs remain historical oldboot, not recompleted.",
+    "Only-owned MICfreshcapture while AUTO remains pendingOFF -> one explicit continuation with no pastedscene -> native FULL terminal/release/newboot/sourceversion/hash + TL meaningful new consequence PASS -> one unrelated ordinary useful FULL reply clearsfictioncontext -> canonical releases/freshcapture -> captured-originalAUTO return LAST. Only existing qualified finite named409 no-effect handling; no blind secondON.",
+    "First unexpected actual producer/control/authority/semantic negative/emptyreply/UNKNOWN or deadline END, no retry/alternate/window/reload/causeaudit. Partial fallback exact source/config/model/currentintent fences; valid durable publication retained as intentional artifact. No oldRAM/DB/privacyrestore/unknownclear. Cleanup only owned staging/receipts, preserve all activeparents."
+  ],
+  "known_qualified": [
+    "persistent RWbind SQLite memory enabled/privacy9/writes_frozen0/capacity2of8 at U107 readonly snapshot; these are not fresh admission permission",
+    "ba96 adapter exact and source-bound guarded pipeline operation implementation exists",
+    "existing canonical maintenance/drain/resume/finite409 and same-container stop/start operator primitives exist; complete adapted composition must qualify before mutation",
+    "current publication result and readback are not yet produced"
+  ],
+  "blockers_if_whole_fails": "If source/body/native binding, atomic guard result/readback or complete partial-fallback/current-intent ordering cannot qualify within WHOLE15: END before publication/restart/generation; no source-only auditcap or newAPI.",
+  "topicloop": "Separate userreportedOPEN; U106 textinjection narrowbaseline not physicalASR/topicloop fix. No blindtopic/modeldecoder/cue audit in this proposal.",
+  "userQA": 0,
+  "automatic_GO": false
+}

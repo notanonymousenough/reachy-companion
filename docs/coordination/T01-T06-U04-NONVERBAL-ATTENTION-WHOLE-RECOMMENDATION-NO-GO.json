@@ -1,0 +1,64 @@
+{
+  "status": "ONE KNOWN-MATERIAL RISK-CEILING WHOLE RECOMMENDATION ONLY / NO GO",
+  "scope_premise": "PM explicitly permits missing limited head/antenna native producer lifecycle, owned STOP join and measured completion/return integration INSIDE the useful sensor-event attention whole, within the existing SDK owner. This supersedes the earlier missing-contract prerequisite for this estimate; it does not declare U97 deployed or authorize general driver/body repair.",
+  "closed_ledger": 2208.37,
+  "recommended_active_minutes_ceiling": 95,
+  "FIRST_minutes_from_future_actual_GO": 65,
+  "integration_checkpoint_minutes_from_future_actual_GO": 30,
+  "HARD_minutes_from_future_actual_GO": 95,
+  "closure_reserve_minutes": 30,
+  "MAX_if_GO": 2303.37,
+  "unused_U135_minutes_closed_not_budget": 43,
+  "next_GO": 0,
+  "one_chosen_stimulus": {
+    "source": "Current camera stream within the existing U129/U135 SDK media owner",
+    "event": "A sufficiently large localized visual change sustained across fresh frames while the robot camera pose is stationary. Use low-resolution grayscale change after global brightness normalization and persistence filtering; do not claim a person, face identity, object understanding or sound localization.",
+    "time_and_privacy": "Reuse U130 native source PTS/segment/clock engineering as source material, then establish current producer identity, source generation, capture-time bounds and current privacy inside this whole. Frame arrival time alone is not capture time. On clock warmup, stale/future/unknown frames, owner change, physical capture OFF or privacy withdrawal, WAIT/deny and discard the event.",
+    "storage": "Compute bounded visual-change statistics in RAM at the existing SDK source; publish only authenticated content-free event identity/time/feature metadata. No pixel export, disk frame, LLM image path, private observer handoff or old frame reuse.",
+    "false_feedback_guard": "Do not admit frames during owned or foreign motion, during return settling, or within the bounded post-action suppression interval. Global camera brightness drift alone is insufficient; never trigger the next gesture from the previous gesture's camera motion."
+  },
+  "one_chosen_nonverbal_action": {
+    "primitive": "A small antenna-only notice gesture through the existing SDK goto/play_move path: measured current antenna positions, up to 5 degrees relative displacement within unchanged R34 limits, a short hold, and bounded return. head_pose=null and body_yaw=null; preserve the measured head/body pose. If a nonzero valid bounded gesture is unavailable, WAIT rather than recenter or loosen limits.",
+    "meaning": "One acknowledgement of a fresh real visual event, with bounded cooldown. No spoken request for the user to test the room, random continuous wiggle or meaningless no-op acceptance.",
+    "normal_completion": "Bind action ID/current SDK boot to the actual direct async physical coroutine, its native move-guard entry/exit and finally release. Require fresh actual encoder/target feedback, settled bounded target/return and no later producer writes. Acknowledgement, UUID absence, elapsed duration, proxy future.done or cancellation request alone is not completion.",
+    "active_STOP": "The same SDK owner owns the cancellation and shielded join of that exact native producer even after client disconnect. U135 motion OFF/global STOP must withdraw the event/action grant, enforce physical torque denial, retain unresolved worker identity, and prevent any fresh ON until the real producer is joined/released or the qualified stronger-negative fallback is retained.",
+    "return": "Only a fresh permitted current binding may use U135 measured-current-pose enable/hold. No historical ON restoration. A later human STOP/privacy/owner change/UNKNOWN prohibits return; preserve it. No homing, wake, goto-neutral or body-yaw trajectory."
+  },
+  "implementation_scope": [
+    "Reuse U97 source-qualified DIRECT_ASYNC_PLAY_MOVE_NATIVE_LOCK_AND_FINALLY and candidate lifecycle concepts as material; recover the authoritative current installed async linkage inside the whole. Integrate minimal typed native terminal/lease/owned-STOP receipts and their consumers in the current SDK/Agent/Hub. This limited completion integration is now explicitly in scope, not an advance adapter or a separate audit cap.",
+    "Preserve the existing SDK/controller as sole physical owner. Do not replace its motor driver, add a second owner, expand body control, alter calibration or loosen limits. If the direct mechanism actually requires general driver/body replacement to join/release, END with that one factual limitation rather than opening another repair route.",
+    "Implement lightweight perception, event-to-decision binding and attention admission inside this product whole. Sensor processing and decision must not wait for an LLM or speech response. A busy motion lane, stale event or unknown release yields WAIT, not a later replay of an expired event.",
+    "Add a separate explicit attention control and honest OFF/active/WAIT/denied/UNKNOWN state to the existing authenticated panel. Default OFF until a fresh permitted attention action; never reinterpret historical speech AUTOoff as an indefinite ON grant or change microphone/camera/mode/volume/AUTO to arm attention.",
+    "Qualification uses one bounded observation window up to 300 seconds and at most two admitted sensor-backed attention activities: a completed notice-and-return and an active owned STOP/current-return case. No synthetic frame/event, operator-made environmental stimulus, user QA or forced second event. If real events do not supply the required useful and control evidence by FIRST, close without product PASS.",
+    "At closure retain only a current explicitly authorized accepted attention permission and validated dependencies. An absent, withdrawn, expired or ambiguous grant leaves attention OFF/WAIT; it never turns the robot, capture or the rest of the project off on a timer."
+  ],
+  "priced_sequence_minutes": [
+    {"work": "Current native async linkage recovery and limited producer entry/finally-release/owned STOP-join receipts, integrated with U135 negative dominance and measured physical feedback", "minutes": 18},
+    {"work": "Current camera source-time/privacy binding, lightweight localized-change event and bounded attention decision/WAIT/cooldown without heavy speech dependency", "minutes": 15},
+    {"work": "Separate explicit attention permission and actual activity/denial/UNKNOWN state in the existing panel", "minutes": 6},
+    {"work": "Meaningful source/current-identity/clock/race/partial-failure fixtures, native API imports, full current integrity maps and complete executable every-partial fallback frozen before mutations", "minutes": 10},
+    {"work": "Conditional known-owner SDK-Agent-Hub delivery with verified retirement, current U135/U129/U96 source parents and qualified current-authority return", "minutes": 5},
+    {"work": "One bounded actual natural-event attention window: useful measured finite gesture/return plus active STOP/join/current-return and UI/causal verdict", "minutes": 11},
+    {"work": "Reserved every-partial qualified current U135 fallback or stronger negative enforcer retention, including known SDK worker retirement when required", "minutes": 18},
+    {"work": "Reserved only-owned cleanup, private metadata retention and complete accepted or required-negative dependency pins", "minutes": 7},
+    {"work": "Reserved ONE actual cost/ledger, retained state, TECH and handoff", "minutes": 5}
+  ],
+  "checkpoint30": "Save the concrete integrated native lifecycle/STOP protocol and sensor-time-to-typed-attention-decision increment, its source identities and the remaining whole/qualification work. Report honestly whether it is code/integration or already native evidence. Do not turn checkpoint30 into a new prerequisite audit, reset, extension or test-count substitute for useful attention.",
+  "FIRST65": "Useful real source/time/privacy-bound attention and actual bounded completion/return, active STOP/native join/current-return and visible control evidence must be saved by future GO+65. Missing proof means END, not a pass from source fixtures or an endless WAIT.",
+  "HARD95": "Original future GO clocks stay fixed. The final 30 minutes are closure reserve, not permission for additional sensing variants, gestures, model calls or repairs.",
+  "early_END_rules": [
+    "First actual production negative, unsupported native linkage/clock/physical evidence or missing useful result by FIRST: END/no product retry, second observation window, source/model repair or cap extension. A no-event WAIT is honest while the one window remains open; it is not useful attention PASS.",
+    "Do not switch stimulus or reopen parked LLM visual, temporal/private-handoff, S3 semantic or general U97 driver/body routes to rescue the result.",
+    "No new runtime operations, scripts, tests, camera/audio content windows, browser actions, generations or movements were performed to prepare this recommendation. No user QA, ASR/Alice trial, provider purchase or model download belongs to it."
+  ],
+  "mandatory_baseline_and_all_partial_closure": {
+    "current_full_U135_map": "U135-manual-motion/ACCEPTED-RUNTIME-INTEGRITY-PINS.json SHA3f5fe7d33b4c07807becf5c7123a9138ba614d797b6299cf1a303d3f91541826; do not substitute the old base file table",
+    "other_required": "U129 physical camera/audio STOP and UI, U96 safe backend/startup/sole writer/current-pose mechanism, current U134 G7/owner-memory/privacy/forget roots, unchanged PC/model/profile/resources",
+    "before_mutations": "Freeze the full sensor/native-action/control transaction and executable source/selector/producer/permission fallback for every partial across SDK, Agent and Hub. Keep exact current U135 preimages, full candidate maps and source metadata; native context/identity checks are part of this whole.",
+    "partial_positive_or_unknown": "Withdraw only the owned attention/action grant, physically deny via the existing SDK, preserve the exact real producer and native lease record, await its owned join or verified SDK process/cgroup/sole-writer retirement, and retain stronger required negative enforcement. Do not clear an unknown UUID or infer release from torque OFF or a proxy task.",
+    "source_restore": "Restore exact known U135 SDK/Agent/Hub sources only after known producer retirement and byte/selector CAS. Preserve U129 physical privacy and U96 safety during partial source restore and restart. Required new negative enforcers remain if removing them would weaken a later negative.",
+    "controls": "Latest real STOP/privacy/motion/owner/UNKNOWN and independent camera/MIC/mode/volume/AUTO win over saved baseline values. No historical permission, DB or RAM snapshot restore. No timed robot OFF.",
+    "cleanup": "Only receipt-bound owned files; retain required source preimages, live authority/producer registries, complete current integrity pins and unknown old U129 files. Never call unprobed source-generation/pycache residue zero."
+  },
+  "risk_ceiling_not_guarantee": "The price includes the missing native integration and uncertainty rather than demanding an already accepted adapter. Real environmental events may be absent, the preserved source-clock mechanism may not qualify on the current producer, or measured finite motion/STOP may fail. Those outcomes consume the same fixed ceiling and end honestly with qualified closure, not a guaranteed product success."
+}

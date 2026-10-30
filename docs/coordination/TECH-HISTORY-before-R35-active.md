@@ -1,0 +1,14 @@
+# Reachy Companion — текущий технический статус
+
+1. **Текущая цель пользователя — локальный кадр → вопрос. Одна попытка R33 завершена16:40:45, активного hardware budget нет:** arm200/gen5 в16:39:55; PCM4.9s отменил до кадра, gen6/cancelled/no pending. Same source2/nonretired/arecord280193 подтверждает camera/model/question0. Пользователь сообщает, что молчал; источник звука/фон/эхо/корректностьVAD UNKNOWN, это не доказательство речи человека. Image→question и visual accuracy UNTESTED. [Report](S7-R33-user-requested-test.md).
+2. **R34 DEFERRED / NOT RUN:** пользователь прямо выбрал новую попытку кадра/вопроса R33 после отдельного уточнения. Hub installation/restart/controls/motion windows0; исходный deadline не переносится. Source-only gate9c00… PASS (6source+3Tech groups), actual reject predicate остаётся UNKNOWN. Hub008be…/boot5a250… сохранён. [Course change](../../S7-evidence/R34/user-course-change.json), [gate](../../TECH-evidence/R34/source-gate.json).
+3. **Последнее полное состояние16:40:09:** Agent279838/bootc777…/mic313/captureON/source2/PCM27.613MB/gaps0overflow0; motor142OFF/ownersnull/quietprivacyfalse/currenterrorsabsent/Hubfree/stockknownunowned/workeridle. Ordinaryfalse/ACKfalse/+2dB/hardware100% и камера сохранены. Agent7bd/snapshot04e/initiative0823/player1e25 unchanged. [Receipt](../../S7-evidence/R33-user-test/final.json).
+4. **Полезный baseline сохранён:** локальные9B/Whisper/Piper, обычная речь и камера ON; initiative opt-in установлен, сейчас не взведён, автоматического re-arm нет. R29 finite motion/STOP PASS исторический; R30 sustained motion fault не исправлен, motorOFF. Full companion/always movement не принят. [Baseline](runtime-baseline.md).
+5. **Handoff:** S7 finite observers ended, hardware released16:40:45; уточнение «Я молчал» принято и отражено, S7idle16:42:03, новых arm/кадра/модели/движения0. Не закрывать пользовательский чат насильно. Один предлагаемый следующий outcome: не уничтожать ещё ожидающий camera-request по любому PCM до STT, а сбросить тихий интервал и ждать в том же исходном≤60s binding; полная тишина3s/STOP/privacy/owners/deadline остаются. Это proposal≤20min, НЕactive/неimplemented; вопрос всё ещё может не получить quiet. [Proposal](R35-pending-initiative-proposal.md). [History](TECH-HISTORY-before-R34-deferred.md).
+
+| Owner | Current state |
+| --- | --- |
+| S7 `01a148c3-97d7-73b3-99f7-afb841c17b53` | User test + clarification terminal; idle. No hardware/arm/model retry; user chat remains accessible. |
+| Source `01a148d4-bc4e-72e3-93aa-29847c0a836a` | Frozen R34 logging-only candidate9c00… accepted, uninstalled; no further source work. |
+| TechLead | Исправлен устаревший статус/steering после чтения прямого человеческого выбора; runtime не менял. R34 cause UNKNOWN, baseline preserved. |
+| ROOT | Следующий product outcome/cost; текущий R34 window не продлевать. |

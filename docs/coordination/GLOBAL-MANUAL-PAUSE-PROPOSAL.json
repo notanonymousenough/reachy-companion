@@ -1,0 +1,92 @@
+{
+  "status": "SOURCE_PREPARED_PAUSE_AND_OBSERVE_ONLY_NO_AUTOMATIC_RESUME_NO_RUNTIME_GO",
+  "START": "2026-10-24T08:57:58+00:00",
+  "START_source": "Actual current app turn.startedAt=1792832278",
+  "closed_utc": "2026-10-24T09:01:07.760359+00:00",
+  "actual_active_seconds": 189.760359,
+  "actual_preparation_minutes_ceil": 4,
+  "authorized_source_minutes": 2,
+  "source_time_within_cap": false,
+  "prior_confirmed": 3210.37,
+  "ledger_after": null,
+  "U162": "UNSETTLED separate",
+  "no_previous_direction_reopened": true,
+  "qualified_resume_guards": {
+    "packet": {
+      "resume_binding": {
+        "agent_boot_id": "string",
+        "microphone_epoch": "integer",
+        "policy_epoch": "integer",
+        "intent_generation": "integer",
+        "schedule_generation": "integer",
+        "owner_id": null,
+        "pause_revision": "integer"
+      }
+    },
+    "source": "r42/agent.py1568-1606; r42/pause_control.py145-176",
+    "all_issued_operands_matched": true,
+    "four_locks": "microphone_lock,motion_policy.lock,initiative.lock,durable_intent.lock wrap panel_match,quiescent/MIC/privacy checks and positive transition",
+    "exact_checks": [
+      "Agentboot,pause_revision,microphone_epoch,policy_epoch,intent_generation,schedule_generation match binding",
+      "input owner_id mustNone; actualmicrophone_owner_id andmotion_policy.owner_id mustNone",
+      "no quiet/privacy_all/MICerror/durableintenterror/stopping",
+      "held andquiescent required; microphone permission enabled"
+    ],
+    "scope": "Detects changed issued Agent authority under these locks, not atomic PC source-epoch attestation."
+  },
+  "ancestry_boundary": {
+    "POSTpause": "Empty payload. Private committed revision captured under locks, but returned pause_status(refresh=False) is collected later after locks and stop_speaker. It may reflect a later human pause/control.",
+    "check_possible": "Retain BEFORE Agentboot/revision and require response Agentboot same and pause_revision exactly before+1. Refuse mismatches; never adopt latest foreign pause.",
+    "not_fully_qualified": "Raw POST response does not expose immutable owncommit token. Complete provenance for all intervening control-generation changes is not qualified by this one boundary read.",
+    "PC_source_epoch": "No PCboot/source hash field in resume_binding/panel_match. PCboot errors are found by prior pause_status refresh outside positive four-lock section. No proof here of atomic rejection of every PC source change through positive commit.",
+    "decision": "Do not offer automatic ownresume from this source preparation."
+  },
+  "manual_proposal": {
+    "requires_new_explicit_human_intent": true,
+    "intent": "Pause ALL current canonical Agent turns, allow existing canonical completion/cancellation observation, and leave paused without automatic resume.",
+    "runtime_ceiling_active_minutes": 5,
+    "not_authorized_to_execute": true,
+    "entry_packet": {
+      "method": "POST",
+      "path": "<current configured Agent>/pause",
+      "body": {}
+    },
+    "observation": "Only existing canonical held GET/pause-state in original bounds; may refresh/cancel still-unreleased registered canonical turns as part of explicitly requested global pause. Record actual receipts, never relabel cached/UNKNOWN as release.",
+    "effects_disclosed": [
+      "Listening/questions/current speech interrupted; capture retired and expressions held by existing negative transition.",
+      "Pending/resume audio cleared; canonical Agent turns may be cancelled.",
+      "No model input/source patch/installer/restart/motor unfold or new movement.",
+      "No automatic positive resume; caller does not restore historical settings or adopt later human pause."
+    ],
+    "receipt_fields": [
+      "exact POST response/rawhash/status/uncertainty",
+      "before and returned Agentboot/pause_revision/allissuedbindingfields",
+      "current PCboot/RID/producerstate/released vs localterminal/reaped",
+      "held/quiescent/draining/UNKNOWN/head/nativeowner evidence",
+      "source/currentcontrol changes and whether observation stopped"
+    ],
+    "safe_refusal": "Timeout, boot/source mismatch, unknown, missing release or changed controls: stop further actions and retain existing negative state. No pause retry, conditionalguard bypass, resume, UNKNOWNclear, foreign kill or restart. Latest human resume/STOP/privacy wins.",
+    "success_limit": "Receipt reconciliation may succeed; normal working return is NOT promised. If user does not accept remaining paused, this proposal is NO-GO."
+  },
+  "effects": {
+    "runtime_GET": 0,
+    "runtime_POST": 0,
+    "tests": 0,
+    "source_patch": 0,
+    "model_input": 0,
+    "deploy": 0,
+    "restart": 0,
+    "new_adapter": 0
+  },
+  "new_source_boundary_reads": 1,
+  "source_work_done": true,
+  "initial_source_closure_utc": "2026-10-24T09:00:18.010067+00:00",
+  "initial_source_elapsed_seconds": 140.010067,
+  "authorized_ceiling_ledger": 3212.37,
+  "within_cap_provisional_ledger": 3212.37,
+  "actual_total_ledger_if_all_time_counted": 3214.37,
+  "additional_overrun_minutes_UNSETTLED": 2,
+  "overrun_not_authorization": true,
+  "source_work_stopped": true,
+  "handoff_and_overrun_reporting_included": true
+}

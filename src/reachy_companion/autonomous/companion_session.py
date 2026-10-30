@@ -48,6 +48,29 @@ def occupied(scheduler,poller,lease,peer_job=None,health_job=None,stop_job=None,
     return result
 
 
+def session_context(config,*,allow_camera=False,readback=None,readback_sha256=None):
+    """Select the existing camera provider or the isolated memory whitelist.
+
+    Camera context uses the gateway's bounded observer, never a device reader
+    on the session host. The memory-only readback contract remains separate.
+    """
+    context=config.get('context',{})
+    enabled=context.get('enabled',False)
+    if allow_camera:
+        if (not enabled or context.get('mode','camera_memory')!='camera_memory'
+                or not context.get('video_url') or readback is not None or readback_sha256 is not None):
+            raise ValueError('Camera context requires an explicit producer and no memory-only readback')
+        return None
+    if enabled or readback is not None or readback_sha256 is not None:
+        from .voice_memory_fixture import read_json
+        if (not enabled or context.get('mode')!='memory_only' or readback is None
+                or not readback_sha256):raise ValueError('Reviewed isolated memory-only readback or explicit camera context required')
+        artifact,sha=read_json(readback,65536)
+        if sha!=readback_sha256:raise ValueError('Readback changed')
+        return context_binding(artifact)
+    return None
+
+
 def run_session(scheduler,poller,lease,client,stop_client,source,stop,duration,publish,*,lifetime='finite'):
     """Reducer-owned loop. Each remote operation keeps one real occupied slot."""
     if lifetime not in ('finite','lease') or type(lifetime) is not str:raise ValueError('Explicit normal lifetime')
@@ -176,6 +199,10 @@ def run_session(scheduler,poller,lease,client,stop_client,source,stop,duration,p
             peer_stop_execution_busy=not stop_job.future.done(),
             execution_busy=occupied(scheduler,poller,lease,peer_job,health_job,stop_job,retire_job,media_close_job),
             speech_stop_known=scheduler.speech_adapter.status()['stop_known'])
+        # Bounded metadata for silent-tick acceptance; no dialogue, memory or
+        # model reasoning is copied into the session report.
+        report['decisions']=[dict(request_id=row['request_id'],activity=row['activity'],at=row['at'])
+            for row in scheduler.state.ledger if row['kind']=='decision_accepted']
         report.update(speech_after=scheduler.speech_adapter.status(),audio=scheduler.audio_adapter.status(),
             peer_poll=poller.status(),lease=lease.status(),
             reservation_attempts=scheduler.speech_adapter.playback.backend.reservation_attempts)
@@ -208,6 +235,7 @@ def main():
     parser.add_argument('--duration',type=float);parser.add_argument('--status-port',type=int,default=8791)
     parser.add_argument('--lease-datagram-port',type=int);parser.add_argument('--trusted-private-lan',action='store_true')
     parser.add_argument('--allow-capture-output',action='store_true');parser.add_argument('--allow-bounded-motion',action='store_true')
+    parser.add_argument('--allow-camera-context',action='store_true')
     parser.add_argument('--memory-readback',type=Path);parser.add_argument('--memory-readback-sha256')
     args=parser.parse_args()
     if args.lifetime=='finite' and args.duration is None:args.duration=60
@@ -218,17 +246,11 @@ def main():
     if not 1<=len(args.source_boot)<=128 or any(port is not None and not 1<=port<=65535
             for port in (args.status_port,args.peer_stop_port,args.lease_datagram_port)):
         raise ValueError('Explicit source binding and valid transport ports required')
-    cfg=load(args.config);binding=None
+    cfg=load(args.config)
     if cfg.get('speech',{}).get('enabled'):
         raise ValueError('Normal distributed mode uses the explicit remote peer, not the local ALSA speech profile')
-    context_enabled=cfg.get('context',{}).get('enabled',False)
-    if context_enabled or args.memory_readback is not None or args.memory_readback_sha256 is not None:
-        from .voice_memory_fixture import read_json
-        if (not context_enabled or cfg['context'].get('mode')!='memory_only' or args.memory_readback is None
-                or not args.memory_readback_sha256):raise ValueError('Reviewed isolated memory-only readback required')
-        artifact,sha=read_json(args.memory_readback,65536)
-        if sha!=args.memory_readback_sha256:raise ValueError('Readback changed')
-        binding=context_binding(artifact)
+    binding=session_context(cfg,allow_camera=args.allow_camera_context,
+        readback=args.memory_readback,readback_sha256=args.memory_readback_sha256)
     motion_enabled=cfg.get('motion',{}).get('enabled',False)
     if motion_enabled!=args.allow_bounded_motion:raise ValueError('Matching explicit bounded antenna17 opt-in required')
     if motion_enabled and (args.config.resolve().parent/cfg['motion']['hub_config_path']).resolve()!=args.companion_config.resolve():

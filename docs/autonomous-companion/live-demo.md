@@ -1,5 +1,14 @@
 # Existing live voice demo
 
+> **Historical runbook — status updated 17 October 2026.** Start with
+> [START-HERE](../START-HERE.md) and the [live baseline](../coordination/live-baseline-2026-10-17.md).
+> The commands and overlay checkpoints below describe finite trials, not an
+> accepted continuous runtime or an unconditional launch recipe for today's
+> installed pins. The latest trial failed with `GuardDenied` before reply
+> playback; cleanup left services ON, microphone/capture/listening and Agent
+> motion permission OFF. Follow the current [project handoff](../coordination/PROJECT.md)
+> before another device run.
+
 From the Mac with the existing working SSH access and local private configuration:
 
 ```sh
@@ -22,18 +31,26 @@ After its bounded cue, the existing guarded controller uses the direct Agent
 Without that controller the mode waits until its deadline, then performs owned
 OFF cleanup. The default command still grants `listen=true`. This needs the
 matching updated Hub client file and Mac launcher; no service, Agent or worker
-restart is required. It fixes the diagnostic admission gap, not the unknown
-spoken-camera child cause, and its publication is not a real diagnostic PASS.
+restart is required. At this historical checkpoint it fixed the diagnostic
+admission gap; the spoken-camera child cause was still unknown then. See the
+later camera evidence below; publication alone was not a real diagnostic PASS.
 
 The optional exact `53a` spoken-snapshot overlay is described in
 `deploy/patches/agent-53a-spoken-vision.md`. Once installed and verified by the
 sole runner, the normal demo accepts «Что перед тобой?» / «Что ты видишь?» from
 a fresh normal STT turn. It reuses the same camera/native FINAL and speaker
-path. Its first real spoken-camera attempt failed inside the snapshot child;
-ordinary speech still works. The child cause is unknown; the next helper-only
-diagnostic is documented in `deploy/patches/spoken-vision-child-diagnostics.md`.
-This dispatcher has not passed real device acceptance; the preceding
-explicit snapshot checkpoint has already passed human scene verification,
+path. At this historical checkpoint its first real spoken-camera attempt failed
+inside the snapshot child while ordinary speech worked; the cause was then
+unknown, and the proposed helper-only diagnostic was documented in
+`deploy/patches/spoken-vision-child-diagnostics.md`.
+**Later evidence supersedes that unknown-camera status:** the
+[17 October audit](../coordination/state-audit-2026-10-17.md) records the missing
+camera socket in the Agent mount namespace under `PrivateTmp=yes`, the read-only
+bind correction and the 16 October human-verified spoken-camera turn. The newer
+[live baseline](../coordination/live-baseline-2026-10-17.md) also obtained one
+camera frame; continuous vision and simultaneous hearing remain unaccepted.
+At that checkpoint the dispatcher had not passed device acceptance; the preceding
+explicit snapshot had already passed human scene verification,
 spoken output, stock motion and STOP. Ordinary session context is retained;
 visual question/answer history is not added. The overlay adds a separate STT
 request and classification pass to normal fresh turns.

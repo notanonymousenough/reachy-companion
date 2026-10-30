@@ -1,0 +1,7 @@
+# One next motion decision
+
+1. Следующий outcome — обычные guarded gestures одновременно с текущим локальным голосом; уже доступный путь R29Player→singleHub→factory1.11 доказал 3 движения+STOP, но R30 freshness fault не разделён. По existing facts исправлять его сейчас причинно нельзя.
+2. ONE необходимое измерение: в точке Hub.stock_operator ДО существующего reject сохранить только actual monotonic elapsed + type(value)==dict + phase/binding match flags, без body/token/текстов; guard/300ms/exception/STOP не менять. Это один небольшой at-source diagnostic delta, не sampler/framework/новая feature.
+3. Цена ONE≤20min: ≤5min source/review, ≤3min exact Hub install/controlled restart при known-idle + micOFF/motorOFF, ≤5min один natural-voice motorON window (без seed), ≥7min STOP/reconcile/rollback/handoff. Factory/PC/модели не перезапускать; один physical owner.
+4. STOP condition: первый Fresh-stock-operator event с exact receipt, любой UNKNOWN/owned-stop failure либо 5min cap. На отказе motorOFF+known terminal, voice/cameraON; без повторного окна/catch/retry/TTL relaxation. На finite healthy motion+STOP/fresh resume можно оставить motorON с честным ограничением длительности, не обещать long reliability.
+5. Итог — один доказанный actual reject predicate и ONE fix proposal либо UNKNOWN→fallback; никакой auto-разработки. Полезные ordinaryvoice/camera/+2dB и безопасно установленный неarmed R33 сохранить. Это proposal, runtime/source instrumentation ещё НЕ начаты.

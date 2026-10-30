@@ -89,6 +89,7 @@ class ConfigurationTests(unittest.TestCase):
         self.assertNotIn(token, self.config.filename.read_text())
 
     def test_firewall_blocks_ipv6_application_bypass_and_preserves_other_tables(self):
+        self.config.data['security']['robot']['policy'] = 'legacy_hub'
         rules = render(self.config)
         self.assertIn('ip saddr 192.0.2.10 accept', rules)
         self.assertIn('policy drop', rules)

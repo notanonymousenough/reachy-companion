@@ -111,6 +111,13 @@ def service_unit(config, role, group):
     # The SDK IPC reader needs this host socket inside the Agent's private /tmp.
     camera_bind = ('BindReadOnlyPaths=/tmp/reachymini_camera_socket\n'
                    if role == 'robot' and group == 'agent' else '')
+    profile_option = ''
+    if role == 'robot' and group == 'agent':
+        profile = target.get('agent_runtime_profile', 'default')
+        if profile not in ('default', 'r42'):
+            raise ValueError('Unknown robot Agent runtime profile')
+        if profile == 'r42':
+            profile_option = ' --runtime-profile r42'
     return f'''[Unit]
 Description=Reachy Companion {group}
 Wants=network-online.target
@@ -120,7 +127,7 @@ User={target['user']}
 WorkingDirectory={root}
 Environment=PYTHONPATH={root}/src
 Environment=OMP_NUM_THREADS=2
-ExecStart={python} -m reachy_companion --config {root}/config.local.json {group} serve
+ExecStart={python} -m reachy_companion --config {root}/config.local.json {group} serve{profile_option}
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=yes

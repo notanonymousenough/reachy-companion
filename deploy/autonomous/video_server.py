@@ -21,6 +21,9 @@ class Producer:
         self.privacy_all=True;self.policy_seq=-1;self.policy_deadline=0;self.admission_id=None
         self.retired=deque(maxlen=128);self.boot_id=str(uuid4());self.seq=0;self.gaps=0;self.frames=0
         self.retired_admissions=set()
+        self.capture_lock=threading.Lock()
+        self.reader_shutdown_unknown=False
+        self.operator_binding=None;self.operator_revoked=False;self.operator_deadline=0
         # Frames from one producer run are correlated evidence. Reopening the
         # reader/privacy transitions cannot manufacture independent episodes.
         self.capture_lineage_id=str(uuid4())
@@ -36,10 +39,36 @@ class Producer:
             return policy.get('camera_enabled') is True and policy.get('privacy_all') is False
         except Exception:return False
     def operator(self):
-        request=Request('http://127.0.0.1:'+str(self.port)+'/status',headers={'Authorization':'Bearer '+self.operator_token})
-        with self.opener.open(request,timeout=1) as response:value=json.load(response)
-        self.last_operator={key:value.get(key) for key in ('microphone_enabled','capture_active','phase')}
-        return value.get('microphone_enabled') is False and value.get('capture_active') is False
+        began=time.monotonic()
+        with self.lock:generation=self.generation
+        request=Request('http://127.0.0.1:'+str(self.port)+'/operator',headers={'Authorization':'Bearer '+self.operator_token})
+        try:
+            with self.opener.open(request,timeout=1) as response:
+                raw=response.read(16001)
+                if len(raw)>16000:raise ValueError('Operator response bound')
+                value=json.loads(raw)
+            policy=value['motion_policy']
+            binding=(value['agent_boot_id'],value['microphone_epoch'],policy['epoch'],
+                     value['microphone_owner_id'],value['motion_policy_owner_id'],value['microphone_enabled'])
+            valid=(type(binding[0]) is str and 1<=len(binding[0])<=128
+                   and all(type(x) is int and 0<=x<2**63 for x in binding[1:3])
+                   and all(x is None or type(x) is str and 1<=len(x)<=128 for x in binding[3:5])
+                   and binding[3]==binding[4]
+                   and all(type(value[k]) is bool for k in ('microphone_enabled','capture_active','listening'))
+                   and value['microphone_state_error'] is None
+                   and policy['privacy_all'] is False and policy['quiet'] is False
+                   and 0<=time.monotonic()-began<=.3)
+        except Exception:
+            value={};binding=None;valid=False
+        with self.lock:
+            if generation!=self.generation:return False
+            self.last_operator={key:value.get(key) for key in ('microphone_enabled','capture_active','phase')}
+            if not valid or self.operator_binding is not None and self.operator_binding!=binding:
+                self.operator_revoked=True
+            if self.operator_revoked:
+                self.latest=None;self.latest_at=None;self.operator_deadline=0;return False
+            self.operator_binding=binding;self.operator_deadline=began+.3
+            return True
     def set_policy(self,value):
         if set(value) not in ({'scope','privacy_all','seq'},{'scope','privacy_all','seq','admission_id'}) or type(value['privacy_all']) is not bool or type(value['seq']) is not int or not 0<=value['seq']<=2**63-1:raise ValueError('Policy envelope')
         admission=value.get('admission_id')
@@ -63,6 +92,9 @@ class Producer:
             if admission!=self.admission_id and self.admission_id is not None:
                 if len(self.retired_admissions)>=128:self.done.set();self.latest=None;raise RuntimeError('Video admission fence capacity exhausted')
                 self.retired_admissions.add(self.admission_id)
+            if admission!=self.admission_id:
+                self.operator_binding=None;self.operator_revoked=False;self.operator_deadline=0
+            if value['privacy_all']:self.operator_revoked=True
             if scope!=self.scope or value['privacy_all'] or self.privacy_all!=value['privacy_all'] or admission!=self.admission_id:
                 self.latest=None;self.latest_at=None;self.generation+=1
             self.admission_id=admission
@@ -72,7 +104,8 @@ class Producer:
         return not self.done.is_set() and self.scope is not None and not self.privacy_all and time.monotonic()<self.policy_deadline and self.local_allowed()
     def packet(self):
         with self.lock:
-            if not self.allowed():self.latest=None;self.latest_at=None;return None
+            if not self.allowed() or self.operator_revoked or time.monotonic()>=self.operator_deadline:
+                self.latest=None;self.latest_at=None;return None
             if self.latest is None:return None
             metadata,payload=self.latest
             if self.latest_at is not None:
@@ -83,30 +116,49 @@ class Producer:
             return struct.pack('!I',len(raw))+raw+payload
     def publish_frame(self,metadata,payload,scope,generation,dequeued):
         with self.lock:
-            if not self.allowed() or self.scope!=scope or self.generation!=generation:return False
+            if (not self.allowed() or self.scope!=scope or self.generation!=generation
+                    or self.operator_revoked or time.monotonic()>=self.operator_deadline):return False
             self.latest=(metadata,payload);self.latest_at=dequeued;self.frames+=1;return True
     def source_ids(self):
         return dict(frame_id=str(uuid4()),lineage_id=self.capture_lineage_id,
                     lineage_scope='producer_capture_session',independent_episode_verified=False)
     def capture(self):
+        # A second caller cannot construct another IPC reader in this producer.
+        if not self.capture_lock.acquire(False):raise RuntimeError('Camera reader already active')
+        try:self._capture()
+        finally:self.capture_lock.release()
+    def _capture(self):
         from importlib.metadata import version
         import numpy as np
         from reachy_mini.media.camera_gstreamer import GStreamerCamera, Gst
         from reachy_mini.media.camera_constants import get_camera_specs_by_name
+        if version('reachy-mini')!='1.11.0':raise RuntimeError('Unaudited camera SDK version')
         if 'reachy_mini.media.audio_gstreamer' in sys.modules:raise RuntimeError('Camera-only import gate failed')
         camera=None;misses=0;reader_boot=None;reader_generation=None
+        def close_reader():
+            nonlocal camera
+            if camera is None:return
+            closing,camera=camera,None
+            try:
+                closing.close()
+                if closing.pipeline.get_state(1_000_000_000).state!=Gst.State.NULL:
+                    raise RuntimeError('Camera reader shutdown unknown')
+            except BaseException:
+                self.reader_shutdown_unknown=True;self.done.set();raise
         try:
             while not self.done.is_set():
                 with self.lock:allowed=self.allowed();scope=dict(self.scope) if self.scope else None;generation=self.generation;admission=self.admission_id
                 try:allowed=allowed and self.operator()
                 except Exception:allowed=False
                 if not allowed:
-                    with self.lock:self.latest=None
+                    with self.lock:
+                        self.latest=None;self.latest_at=None
+                        if generation==self.generation:self.operator_revoked=True
                     data=frame=sample=ppm=buffer=segment=clock=None
-                    if camera is not None:camera.close();camera=None
+                    close_reader()
                     self.done.wait(.1);continue
                 try:
-                    if camera is not None and reader_generation!=generation:camera.close();camera=None
+                    if camera is not None and reader_generation!=generation:close_reader()
                     if camera is None:
                         camera=GStreamerCamera(camera_specs=get_camera_specs_by_name('wireless'));camera.open();reader_boot=str(uuid4())
                         reader_generation=generation
@@ -118,7 +170,7 @@ class Producer:
                         # Factory -> camera-only relay -> factory replaces the
                         # unixfd sender. Reopen after bounded misses; preserve
                         # the producer's existing capture lineage and policy.
-                        if misses>=3:camera.close();camera=None;misses=0
+                        if misses>=3:close_reader();misses=0
                         self.done.wait(.1);continue
                     misses=0
                     buffer=sample.get_buffer();data=buffer.extract_dup(0,buffer.get_size())
@@ -141,17 +193,21 @@ class Producer:
                                   reader_boot_id=reader_boot,presentation_clock_only=True,
                                   robot_boot_id=Path('/proc/sys/kernel/random/boot_id').read_text().strip())
                     self.seq+=1
+                    # Do not publish a buffer captured across local STOP/privacy
+                    # or authority changes. The next admission must be explicit.
+                    if not self.operator():raise RuntimeError('Camera authority revoked')
                     self.publish_frame(metadata,ppm,scope,generation,dequeued)
                 except Exception:
                     self.gaps+=1
                     with self.lock:self.latest=None
-                    if camera is not None:camera.close();camera=None
+                    close_reader()
                 finally:
                     data=frame=sample=ppm=buffer=segment=clock=None
-                self.done.wait(.5)
+                self.done.wait(.1)
         finally:
-            if camera is not None:camera.close()
-            with self.lock:self.latest=None
+            try:close_reader()
+            finally:
+                with self.lock:self.latest=None;self.latest_at=None
 
 
 def main():
@@ -201,10 +257,11 @@ def main():
             producer.done.set();server.shutdown();serve.join(timeout=2);capture.join(timeout=4)
     report=dict(mode='finite_video_only_ram_producer',frames=producer.frames,gaps=producer.gaps,
                 capture_thread_reaped=not capture.is_alive(),operator_last=producer.last_operator,
+                reader_shutdown_unknown=producer.reader_shutdown_unknown,
                 raw_files_created=0,audio_or_motor_commands=0)
     with args.output.open('x') as out:json.dump(report,out,indent=2)
     print(json.dumps(report))
-    if capture.is_alive():raise SystemExit(2)
+    if capture.is_alive() or producer.reader_shutdown_unknown:raise SystemExit(2)
 
 
 if __name__=='__main__':main()

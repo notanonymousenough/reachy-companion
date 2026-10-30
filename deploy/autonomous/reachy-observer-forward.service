@@ -1,0 +1,18 @@
+# Candidate dependency: Hub-local existing SSH config/key/host pins must be verified.
+[Unit]
+Description=Reachy Hub loopback forward to existing PC fast7736
+
+[Service]
+Type=simple
+User=deploy
+EnvironmentFile=/home/deploy/reachy-shadow/observer-service/paths.local.env
+UMask=0077
+# Auth is read by OpenSSH from existing files; never password/token argv or env.
+# PC fast remains bound to PC 127.0.0.1:18097. No model launch/restart.
+ExecStart=/usr/bin/ssh -F ${OBSERVER_PC_SSH_CONFIG} -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=${OBSERVER_PC_KNOWN_HOSTS} -o IdentityFile=${OBSERVER_PC_IDENTITY_FILE} -o ExitOnForwardFailure=yes -o ServerAliveInterval=10 -o ServerAliveCountMax=2 -o ConnectTimeout=10 -o ControlMaster=no -S none -N -T -L 127.0.0.1:18097:127.0.0.1:18097 ${OBSERVER_PC_SSH_ALIAS}
+Restart=no
+KillMode=control-group
+TimeoutStopSec=5s
+LimitCORE=0
+StandardOutput=null
+StandardError=null

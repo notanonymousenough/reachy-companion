@@ -1,0 +1,264 @@
+"""Robot-side transport of compute-generated plans through the hub."""
+import logging
+import json
+from urllib.error import HTTPError
+import threading
+import time
+
+LOG = logging.getLogger('reachy-expressions')
+
+
+class ExpressionPlayer:
+    def __init__(self, config, request, stopping, permitted=None, binding=None):
+        self.config, self.request, self.stopping = config, request, stopping
+        self.permitted=permitted or (lambda:True)
+        self.binding=binding
+        self.stock=getattr(config,'data',config).get('guarded_motion',{}).get('transport','native')=='stock'
+        self.state_binding=None
+        self.hold_generation = 0
+        self.settings = config['conversation'].get('expressions', {})
+        self.condition = threading.Condition()
+        self.state = None
+        self.cues = []
+        self.clock = None
+        self.dance_program = None
+        self.dance_at = 0
+        self.dance_index = 0
+        self.version = self.completed = 0
+        self.last_error = None
+        self._stock_hub_boot = None
+        self._stock_cancel_unknown = False
+        self.last_expression = None
+        self.thread = threading.Thread(target=self.run, daemon=True)
+        if self.settings.get('enabled', False):
+            self.thread.start()
+
+    def set(self, phase, emotion='neutral', wait=False, force=False):
+        observed_version=(self.version, self.hold_generation)
+        if not self.settings.get('enabled', False) or not self.permitted():
+            return
+        binding=self.capture_binding()
+        with self.condition:
+            if self.stock and (self.version, self.hold_generation)!=observed_version:return
+            if force or self.state != (phase, emotion):
+                self.cues = []
+                self.clock = None
+                self.state = (phase, emotion)
+                self.state_binding=binding
+                self.version += 1
+                self.condition.notify_all()
+            version = self.version
+            if wait:
+                deadline = time.monotonic() + self.config['timeouts']['http'] + self.settings['max_total_seconds'] + 2
+                while self.completed < version and not self.stopping.is_set():
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise TimeoutError('Expression did not settle before microphone capture')
+                    self.condition.wait(min(remaining, .2))
+        if wait:
+            self.stopping.wait(self.settings['settle_seconds'])
+
+    def timeline(self, cues, clock):
+        observed_version=(self.version, self.hold_generation)
+        if not self.settings.get('enabled', False) or not self.permitted():
+            return
+        from .motion_limits import validate_steps
+        valid = []
+        maximum = self.settings['speech_sync']['max_cues']
+        for cue in cues:
+            if not isinstance(cue.get('at'), (int, float)) or not 0 <= cue['at'] <= self.config['streaming']['max_output_seconds']:
+                raise ValueError('Invalid motion timestamp')
+            validate_steps(cue['steps'], self.settings)
+            valid.append(cue)
+        binding=self.capture_binding()
+        with self.condition:
+            if self.stock and (self.version, self.hold_generation)!=observed_version:return
+            if self.state != ('timeline', 'neutral') or self.clock is not clock:
+                self.state = ('timeline', 'neutral')
+                self.version += 1
+                self.cues = []
+                self.clock = clock
+                self.state_binding=binding
+            self.cues = sorted((self.cues + valid)[:maximum], key=lambda cue: cue['at'])
+            self.condition.notify_all()
+
+    def wait_timeline(self, clock):
+        if not self.settings.get('enabled', False) or not self.permitted(): return
+        with self.condition:
+            version = self.version
+            deadline = time.monotonic()+self.config['timeouts']['http']+self.settings['max_total_seconds']+2
+            while self.clock is clock and self.completed < version and not self.stopping.is_set():
+                if time.monotonic() >= deadline: raise TimeoutError('First speech motion did not start')
+                self.condition.wait(.05)
+
+    def dance(self, result, captured_at):
+        observed_version=(self.version, self.hold_generation)
+        if not self.settings.get('enabled', False) or not self.permitted(): return
+        from .motion_limits import validate_steps
+        for step in result['steps']:validate_steps([step],self.settings)
+        beat=result['beat_seconds']
+        if not .3 <= beat <= 1: raise ValueError('Invalid beat period')
+        import math
+        period=math.ceil((self.settings['duration_seconds']+.2)/beat)*beat
+        at=captured_at+result['next_beat_seconds']
+        now=time.monotonic()
+        at += math.ceil(max(0,now-at)/period)*period
+        binding=self.capture_binding()
+        with self.condition:
+            if self.stock and (self.version, self.hold_generation)!=observed_version:return
+            if self.state != ('dance','playful'):
+                self.state=('dance','playful');self.version+=1;self.cues=[];self.clock=None
+                self.dance_at=at
+                self.state_binding=binding
+            self.dance_program=(result['steps'],period)
+            self.condition.notify_all()
+
+    def hold(self, *, maintenance=False):
+        with self.condition:
+            # Every hold cancels enqueues that began before this barrier.
+            self.hold_generation += 1
+            # Paused maintenance is not a new expression/authority change.
+            # Explicit holds retain their unconditional version fence.
+            if maintenance and self.state is None:
+                return
+            self.state = None
+            self.cues = []
+            self.clock = None
+            self.version += 1
+            self.condition.notify_all()
+
+    def capture_binding(self):
+        # Call outside condition: microphone withdrawal holds its own lock while
+        # calling hold(). The enqueue token fences even idle maintenance holds.
+        if not self.stock:return None
+        if self.binding is None:raise RuntimeError('Stock expression operator binding required')
+        return self.binding()
+
+    def stock_idle_boot(self):
+        # Existing synchronous Hub expression errors are terminal only after
+        # its finally releases the lane. Failed owned-stop latches stock_unknown.
+        began=time.monotonic()
+        value=self.request(self.config['network']['hub_url'],'/status',timeout=self.config['timeouts']['http'])
+        active=self.request(self.config['network']['robot_url'],'/api/move/running',timeout=self.config['timeouts']['http'])
+        stock=value.get('stock_motion',{}) if type(value) is dict else {}
+        daemon=value.get('daemon',{}) if type(value) is dict else {}
+        if (time.monotonic()-began>.3 or type(value) is not dict or type(active) is not list or active
+                or value.get('action_running') is not False or value.get('ownership',{}).get('state')!='free'
+                or daemon.get('state')!='running' or daemon.get('error') is not None
+                or daemon.get('backend_status',{}).get('ready') is not True
+                or daemon.get('backend_status',{}).get('error') is not None
+                or stock.get('selected') is not True or stock.get('unknown') is not False
+                or 'owned_uuid' not in stock or stock['owned_uuid'] is not None
+                or type(stock.get('hub_boot_id')) is not str or not 1<=len(stock['hub_boot_id'])<=256):
+            raise RuntimeError('Stock cancellation cleanup unverified')
+        return stock['hub_boot_id']
+
+    def discarded_stock(self, error, version):
+        cause=error.__cause__
+        with self.condition:
+            invalidated=self.version>version
+        if (not self.stock or not invalidated or not isinstance(cause,HTTPError) or cause.code!=409
+                or cause.url!=self.config['network']['hub_url']+'/actions/expression'
+                or not str(error).startswith('Hub HTTP 409: ')):
+            return False
+        try:
+            def unique(pairs):
+                result={}
+                for key,value in pairs:
+                    if key in result:raise ValueError('Duplicate cancellation key')
+                    result[key]=value
+                return result
+            body=json.loads(str(error)[14:],object_pairs_hook=unique)
+        except (ValueError,TypeError):return False
+        if body!={'error':'Stock command binding changed: expression_version'}:return False
+        try:
+            if self._stock_hub_boot is None or self.stock_idle_boot()!=self._stock_hub_boot:
+                raise RuntimeError('Stock cancellation Hub boot changed')
+        except Exception:
+            self._stock_cancel_unknown=True
+            return False
+        return True
+
+    def run(self):
+        handled = 0
+        variant = 0
+        while not self.stopping.is_set():
+            cue = None
+            with self.condition:
+                while not self.stopping.is_set():
+                    if self.state == ('dance','playful'):
+                        if self.dance_program and time.monotonic() >= self.dance_at:
+                            steps,period=self.dance_program
+                            cue={'steps':[steps[self.dance_index%len(steps)]],'emotion':'playful','gesture':'wiggle','phase':'music'}
+                            self.dance_index+=1
+                            self.dance_at=time.monotonic()+period
+                            break
+                        self.condition.wait(.05)
+                    elif self.state == ('timeline', 'neutral'):
+                        if self.cues and self.cues[0]['at'] <= self.clock.seconds():
+                            cue = self.cues.pop(0)
+                            # Late cues are merged into the current target, never queued as a backlog.
+                            while self.cues and self.cues[0]['at'] <= self.clock.seconds():
+                                cue = self.cues.pop(0)
+                            break
+                        self.condition.wait(.05)
+                    elif self.version != handled:
+                        break
+                    elif self.state and (self.state[0] == 'speaking' or (self.state[0] == 'processing' and self.settings.get('library', {}).get('repeat_processing', False))):
+                        self.condition.wait(self.settings['repeat_seconds'])
+                        if self.version == handled:
+                            break
+                    else:
+                        self.condition.wait(.5)
+                if self.stopping.is_set():
+                    break
+                state, version, binding = self.state, self.version, self.state_binding
+            if state is None:
+                with self.condition:
+                    handled = version
+                    self.completed = max(self.completed, version)
+                    self.condition.notify_all()
+                continue
+            posted = False
+            prior_error = self.last_error
+            try:
+                if self._stock_cancel_unknown:
+                    raise RuntimeError('Stock cancellation cleanup unknown; reconciliation required')
+                plan = ({'steps': cue['steps']} if cue is not None else
+                        self.request(self.config['network']['voice_url'], '/expression/plan',
+                                     {'phase': state[0], 'emotion': state[1], 'variant': variant % 10000}, timeout=self.config['timeouts']['http']))
+                with self.condition:
+                    stale = self.version != version
+                if not stale and self.permitted() and plan.get('steps') and (not self.stock or binding==self.capture_binding()):
+                    if self.stock and self._stock_hub_boot is None:
+                        self._stock_hub_boot=self.stock_idle_boot()
+                    # No lock is held across binding reads or HTTP. Recheck after
+                    # callbacks/bootstrap; the server CAS fences the remaining race.
+                    current_binding=self.capture_binding() if self.stock else None
+                    with self.condition:
+                        stale=self.version!=version
+                    if stale or (self.stock and current_binding!=binding):continue
+                    payload={'steps':plan['steps']}
+                    if self.stock:payload['operator_binding']=dict(binding,expression_version=version)
+                    posted = True
+                    self.request(self.config['network']['hub_url'], '/actions/expression',
+                                 payload, timeout=self.config['timeouts']['http'])
+                    self.last_expression = ({'phase': cue.get('phase','speaking'), 'emotion': cue.get('emotion', 'neutral'),
+                                             'gesture': cue.get('gesture', 'auto'), 'phoneme': cue.get('phoneme', '')}
+                                            if cue is not None else {'phase': state[0], 'emotion': state[1]})
+                self.last_error = None
+                variant += 1
+            except Exception as exc:
+                if posted and self.discarded_stock(exc,version):
+                    self.last_error=prior_error
+                    self.last_expression=dict(phase=state[0],emotion=state[1],status='discarded',
+                        reason='expression_version_changed',motor_success=False,
+                        partial_effect_possible=True,owned_cleanup_verified=True)
+                else:
+                    self.last_error = str(exc)
+                    LOG.warning('expression_unavailable phase=%s error=%s', state[0], exc)
+            finally:
+                with self.condition:
+                    handled = version
+                    self.completed = max(self.completed, version)
+                    self.condition.notify_all()

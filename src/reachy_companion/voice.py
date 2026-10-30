@@ -165,14 +165,15 @@ class Pipeline:
         return dict(speech_address_prefix=prefix,speech_address_scope='tts_utterance',
                     spoken_text=self.address_speech(re.sub(r'[*#`]', '', text).strip(),prefix)) if prefix else {}
 
-    def answer(self, text, session, interrupted=False, *, reply_constraints=None):
+    def answer(self, text, session, interrupted=False, *, reply_constraints=None, conversation_mode=None):
+        from .conversation_context import mode_prompt
         now = time.monotonic()
         self.sessions = {k: v for k, v in self.sessions.items() if now - v['used'] < self.config['llm']['history_ttl_seconds']}
         if session not in self.sessions and len(self.sessions) >= self.config['llm']['max_sessions']:
             del self.sessions[min(self.sessions, key=lambda k: self.sessions[k]['used'])]
         self.agent_sessions = {k: v for k, v in self.agent_sessions.items() if k in self.sessions}
         entry = self.sessions.get(session, {'used': now, 'messages': []})
-        messages = [{'role': 'system', 'content': self.config['llm']['system_prompt']}]
+        messages = [{'role': 'system', 'content': mode_prompt(self.config['llm']['system_prompt'], conversation_mode)}]
         messages += entry['messages'][-self.config['llm']['history_messages']:]
         if interrupted:
             messages.append({'role': 'system', 'content': 'Предыдущий ответ был прерван и не прозвучал полностью. Отвечай на новую реплику пользователя, не продолжай старый ответ без просьбы.'})
@@ -190,6 +191,8 @@ class Pipeline:
         self.agent_sessions.pop(session, None)
 
     def prepare(self, payload, path, recognized_text=None, answer_result=None, *, latency=None):
+        from .conversation_context import mode_payload, mode_session
+        payload=mode_payload(payload)
         prefix=self.speech_address(payload.get('speech_address_prefix',DEFAULT_SPEECH_ADDRESS))
         reply_constraints=None
         if 'reply_constraints' in payload:
@@ -201,6 +204,7 @@ class Pipeline:
         session = payload.get('session', self.config['conversation']['session'])
         if not isinstance(session, str) or not 1 <= len(session) <= self.config['limits']['max_session_chars']:
             raise ValueError('Invalid session')
+        session=mode_session(session,payload.get('conversation_mode'))
         self.check_robot()
         if path == '/turn':
             self.phase = 'recognizing'
@@ -230,9 +234,11 @@ class Pipeline:
             reply = text
         else:
             self.phase = 'thinking'
+            answer_kwargs={}
+            if reply_constraints is not None:answer_kwargs['reply_constraints']=reply_constraints
+            if payload.get('conversation_mode') is not None:answer_kwargs['conversation_mode']=payload['conversation_mode']
             reply, pending = (answer_result if answer_result is not None else
-                              (measured(latency,'answer_call',self.answer,text,session,payload.get('previous_reply_interrupted',False),reply_constraints=reply_constraints)
-                               if reply_constraints is not None else measured(latency,'answer_call',self.answer,text,session,payload.get('previous_reply_interrupted',False))))
+                              measured(latency,'answer_call',self.answer,text,session,payload.get('previous_reply_interrupted',False),**answer_kwargs))
         if reply_constraints is not None:
             from .spoken_reply import validate_text
             validate_text(reply,reply_constraints)
@@ -262,6 +268,8 @@ class Pipeline:
         return result
 
     def turn(self, payload, path):
+        from .conversation_context import mode_payload
+        payload=mode_payload(payload)
         prefix=self.speech_address(payload.get('speech_address_prefix',DEFAULT_SPEECH_ADDRESS))
         latency=worker_latency(payload)
         diagnostic_kwargs={} if latency is None else dict(latency=latency)
@@ -326,6 +334,8 @@ class Pipeline:
                 total += len(pcm)
 
     def stream(self, payload, path):
+        from .conversation_context import mode_payload, mode_session
+        payload=mode_payload(payload)
         prefix=self.speech_address(payload.get('speech_address_prefix',DEFAULT_SPEECH_ADDRESS))
         latency=worker_latency(payload)
         diagnostic_kwargs={} if latency is None else dict(latency=latency)
@@ -351,8 +361,10 @@ class Pipeline:
                     session = payload.get('session', self.config['conversation']['session'])
                     if not isinstance(session, str) or not 1 <= len(session) <= self.config['limits']['max_session_chars']:
                         raise ValueError('Invalid session')
+                    session=mode_session(session,payload.get('conversation_mode'))
+                    answer_kwargs={} if payload.get('conversation_mode') is None else dict(conversation_mode=payload['conversation_mode'])
                     self.phase = 'thinking'
-                    future = executor.submit(measured,latency,'answer_call',self.answer,recognized,session,payload.get('previous_reply_interrupted', False))
+                    future = executor.submit(measured,latency,'answer_call',self.answer,recognized,session,payload.get('previous_reply_interrupted', False),**answer_kwargs)
                     try:
                         answer_result = future.result(timeout=acknowledgements['delay_seconds'])
                     except concurrent.futures.TimeoutError:

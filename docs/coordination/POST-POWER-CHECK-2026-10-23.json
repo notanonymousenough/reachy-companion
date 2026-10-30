@@ -1,0 +1,59 @@
+{
+  "checked_at_utc": "2026-10-22T23:22:59.741178+00:00",
+  "request": "human_post_powercycle_current_health",
+  "read_only": true,
+  "hub": {
+    "active": true,
+    "pid": 57528,
+    "enabled": true,
+    "restarts": 0,
+    "os_started_local": "2026-10-22 11:57:48 MSK"
+  },
+  "robot": {
+    "os_started_local": "2026-10-22 10:35:37 BST",
+    "agent_pid": 92774,
+    "sdk_pid": 92616,
+    "services_active_enabled": true,
+    "service_restarts": 0,
+    "sole_motor_port_owner": 92616,
+    "driver_ready": true,
+    "motor_control": "enabled",
+    "control_loop_errors": 0,
+    "active_u96_launcher_hash_matches": true,
+    "active_u96_dropin_hash_matches": true,
+    "agent_phase_last": "listening",
+    "phase_changed_from_speaking": true,
+    "microphone_enabled_listening_capture_reader_process": true,
+    "microphone_error": false,
+    "automatic_questions": false,
+    "conversation_mode": "normal",
+    "volume_percent": 17,
+    "privacy_all": false,
+    "quiet": false,
+    "pause_held": false,
+    "stock_motion_unknown": false
+  },
+  "pc": {
+    "os_started_utc": "2026-10-19T09:58:38.5000000Z",
+    "container_running": true,
+    "container_pid": 36209,
+    "container_started_utc": "2026-10-22T17:39:04.718328726Z",
+    "restart_count": 0,
+    "restart_policy": "unless-stopped",
+    "readonly_rootfs": true,
+    "worker_ok": true,
+    "worker_phase": "idle",
+    "loaded_model_instances": 1,
+    "loaded_model": "qwen3.5-9b-uncensored-hauhaucs-aggressive"
+  },
+  "limits": {
+    "new_full_reboot_confirmed": false,
+    "same_pids_as_historical_u126": true,
+    "camera_pixels_or_capture_not_tested": true,
+    "actual_conversation_not_stimulated": true,
+    "new_sensor_model_windows": 0,
+    "service_restarts_or_settings_changes": 0,
+    "runtime_deployments": 0
+  },
+  "recovery_required_by_current_facts": false
+}

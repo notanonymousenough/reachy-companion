@@ -120,7 +120,31 @@ def hub_command(config):
         hub['user'] + '@' + hub['host'], remote]
 
 
-def launch(config, known_hosts, *, turns, seconds, vision=None, prime_paused=False):
+def run_hub(command, packet, stop_requested):
+    """A finite controller may fail while the Hub still waits for a turn."""
+    child = subprocess.Popen(command, stdin=subprocess.PIPE)
+    data = json.dumps(packet).encode()
+    until = time.monotonic() + packet['seconds'] + 10
+    try:
+        while time.monotonic() < until:
+            if stop_requested():
+                return 1
+            try:
+                child.communicate(input=data, timeout=.1)
+                return child.returncode
+            except subprocess.TimeoutExpired:
+                data = None  # communicate retains the original input across polls.
+        raise TimeoutError('Finite Hub wait expired')
+    finally:
+        if child.poll() is None:
+            child.terminate()
+            try: child.communicate(timeout=2)
+            except subprocess.TimeoutExpired:
+                child.kill()
+                child.communicate(timeout=2)
+
+
+def launch(config, known_hosts, *, turns, seconds, vision=None, prime_paused=False, stop_requested=None):
     need(type(turns) is int and 1 <= turns <= 3 and type(seconds) is int and 10 <= seconds <= 300)
     need(type(prime_paused) is bool)
     need(known_hosts.is_file())
@@ -144,8 +168,12 @@ def launch(config, known_hosts, *, turns, seconds, vision=None, prime_paused=Fal
             remaining=int(seconds-(time.monotonic()-started));need(remaining>=10)
             packet.update(vision_text=snapshot['final_text'],vision_deadline=snapshot['expires_at_monotonic'],seconds=remaining)
             snapshot=None
-        child = subprocess.run(hub_command(config), input=json.dumps(packet).encode(), timeout=packet['seconds'] + 10)
-        code = child.returncode
+        command = hub_command(config)
+        if stop_requested is None:
+            child = subprocess.run(command, input=json.dumps(packet).encode(), timeout=packet['seconds'] + 10)
+            code = child.returncode
+        else:
+            code = run_hub(command, packet, stop_requested)
     except KeyboardInterrupt:
         code = 130
     except Exception:

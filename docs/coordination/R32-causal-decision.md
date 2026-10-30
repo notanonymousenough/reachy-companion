@@ -1,0 +1,7 @@
+# R32 causal result and one next decision
+
+1. R32 reproduces one concrete R31 blocker: 1/12 Robot-origin admission reads failed ONLY elapsed>300ms (1094.6ms total; Hub/status1087.2ms); all other typed readiness/ownership/UNKNOWN/running flags healthy. Busy/physical unreadiness did not cause this measured rejection; historical single R31 rejection subpredicate cannot be proved retrospectively.
+2. Local Agent/operator3.7–11.9ms; Hub→Agent18.5–34.8ms/12typedPASS, so R30freshoperator fault NOTreproduced and remainsPARKED. Hubfactorychain40–191ms. No claim TCP/network/lock root cause. Natural listening/processing/speaking continued; 96GET/0POST/model/source/restarts.
+3. ONE minimal decoupling: camera/speech initiative admission uses fresh LOCAL typed boot/mic/policy/owner/quiet/privacy + existing audioowner/frame/model checks; remove its unnecessary FULL remote Hub/status/motion-readiness dependency. Keep motorOFF; old motion guards/300ms/UNKNOWN untouched, no cache/rebind/retry. Same frozen question-purpose/model, no format variants.
+4. Cost ONE≤25min afterdecision: source+Tech≤8 / exactinstall+oneactualcameraquestionproof≤12 / rollback≥5. R31cancellationpack reused but prove real pendingSTOP+oneactualnewframe/fullplayback/capturereturn; no secondmodeltrial. New source notstarted.
+5. Fallback same useful ordinaryvoice+cameraON/+2dB/motorOFF, initiativeOFF/byteexactpreimages. R32spent≈3m15vs10cap, paid0. S7finalreadyreceipt/report/releasefinishing; no morediagnosticwaves.

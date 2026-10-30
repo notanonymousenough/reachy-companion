@@ -12,6 +12,7 @@ import stat
 import shlex
 import subprocess
 import unittest
+import sys
 from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -127,6 +128,43 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual(self.run_launch(),1)
         self.cleaned['admission_retired']=True;self.cleaned['volume_preserved']=False
         self.assertEqual(self.run_launch(),1)
+
+    def test_controller_failure_reaps_waiting_hub_then_finishes_without_regrant(self):
+        for force_kill in (False, True):
+            with self.subTest(force_kill=force_kill):
+                self.events=[]
+                child=Mock();child.poll.return_value=None
+                def communicate(**kwargs):
+                    self.events.append('reap')
+                    if force_kill and child.communicate.call_count==1:
+                        raise subprocess.TimeoutExpired('fixture',2)
+                child.communicate.side_effect=communicate
+                child.terminate.side_effect=lambda:self.events.append('terminate')
+                child.kill.side_effect=lambda:self.events.append('kill')
+                with patch.object(launcher,'robot_call',side_effect=self.robot), \
+                        patch.object(launcher,'hub_command',return_value=['fixture']), \
+                        patch.object(launcher.subprocess,'Popen',return_value=child),patch('builtins.print'):
+                    code=launcher.launch({},self.hosts,turns=1,seconds=180,stop_requested=lambda:True)
+                self.assertEqual(code,1)
+                self.assertEqual(self.events,['arm','terminate','reap']+(['kill','reap'] if force_kill else [])+['finish'])
+                self.assertEqual(child.communicate.call_args.kwargs['timeout'],2)
+
+    def test_controller_stop_reaps_real_local_waiter_with_no_sigint(self):
+        # Real process termination, no SSH/network/device calls.
+        elapsed=[]
+        import time
+        began=time.monotonic()
+        def stop():
+            elapsed.append(time.monotonic()-began)
+            return elapsed[-1]>.2
+        self.assertEqual(launcher.run_hub([sys.executable,'-c','import time; time.sleep(30)'],
+            dict(seconds=10),stop),1)
+        self.assertLess(time.monotonic()-began,3)
+
+    def test_optional_controller_monitor_preserves_natural_hub_exit(self):
+        self.assertEqual(launcher.run_hub([sys.executable,'-c',
+            'import sys,json; assert json.load(sys.stdin)["seconds"]==10'],
+            dict(seconds=10),lambda:False),0)
 
     def test_owned_mux_255_requires_validated_transfer_explicit_close_and_natural_reap(self):
         cfg=dict(deployment=dict(robot=dict(user='pollen',host='robot',root='/home/pollen/reachy-companion'),

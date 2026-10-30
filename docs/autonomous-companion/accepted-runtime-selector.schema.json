@@ -1,0 +1,294 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:reachy-companion:accepted-runtime-selector:1",
+  "title": "Proposed accepted runtime read-only selector v1; shape is not authority",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "kind",
+    "evidence",
+    "operation_namespace",
+    "expected",
+    "limits"
+  ],
+  "properties": {
+    "schema": {
+      "const": 1,
+      "type": "integer"
+    },
+    "kind": {
+      "const": "accepted-runtime-read-only"
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "promotion_receipt",
+        "ownership_inventory"
+      ],
+      "properties": {
+        "promotion_receipt": {
+          "$ref": "#/$defs/fileReference"
+        },
+        "ownership_inventory": {
+          "$ref": "#/$defs/fileReference"
+        }
+      }
+    },
+    "operation_namespace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "directory",
+        "parent_identity",
+        "directory_identity",
+        "anchor_identity",
+        "lock_identity",
+        "anchor_sha256"
+      ],
+      "properties": {
+        "directory": {
+          "$ref": "#/$defs/windowsPath"
+        },
+        "parent_identity": {
+          "$ref": "#/$defs/identity"
+        },
+        "directory_identity": {
+          "$ref": "#/$defs/identity"
+        },
+        "anchor_identity": {
+          "$ref": "#/$defs/identity"
+        },
+        "lock_identity": {
+          "$ref": "#/$defs/identity"
+        },
+        "anchor_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "expected": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "worker",
+        "model"
+      ],
+      "properties": {
+        "worker": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "docker_executable",
+            "engine_endpoint",
+            "engine_id",
+            "container_id",
+            "image_id",
+            "container_identity_version",
+            "container_config_sha256",
+            "effective_config_path",
+            "effective_config_sha256"
+          ],
+          "properties": {
+            "docker_executable": {
+              "$ref": "#/$defs/windowsPath"
+            },
+            "engine_endpoint": {
+              "type": "string",
+              "maxLength": 256,
+              "pattern": "^npipe:/{2,}\\./pipe/[A-Za-z0-9_.-]+$"
+            },
+            "engine_id": {
+              "$ref": "#/$defs/identifier"
+            },
+            "container_id": {
+              "$ref": "#/$defs/sha256"
+            },
+            "image_id": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            },
+            "container_identity_version": {
+              "const": "docker-config-hostconfig-mounts-v1"
+            },
+            "container_config_sha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "effective_config_path": {
+              "$ref": "#/$defs/windowsPath"
+            },
+            "effective_config_sha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          }
+        },
+        "model": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "endpoint",
+            "server",
+            "model_key",
+            "loaded_instance_id",
+            "instance_config_identity_version",
+            "instance_config_sha256",
+            "context_tokens"
+          ],
+          "properties": {
+            "endpoint": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "host",
+                "port",
+                "api_contract"
+              ],
+              "properties": {
+                "host": {
+                  "enum": [
+                    "127.0.0.1",
+                    "::1"
+                  ]
+                },
+                "port": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 65535
+                },
+                "api_contract": {
+                  "const": "lmstudio-rest-v1-models"
+                }
+              }
+            },
+            "server": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "pid",
+                "creation_filetime",
+                "executable",
+                "command_sha256"
+              ],
+              "properties": {
+                "pid": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 4294967295
+                },
+                "creation_filetime": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 18446744073709551615
+                },
+                "executable": {
+                  "$ref": "#/$defs/windowsPath"
+                },
+                "command_sha256": {
+                  "$ref": "#/$defs/sha256"
+                }
+              }
+            },
+            "model_key": {
+              "$ref": "#/$defs/identifier"
+            },
+            "loaded_instance_id": {
+              "$ref": "#/$defs/identifier"
+            },
+            "instance_config_identity_version": {
+              "const": "strict-canonical-json-v1"
+            },
+            "instance_config_sha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "context_tokens": {
+              "type": "integer",
+              "minimum": 1024,
+              "maximum": 262144
+            }
+          }
+        }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "total_seconds",
+        "query_seconds",
+        "max_response_bytes"
+      ],
+      "properties": {
+        "total_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 30
+        },
+        "query_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3
+        },
+        "max_response_bytes": {
+          "type": "integer",
+          "minimum": 1024,
+          "maximum": 1048576
+        }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[^\\x00-\\x1f\\x7f]+$"
+    },
+    "identity": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 340282366920938463463374607431768211455
+      }
+    },
+    "windowsPath": {
+      "type": "string",
+      "minLength": 4,
+      "maxLength": 2048,
+      "pattern": "^[A-Za-z]:\\\\[^\\\\/:*?\"<>|\\x00-\\x1f]+(?:\\\\[^\\\\/:*?\"<>|\\x00-\\x1f]+)*$",
+      "not": {
+        "anyOf": [
+          {
+            "pattern": "(^|\\\\)\\.{1,2}(\\\\|$)"
+          },
+          {
+            "pattern": "[ .](\\\\|$)"
+          }
+        ]
+      }
+    },
+    "fileReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/windowsPath"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    }
+  }
+}

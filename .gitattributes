@@ -1,0 +1,3 @@
+# A single leading space on blank context lines is part of unified patch syntax.
+# Preserve historical patch bytes and hashes instead of stripping that space.
+*.patch -whitespace

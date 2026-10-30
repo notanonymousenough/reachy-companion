@@ -1,0 +1,126 @@
+{
+  "version": 1,
+  "actuators": "simulated",
+  "export_enabled": false,
+  "period_s": 2,
+  "fast_deadline_s": 2,
+  "http_timeout_s": 30,
+  "task_timeout_s": 30,
+  "proposal_ttl_s": 15,
+  "ledger_cap": 256,
+  "sensor_cap": 12,
+  "task_cap": 8,
+  "candidate_cap": 8,
+  "gateway": {
+    "bind": "127.0.0.1",
+    "port": 8097,
+    "client_url": "http://127.0.0.1:8097",
+    "token_env": "REACHY_SHADOW_TOKEN"
+  },
+  "models": {
+    "fast": {
+      "id": "Qwen3.5-0.8B-Q8_0-candidate",
+      "base_url": null,
+      "completion_path": "/completions",
+      "tokenize_path": null,
+      "tokenize_content_key": "content",
+      "api_key_env": "",
+      "context_tokens": 4096,
+      "input_cap_tokens": 2744,
+      "template_cap_tokens": 256,
+      "output_tokens": 192,
+      "reserve_tokens": 256,
+      "message_template": "<|im_start|>{role}\n{content}<|im_end|>\n",
+      "assistant_prefix": "<|im_start|>assistant\n<think>\n\n</think>\n\n",
+      "stop": [
+        "<|im_end|>",
+        "<|im_start|>"
+      ],
+      "temperature": 0.1,
+      "audit": {
+        "verified": false,
+        "device": null,
+        "runtime_build": null,
+        "weight_sha256": null,
+        "template_sha256": null,
+        "tokenizer_sha256": null,
+        "runtime_context_tokens": null
+      }
+    },
+    "main": {
+      "id": "qwen3.5-9b-uncensored-hauhaucs-aggressive",
+      "base_url": null,
+      "completion_path": "/completions",
+      "tokenize_path": null,
+      "tokenize_content_key": "content",
+      "api_key_env": "",
+      "context_tokens": 4096,
+      "input_cap_tokens": 2048,
+      "template_cap_tokens": 256,
+      "output_tokens": 512,
+      "reserve_tokens": 256,
+      "message_template": "<|im_start|>{role}\n{content}<|im_end|>\n",
+      "assistant_prefix": "<|im_start|>assistant\n<think>\n\n</think>\n\n",
+      "stop": [
+        "<|im_end|>",
+        "<|im_start|>"
+      ],
+      "temperature": 0.6,
+      "audit": {
+        "verified": false,
+        "device": null,
+        "runtime_build": null,
+        "weight_sha256": null,
+        "template_sha256": null,
+        "tokenizer_sha256": null,
+        "runtime_context_tokens": null
+      }
+    }
+  },
+  "optional_vps": {
+    "enabled": false,
+    "endpoint": null,
+    "credential_env": "REACHY_ANALYSIS_TOKEN",
+    "candidate_ram_mb": 4096,
+    "candidate_vcpus": 4
+  },
+  "workflows": {
+    "enabled": false,
+    "broker_url": null,
+    "token_env": "REACHY_WORKFLOW_TOKEN",
+    "http_timeout_s": 2,
+    "poll_s": 0.1
+  },
+  "context": {
+    "enabled": true,
+    "mode": "camera_memory",
+    "memory_path": "data/n1-native-context.sqlite3",
+    "namespaces": [
+      "normal"
+    ],
+    "refresh_s": 0.5,
+    "video_url": "http://127.0.0.1:8772",
+    "video_token_env": "REACHY_VIDEO_TOKEN",
+    "video_poll_s": 0.5
+  },
+  "motion": {
+    "enabled": false,
+    "hub_config_path": "config.local.json",
+    "agent_url": "http://127.0.0.1:8775",
+    "cooldown_s": 4,
+    "heartbeat_s": 0.04
+  },
+  "speech": {
+    "enabled": false,
+    "backend": "alsa",
+    "device": null,
+    "companion_config_path": null,
+    "sample_rate": 16000,
+    "max_seconds": 30,
+    "chunk_frames": 1600,
+    "stop_timeout_s": 0.3
+  },
+  "native_agent": {
+    "enabled": true
+  }
+}

@@ -1,0 +1,97 @@
+--- a/voice.py
++++ b/voice.py
+@@ -33,6 +33,31 @@
+             'equalizer', str(eq['bass_hz']), str(eq['bass_width_q']) + 'q', str(eq['bass_db']),
+             'equalizer', str(eq['presence_hz']), str(eq['presence_width_q']) + 'q', str(eq['presence_db']),
+             'treble', str(eq['treble_db']), 'gain', '-n', str(-eq['headroom_db'])]
++
++
++class AlicePhraseRejected(RuntimeError):
++    """No TTS dispatch: the explicit Alice reply was not one short sentence."""
++
++
++def validate_alice_phrase(text):
++    """Validate the whole phrase; never truncate, select a later fact or retry."""
++    if type(text) is not str:
++        raise AlicePhraseRejected('Alice reply must be text')
++    # Only a single existing address may be normalized to the canonical prefix.
++    body = re.sub(r'^алиса,\s+', '', text, count=1, flags=re.I)
++    spoken = 'Алиса, ' + body
++    if (body != body.strip() or len(spoken) > 120
++            or re.search(r'[\x00-\x1f<>*#`\[\]{}|]', body)
++            or not re.fullmatch(r'[^.!?…？؟！。．]+[.!?]', body)
++            or not 1 <= len(re.findall(r'[^\W_]+', body)) <= 10):
++        raise AlicePhraseRejected('One complete Alice phrase of at most 11 words required')
++    # Reject duplicate/malformed addresses and wake names inside the body.
++    normalized = ''.join(c for c in unicodedata.normalize('NFKD', body.casefold())
++                         if not unicodedata.combining(c))
++    mixed = normalized.translate(str.maketrans({'a':'а','l':'л','i':'и','s':'с','c':'с','e':'е'}))
++    if re.search('alice|alisa|алис', normalized) or 'алис' in mixed:
++        raise AlicePhraseRejected('Exactly one leading Alice address required')
++    return body
+ 
+ 
+ class Pipeline:
+@@ -118,6 +143,9 @@
+         return classify_with_model(self.config, text, decision)
+ 
+     def synthesize(self, text, *, speech_address_prefix=DEFAULT_SPEECH_ADDRESS):
++        prefix = self.speech_address(speech_address_prefix)
++        if self.alice_short_mode(prefix):
++            text = validate_alice_phrase(text)
+         text = re.sub(r'<think>.*?</think>', '', text, flags=re.S)
+         text = re.sub(r'[*#`]', '', text).strip()
+         text = self.address_speech(text,speech_address_prefix)
+@@ -157,6 +185,22 @@
+         # Normalize only the comparison. Preserve the actual model reply body.
+         compared=unicodedata.normalize('NFKC',text).casefold().lstrip()
+         return text if re.match(r'^алиса\b',compared) else prefix+text
++
++    def alice_short_mode(self, prefix):
++        enabled = self.config['conversation'].get('alice_short_replies', False)
++        if type(enabled) is not bool:
++            raise ValueError('Boolean Alice short replies required')
++        return enabled and prefix == 'Алиса, '
++
++    def alice_short_segments(self, segments, prefix):
++        if not self.alice_short_mode(prefix) or not segments:
++            return segments
++        if len(segments) == 1 and segments[0]['text'] == '':
++            return []  # The legacy stream represents silent controls this way.
++        # Reuse the expression segments; no second generator or sentence slicing.
++        if len(segments) != 1:
++            raise AlicePhraseRejected('Exactly one complete Alice segment required')
++        return [dict(segments[0], text=validate_alice_phrase(segments[0]['text']))]
+ 
+     def speech_address_metadata(self,text,speech_address_prefix=DEFAULT_SPEECH_ADDRESS):
+         prefix=self.speech_address(speech_address_prefix)
+@@ -242,6 +286,11 @@
+             validate_text(reply,reply_constraints)
+             if reply!=original_reply or [s['text'] for s in segments]!=[original_reply]:
+                 raise RuntimeError('Constrained spoken reply must remain unchanged')
++        segments = self.alice_short_segments(segments, prefix)
++        if segments and self.alice_short_mode(prefix):
++            reply, emotion = segments[0]['text'], segments[0]['emotion']
++        if reply_constraints is not None and reply != original_reply:
++            raise RuntimeError('Constrained spoken reply must remain unchanged')
+         if pending is not None and not reply:
+             raise RuntimeError('Backend returned an expression without spoken text')
+         if pending is not None:
+@@ -281,6 +330,7 @@
+         total = initial_bytes
+         beat_offset = 0
+         from .speech_motion import cues
++        segments = self.alice_short_segments(segments, prefix)
+         spoken=[]
+         for segment in segments:
+             text = re.sub(r'[*#`]', '', segment['text']).strip()
+@@ -325,7 +375,8 @@
+             recognized = answer_result = None
+             intro_bytes = 0
+             acknowledgements = self.config['conversation'].get('interaction', {}).get('acknowledgements', {})
+-            if path != '/say' and acknowledgements.get('enabled', False) and 'reply_constraints' not in payload:
++            if (path != '/say' and acknowledgements.get('enabled', False) and 'reply_constraints' not in payload
++                    and not self.alice_short_mode(prefix)):
+                 self.check_robot()
+                 recognized = (self.transcribe(base64.b64decode(payload['pcm_base64'], validate=True))
+                               if path == '/turn' else payload['text'].strip())

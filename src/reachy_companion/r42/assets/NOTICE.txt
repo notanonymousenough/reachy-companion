@@ -1,0 +1,6 @@
+Adapted Reachy Mini emotion trajectories
+Source: https://huggingface.co/datasets/pollen-robotics/reachy-mini-emotions-library
+Revision: 873ae49f0b89114b7e535eff0c1f7560d21d9357
+Original recordings maintained by Pollen Robotics and contributors.
+License: Apache License 2.0 (see APACHE-2.0.txt).
+Modifications in reachy-companion: sampled and normalized orientation/antenna keyframes; removed translations, body rotation and audio; runtime blend and smooth interpolation. This is an adapted subset, not exact original playback.

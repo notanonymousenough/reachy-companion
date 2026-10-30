@@ -74,7 +74,8 @@ def binding(value):
 
 def check_operator(value, expected, deadline):
     policy=value['motion_policy']
-    if (binding(value)!=expected or type(expected['owner_id']) is not str or not 1<=len(expected['owner_id'])<=128
+    if (binding(value)!=expected or (expected['owner_id'] is not None
+            and (type(expected['owner_id']) is not str or not 1<=len(expected['owner_id'])<=128))
             or value['motion_policy_owner_id']!=expected['owner_id']
             or not value['microphone_enabled'] or not value['listening'] or value['capture_active']
             or value['microphone_state_error'] is not None or value['phase']!='processing'

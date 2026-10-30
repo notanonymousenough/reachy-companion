@@ -1,0 +1,1234 @@
+#!/usr/bin/env python3
+"""Reachy Mini microphone/speaker bridge. Uses the daemon's shared ALSA devices."""
+import array
+import base64
+from collections import deque
+import hmac
+import io
+import json
+import logging
+import math
+import os
+import selectors
+import signal
+import statistics
+import subprocess
+import threading
+import time
+import wave
+from uuid import uuid4
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.request import Request, build_opener, ProxyHandler
+from urllib.error import HTTPError
+import webrtcvad
+
+LOG = logging.getLogger('reachy-voice-agent')
+
+
+
+STREAM_TIMING_MARKS = ('response_open_begin','response_open_end','first_reply_received',
+    'first_motion_enqueued','first_audio_line_received','timeline_wait_begin','timeline_wait_end',
+    'aplay_popen_begin','aplay_popen_end','monitor_start_return','first_positive_write')
+STREAM_TIMING_FIELDS = frozenset(STREAM_TIMING_MARKS) | {
+    'version','agent_boot_id','microphone_epoch','policy_epoch','content_attempt_id',
+    'content_binding','started_monotonic','first_positive_write_bytes',
+    'consumption_verified','acoustic_verified'}
+
+
+def validate_stream_timing(value):
+    """Exact shared status/finite-consumer contract; no raw content or coercion."""
+    def require(good):
+        if not good:raise ValueError('Invalid bounded Agent stream timing')
+    def number(item, maximum):
+        return type(item) in (int,float) and 0<=item<=maximum and math.isfinite(item)
+    def identity(item):
+        return type(item) is str and len(item)==32 and all(c in '0123456789abcdef' for c in item)
+    require(type(value) is dict and set(value)==STREAM_TIMING_FIELDS)
+    require(type(value['version']) is int and value['version']==1)
+    require(type(value['agent_boot_id']) is str and 1<=len(value['agent_boot_id'])<=128)
+    for key in ('microphone_epoch','policy_epoch'):
+        require(type(value[key]) is int and 0<=value[key]<2**63)
+    require(number(value['started_monotonic'],1e15))
+    require(type(value['content_binding']) is str and value['content_binding'] in ('pending','bound','invalid'))
+    attempt=value['content_attempt_id']
+    require(attempt is None or identity(attempt))
+    require(value['content_binding']!='bound' or identity(attempt))
+    require(value['content_binding']!='pending' or attempt is None)
+    for key in STREAM_TIMING_MARKS:
+        require(value[key] is None or number(value[key],86400))
+    for begin,end in (('response_open_begin','response_open_end'),('timeline_wait_begin','timeline_wait_end'),
+                      ('aplay_popen_begin','aplay_popen_end')):
+        require(value[end] is None or (value[begin] is not None and value[end]>=value[begin]))
+    count=value['first_positive_write_bytes']
+    require((count is None and value['first_positive_write'] is None) or
+            (type(count) is int and 0<count<2**31 and value['first_positive_write'] is not None))
+    require(value['consumption_verified'] is False and value['acoustic_verified'] is False)
+    return dict(value)
+
+
+class Agent:
+    def __init__(self, config):
+        self.config = config
+        self.audio = config['audio']
+        self._capture_source_generation = 0
+        self._capture_pump = None
+        self._capture_packet = None
+        self._capture_suspended = False
+        self._capture_enabled()
+        self.http = build_opener(ProxyHandler({}))
+        self.listening = threading.Event()
+        from .microphone import MicrophoneState
+        self.microphone = MicrophoneState(config.path(config['paths']['data_dir']) / 'microphone-state.json',
+                                          config['conversation']['listen_on_start'])
+        from .motion_policy import MotionPolicy
+        self.motion_policy=MotionPolicy(config.path(config['guarded_motion']['policy_path']))
+        self.agent_boot_id = str(uuid4())
+        self.microphone_epoch = self.microphone.epoch
+        self.microphone_owner_id = None
+        self.microphone_lock = threading.Lock()
+        self.playback_process = None
+        self.voice_response = None
+        self.pending_pcm = None
+        self.resume_audio = None
+        self.resume_blocked_reason = None
+        self.last_voice_at = None
+        self.current_reply_text = ''
+        self.interruptions = 0
+        self.barge_in_error = None
+        self.capture_active = False
+        if self.microphone.enabled:
+            self.listening.set()
+        self.stopping = threading.Event()
+        self.audio_lock = threading.Lock()
+        self.phase = 'starting'
+        self.threshold = self.audio['rms_floor']
+        self.last_error = None
+        self.last_transcript = None
+        self.turns = 0
+        self.calibrated = False
+        self.playback_configured = False
+        from .volume import PlaybackVolume
+        self.volume = PlaybackVolume(config.path(config['paths']['data_dir']) / 'volume-state.json',
+                                     self.audio.get('playback_mixer', {}).get('volume_percent', 95))
+        self.volume_lock = threading.Lock()
+        self.vad = webrtcvad.Vad(self.audio['vad_mode'])
+        from .expression_player import ExpressionPlayer
+        self.expressions = ExpressionPlayer(config, self.request, self.stopping,
+            permitted=self.motor_permitted,binding=self.expression_binding)
+        self.chunk_bytes = self.audio['sample_rate'] * 2 * self.audio['chunk_ms'] // 1000
+        from .sound_monitor import SoundMonitor
+        self.sounds = SoundMonitor(self)
+        from .motion_proxy import MotionProxy
+        self.motion_proxy = MotionProxy(config['guarded_motion']['enabled'] and config['guarded_motion'].get('transport','native')=='native',
+                                        config.path(config['guarded_motion']['socket_path']),self.operator_status)
+        self.vad_bytes = self.audio['sample_rate'] * 2 * self.audio['vad_frame_ms'] // 1000
+
+    def stop_speaker(self, abort_stream=True):
+        process = self.playback_process
+        if process is not None and process.poll() is None:
+            process.terminate()
+        # Wake a blocked urllib reader as well as stopping physical playback.
+        response = self.voice_response
+        if abort_stream and response is not None:
+            try:
+                import socket
+                response.fp.raw._sock.shutdown(socket.SHUT_RDWR)
+            except (AttributeError, OSError):
+                pass
+
+    def motor_permitted(self):
+        policy=self.motion_policy.snapshot()
+        return (self.config['guarded_motion']['enabled'] is True and policy['motor_enabled'] is True
+                and policy['quiet'] is False and policy['privacy_all'] is False)
+
+    def expression_binding(self):
+        with self.microphone_lock:
+            return dict(agent_boot_id=self.agent_boot_id,microphone_epoch=self.microphone_epoch,
+                microphone_enabled=self.microphone.enabled,policy_epoch=self.motion_policy.snapshot()['epoch'])
+
+    def set_motion_policy(self,value):
+        if not isinstance(value,dict):raise ValueError('Policy object required')
+        value=dict(value)
+        parameters={key:value.pop(key) for key in ('expected_boot_id','expected_epoch','owner_id','expected_owner_id') if key in value}
+        if parameters:
+            if (parameters.get('expected_boot_id')!=self.agent_boot_id or type(parameters.get('expected_epoch')) is not int
+                    or not 0<=parameters['expected_epoch']<2**63):raise RuntimeError('Complete current policy boot/epoch required')
+            if any(key in parameters and parameters[key] is None for key in ('owner_id','expected_owner_id')):
+                raise ValueError('Policy owner cannot be null')
+            parameters.pop('expected_boot_id')
+        result=self.motion_policy.save(value,**parameters)
+        pump = self._capture_retire() if self._capture_enabled() else None
+        try:
+            if result['quiet'] or result['privacy_all']:
+                self.stop_speaker();self.resume_audio=None;self.pending_pcm=None
+            if not result['motor_enabled'] or result['quiet'] or result['privacy_all']:self.expressions.hold()
+            if result['privacy_all']:self.listening.clear()
+            return result
+        finally:
+            if pump is not None: pump.close()
+
+    def set_microphone(self, enabled, listen=True, *, expected_boot_id=None, expected_epoch=None,
+                       owner_id=None,expected_owner_id=None):
+        retired_capture = None
+        try:
+            if type(listen) is not bool:raise ValueError('listen must be boolean')
+            if not isinstance(enabled, bool):
+                raise ValueError('enabled must be boolean')
+            if expected_boot_id is not None or expected_epoch is not None:
+                if not isinstance(expected_boot_id,str) or not expected_boot_id or type(expected_epoch) is not int or not 0<=expected_epoch<2**63:
+                    raise ValueError('Complete microphone authority required')
+            for owner in (owner_id,expected_owner_id):
+                if owner is not None and (not isinstance(owner,str) or not 1<=len(owner)<=128 or expected_boot_id is None):
+                    raise ValueError('Bounded microphone owner requires authority')
+            with self.microphone_lock:
+                if expected_boot_id is not None and (expected_boot_id!=self.agent_boot_id or expected_epoch!=self.microphone_epoch):
+                    raise RuntimeError('Microphone authority changed')
+                if expected_owner_id is not None and expected_owner_id!=self.microphone_owner_id:
+                    raise RuntimeError('Microphone owner changed')
+                self.microphone_epoch += 1
+                retired_capture = self._capture_retire() if self._capture_enabled() else None
+                self.microphone_owner_id=owner_id
+                self.listening.clear()
+                if not enabled:
+                    self.microphone.enabled = False
+                    self.expressions.hold()
+                    self.pending_pcm = None
+                    self.resume_audio = None
+                    self.stop_speaker()
+                try:
+                    self.microphone.save(enabled)
+                except (OSError, ValueError):
+                    self.expressions.hold()
+                    self.pending_pcm = None
+                    self.resume_audio = None
+                    self.stop_speaker()
+                    raise
+                self.sounds.reset()
+                if enabled and listen:
+                    self.listening.set()
+            if retired_capture is not None: retired_capture.close()
+            return {'ok': True, 'microphone_enabled': enabled, 'capture_active': self.capture_active,
+                    'agent_boot_id': self.agent_boot_id, 'microphone_epoch': self.microphone_epoch,
+                    'microphone_owner_id':self.microphone_owner_id,'listening':self.listening.is_set()}
+        finally:
+            if retired_capture is not None: retired_capture.close()
+
+    def vision_route_update(self, **fields):
+        bound, previous = self._vision_route
+        self._vision_route = (bound, dict(previous, **fields))
+
+    def vision_route_status(self, policy):
+        bound, result = getattr(self, '_vision_route', (None, None))
+        if (bound is None or bound['agent_boot_id'] != self.agent_boot_id
+                or bound['microphone_epoch'] != self.microphone_epoch
+                or bound['policy_epoch'] != policy['epoch']):
+            return None
+        return dict(result)
+
+    def vision_route_failure(self, exc):
+        from .spoken_vision import ERROR_PHASES, ERROR_CLASSES
+        # Compare only complete, fixed allowlisted messages; never retain exc text.
+        for phase in ERROR_PHASES:
+            for name in ERROR_CLASSES:
+                if (type(exc) is RuntimeError and exc.args ==
+                        ('Spoken snapshot child failed phase='+phase+' error_class='+name,)):
+                    self.vision_route_update(stage='dispatch', result='typed_child_failure',
+                                             child_phase=phase, child_error_class=name)
+                    return
+        self.vision_route_update(stage='dispatch', result='untyped_failure')
+
+    def _stream_timing_begin(self, epoch, policy_epoch):
+        row=dict.fromkeys(STREAM_TIMING_MARKS)
+        row.update(version=1,agent_boot_id=self.agent_boot_id,microphone_epoch=epoch,policy_epoch=policy_epoch,
+                   content_attempt_id=None,content_binding='pending',started_monotonic=time.monotonic(),
+                   first_positive_write_bytes=None,consumption_verified=False,acoustic_verified=False)
+        probe=[row]
+        self._stream_timing=probe
+        return probe
+
+    def _stream_timing_mark(self, probe, name, count=None):
+        if (probe is None or getattr(self,'_stream_timing',None) is not probe
+                or name not in STREAM_TIMING_MARKS or probe[0][name] is not None):return
+        elapsed=time.monotonic()-probe[0]['started_monotonic']
+        if not math.isfinite(elapsed) or not 0<=elapsed<=86400:return
+        if name=='first_positive_write' and (type(count) is not int or not 0<count<2**31):return
+        row=dict(probe[0]);row[name]=round(elapsed,6)
+        if name=='first_positive_write':row['first_positive_write_bytes']=count
+        probe[0]=row
+
+    def _stream_timing_bind(self, probe, attempt):
+        if probe is None or getattr(self,'_stream_timing',None) is not probe or attempt is None:return
+        row=probe[0]
+        valid=type(attempt) is str and len(attempt)==32 and all(c in '0123456789abcdef' for c in attempt)
+        if row['content_binding']=='invalid':return
+        if not valid or (row['content_attempt_id'] is not None and row['content_attempt_id']!=attempt):
+            probe[0]=dict(row,content_binding='invalid')
+        elif row['content_attempt_id'] is None:
+            probe[0]=dict(row,content_attempt_id=attempt,content_binding='bound')
+
+    def stream_timing_status(self, policy):
+        probe=getattr(self,'_stream_timing',None)
+        if probe is None:return None
+        row=probe[0]
+        if (row['agent_boot_id']!=self.agent_boot_id or row['microphone_epoch']!=self.microphone_epoch
+                or row['policy_epoch']!=policy['epoch']):return None
+        try:return validate_stream_timing(row)
+        except ValueError:return None
+
+    def status(self):
+        motion_status = self.motion_actor_status()
+        with self.microphone_lock:
+            policy = self.motion_policy.snapshot()
+            return {'stream_timing': self.stream_timing_status(policy), 'vision_route': self.vision_route_status(policy), 'listening': self.listening.is_set(), 'phase': self.phase,
+                             'agent_boot_id': self.agent_boot_id, 'microphone_epoch': self.microphone_epoch,
+                             'threshold_rms': self.threshold, 'last_error': self.last_error,
+                             'last_transcript': self.last_transcript, 'turns': self.turns,
+                             'microphone_enabled': self.microphone.enabled,
+                             'interruptions': self.interruptions, 'resumable_reply': self.resume_audio is not None, 'barge_in_error': self.barge_in_error,
+                             'resume_blocked_reason': self.resume_blocked_reason,
+                             'playback_cursor_provenance': 'wall_time_estimate',
+                             'motion_actor': motion_status,'motion_policy':policy,
+                             'volume_percent': self.volume.percent,
+                             'volume_control_enabled': self.audio.get('playback_mixer', {}).get('enabled', False),
+                             'capture_active': self.capture_active,
+                             'capture_pcm': (self._capture_pump.snapshot()
+                                 if getattr(self, '_capture_pump', None) is not None else None),
+                             'sound_mode': 'music' if self.sounds.music else 'conversation', 'sound_error': self.sounds.last_error,
+                             'microphone_state_error': self.microphone.error,
+                             'expression': self.expressions.last_expression,
+                             'expression_error': self.expressions.last_error}
+
+    def motion_actor_status(self):
+        if self.config['guarded_motion'].get('transport','native')=='stock':
+            return dict(enabled=self.config['guarded_motion']['enabled'],ready=False,transport='stock',
+                reason='stock_factory_api_not_native_actor')
+        return self.motion_proxy.status()
+
+    def operator_status(self):
+        # Separate from /status: the native monitor must not recursively ask
+        # its own IPC server for readiness while fetching operator authority.
+        with self.microphone_lock:
+            policy,policy_owner=self.motion_policy.owned_snapshot()
+            return dict(agent_boot_id=self.agent_boot_id,microphone_epoch=self.microphone_epoch,
+                        microphone_owner_id=self.microphone_owner_id,
+                        microphone_enabled=self.microphone.enabled,capture_active=self.capture_active,
+                        phase=self.phase,listening=self.listening.is_set(),microphone_state_error=self.microphone.error,
+                        motion_policy=policy,motion_policy_owner_id=policy_owner,
+                        expression_version=self.expressions.version)
+
+    def set_volume(self, percent):
+        from .volume import validate_percent
+        validate_percent(percent)
+        if not self.audio.get('playback_mixer', {}).get('enabled', False):
+            raise ValueError('Playback mixer control is disabled in configuration')
+        with self.volume_lock:
+            self.configure_playback(percent)
+            self.volume.save(percent)
+            self.playback_configured = True
+        return {'ok': True, 'volume_percent': self.volume.percent}
+
+    def configure_playback(self, percent=None):
+        settings = self.audio.get('playback_mixer', {})
+        if not settings.get('enabled', False):
+            return
+        percent = self.volume.percent if percent is None else percent
+        subprocess.run(['amixer', '-c', str(settings['card']), 'sset',
+                        settings['control'], str(percent) + '%', 'mute' if percent == 0 else 'unmute'],
+                       capture_output=True, check=True, timeout=self.config['timeouts']['http'])
+        LOG.info('playback_mixer card=%s control=%s volume=%s%%', settings['card'],
+                 settings['control'], percent)
+
+    def request(self, base, path, payload=None, timeout=None):
+        request = Request(base + path, data=None if payload is None else json.dumps(payload).encode(),
+                          headers={'Content-Type': 'application/json',
+                                   'Authorization': 'Bearer ' + self.config.token})
+        try:
+            with self.http.open(request, timeout=timeout or self.config['timeouts']['client']) as response:
+                return json.load(response)
+        except HTTPError as exc:
+            raise RuntimeError('Hub HTTP %s: %s' % (exc.code, exc.read().decode()[:600])) from exc
+
+    def _capture_enabled(self):
+        enabled = self.config['conversation'].get('capture_pump_enabled', False)
+        if type(enabled) is not bool:
+            raise ValueError('Boolean capture pump opt-in required')
+        if enabled:
+            barge = self.config['conversation']['barge_in']
+            if (self.config['streaming']['enabled'] is not True or barge['enabled'] is not True
+                    or barge.get('confirm_with_stt', False) is not True or self.audio['sample_rate'] != 16000):
+                raise ValueError('Capture pump requires existing streaming mono AEC and confirmed barge-in')
+        return enabled
+
+    def _capture_retire(self):
+        pump = getattr(self, '_capture_pump', None)
+        if pump is not None:
+            pump.retire()
+        self._capture_packet = None
+        self.pending_pcm = None
+        control = getattr(self, '_capture_control', None)
+        if control is not None:
+            control.stop.set()
+            control.pcm = None
+            control.capture_permitted = lambda: False
+        return pump
+
+    def _capture_get(self):
+        from .capture_pump import CapturePump
+        pump = getattr(self, '_capture_pump', None)
+        if pump is not None and not pump.permitted():
+            pump.close()
+            self._capture_pump = pump = None
+        if pump is None:
+            self._capture_source_generation = getattr(self, '_capture_source_generation', 0) + 1
+            pump = CapturePump(self, self._capture_source_generation)
+            self._capture_pump = pump
+            pump.start()
+        return pump
+
+    def _capture_fresh(self):
+        pump = getattr(self, '_capture_pump', None)
+        return pump is not None and pump.admitted(getattr(self, '_capture_packet', None))
+
+    def _capture_pending(self, value):
+        from .capture_pump import Utterance
+        with self.microphone_lock:
+            self._capture_packet = value if isinstance(value, Utterance) else None
+            if self._capture_fresh():
+                return value.pcm
+            self._capture_packet = None
+            return None
+
+    def _capture_visual(self, dispatch, text, epoch, expected):
+        if not self._capture_enabled():
+            return dispatch(self, text, epoch, expected)
+        pump = self._capture_retire()
+        if pump is not None:
+            pump.close()
+        self._capture_suspended = True
+        try:
+            return dispatch(self, text, epoch, expected)
+        finally:
+            self._capture_suspended = False
+            policy = self.motion_policy.snapshot()
+            if (self.microphone.enabled and self.listening.is_set() and not self.stopping.is_set()
+                    and epoch == self.microphone_epoch and policy['epoch'] == expected['policy_epoch']
+                    and not policy['quiet'] and not policy['privacy_all']):
+                self._capture_get()
+
+    def capture(self, during_reply=False, on_speech=None, stop_event=None, idle_deadline=None, skip_expression=False):
+        if not self._capture_enabled():
+            return self._finite_capture(during_reply, on_speech, stop_event, idle_deadline, skip_expression)
+        if during_reply or on_speech is not None:
+            raise RuntimeError('Capture pump barge-in requires the shared consumer')
+        if (not self.microphone.enabled or not self.listening.is_set() or self.stopping.is_set()
+                or self._capture_suspended):
+            return None
+        if not skip_expression:
+            self.expressions.set('neutral')
+            self.phase = 'listening'
+        previous = getattr(self, '_capture_control', None)
+        if previous is not None and previous.thread.is_alive():
+            raise RuntimeError('Previous capture control still active')
+        pump = self._capture_get()
+        pump.mode(False)
+        packet = pump.event(stop=stop_event, idle_deadline=idle_deadline, final_only=True)
+        with self.microphone_lock:
+            if packet is not None and pump.claim(packet):
+                self._capture_packet = packet
+                pump.mode(True)
+                return packet.pcm
+        if pump.error is not None:
+            raise RuntimeError(pump.error)
+        return None
+
+    def _finite_capture(self, during_reply=False, on_speech=None, stop_event=None, idle_deadline=None, skip_expression=False):
+        epoch = self.microphone_epoch
+        def active():
+            return self.microphone.enabled and (during_reply or self.listening.is_set()) and not self.stopping.is_set() and epoch == self.microphone_epoch and not (stop_event and stop_event.is_set())
+        if not active():
+            return None
+        if not during_reply and not skip_expression:
+            # Optional movement is queued independently; factory completion
+            # must not delay microphone readiness.
+            self.expressions.set('neutral')
+            self.phase = 'listening'
+        if not active():
+            return None
+        confirmed = False
+        barge_voiced = 0
+        chunks_seen = 0
+        barge = self.config['conversation'].get('barge_in', {})
+        command = ['arecord', '-q', '-D', self.audio['capture_device'], '-f', 'S16_LE',
+                   '-r', str(self.audio['sample_rate']), '-c', '1', '-t', 'raw']
+        with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
+            self.capture_active = True
+            selector = selectors.DefaultSelector()
+            selector.register(process.stdout, selectors.EVENT_READ)
+            pre = deque(maxlen=self.audio['pre_roll_chunks'])
+            frames = []
+            noise = []
+            voiced = 0
+            silent = 0
+            calibrating = not self.calibrated
+            try:
+                while active():
+                    if idle_deadline is not None and time.monotonic() >= idle_deadline and not frames:
+                        return None
+                    if not selector.select(timeout=1):
+                        if process.poll() is not None:
+                            raise RuntimeError(process.stderr.read().decode()[:500])
+                        continue
+                    chunk = process.stdout.read(self.chunk_bytes)
+                    if len(chunk) != self.chunk_bytes:
+                        raise RuntimeError('Microphone stream ended: ' + process.stderr.read().decode()[:500])
+                    chunks_seen += 1
+                    if not during_reply:
+                        self.sounds.feed(chunk)
+                        if self.sounds.music:
+                            frames = []; voiced = silent = 0
+                            pre.clear()
+                            self.phase = 'music'
+                            continue
+                    samples = array.array('h', chunk)
+                    rms = math.sqrt(sum(s*s for s in samples) / len(samples))
+                    if calibrating:
+                        noise.append(rms)
+                        pre.append(chunk)
+                        if len(noise) >= self.audio['calibration_chunks']:
+                            floor = self.audio['rms_floor']
+                            self.threshold = max(floor, statistics.median(noise) * self.audio['noise_multiplier'])
+                            LOG.info('listening threshold_rms=%.1f', self.threshold)
+                            calibrating = False
+                            self.calibrated = True
+                        continue
+                    speech_frames = sum(self.vad.is_speech(chunk[i:i+self.vad_bytes], self.audio['sample_rate'])
+                                        for i in range(0, len(chunk), self.vad_bytes))
+                    threshold = self.threshold * (barge.get('threshold_multiplier', 1) if during_reply else 1)
+                    loud = rms >= threshold and speech_frames >= self.audio['min_speech_frames']
+                    if during_reply and not confirmed:
+                        eligible = chunks_seen > barge.get('warmup_chunks', 9)
+                        barge_voiced = barge_voiced + 1 if loud and eligible else 0
+                    if not frames:
+                        pre.append(chunk)
+                        if loud:
+                            frames = list(pre)
+                            voiced = 1
+                            if not during_reply:
+                                self.phase = 'recording'
+                                self.expressions.set('listening', force=True)
+                        continue
+                    frames.append(chunk)
+                    if loud:
+                        self.last_voice_at = time.monotonic()
+                        voiced += 1
+                        silent = 0
+                    else:
+                        silent += 1
+                    if during_reply and not confirmed and loud and barge_voiced >= barge['min_voiced_chunks']:
+                        accepted = on_speech(b''.join(frames)) if on_speech else True
+                        confirmed = accepted is not False
+                        if not confirmed:
+                            barge_voiced = 0
+                            frames = []
+                            voiced = silent = 0
+                            continue
+                    if silent >= self.audio['silence_chunks'] or len(frames) >= self.audio['max_recording_seconds'] * 1000 / self.audio['chunk_ms']:
+                        if voiced >= self.audio['min_voiced_chunks'] and (not during_reply or confirmed):
+                            return b''.join(frames) if active() else None
+                        frames = []
+                        voiced = silent = 0
+                        if not during_reply:
+                            self.phase = 'listening'
+                return None
+            finally:
+                selector.close()
+                process.terminate()
+                try:
+                    process.wait(timeout=self.config['timeouts']['process_stop'])
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+                self.capture_active = False
+
+    def play(self, encoded, epoch=None):
+        policy=self.motion_policy.snapshot()
+        policy_epoch=policy['epoch']
+        if policy['quiet'] or policy['privacy_all']:return
+        if not encoded or not self.microphone.enabled or (epoch is not None and epoch != self.microphone_epoch):
+            return
+        self.phase = 'speaking'
+        wav = base64.b64decode(encoded, validate=True)
+        with wave.open(io.BytesIO(wav), 'rb') as stream:
+            seconds = stream.getnframes() / stream.getframerate()
+        with subprocess.Popen(['aplay', '-q', '-D', self.audio['playback_device']],
+                              stdin=subprocess.PIPE, stderr=subprocess.PIPE) as process:
+            self.playback_process = process
+            try:
+                if (not self.microphone.enabled or (epoch is not None and epoch != self.microphone_epoch)
+                        or self.motion_policy.snapshot()['epoch']!=policy_epoch):
+                    process.terminate()
+                    return
+                _, error = process.communicate(wav, timeout=seconds + self.config['timeouts']['playback_margin'])
+                if process.returncode and (epoch is None or epoch == self.microphone_epoch):
+                    raise RuntimeError('Playback failed: ' + error.decode()[:500])
+            finally:
+                self.playback_process = None
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+        time.sleep(self.audio['echo_tail_seconds'])
+
+    def voice(self, path, payload, expected_epoch=None, allow_barge_in=True, replay=None, expected_policy_epoch=None, valid_until=None):
+        epoch = self.microphone_epoch if expected_epoch is None else expected_epoch
+        motor_policy_epoch=(self.motion_policy.snapshot()['epoch'] if expected_policy_epoch is None else expected_policy_epoch)
+        monitor = None
+        pump_reply_seen = False
+        capture_source = None
+        previous_capture_control = getattr(self, '_capture_control', None)
+        if self._capture_enabled() and previous_capture_control is not None and previous_capture_control.thread.is_alive():
+            raise RuntimeError('Previous capture control still active')
+        timing = None
+        self._stream_timing = None
+        self.current_reply_text = (replay.get('spoken_text', '') if replay else
+                                   self.current_reply_text[-self.config['limits']['max_speech_chars']:] if self._capture_enabled() else '')
+        def cancelled():
+            policy=self.motion_policy.snapshot()
+            return (not self.microphone.enabled or epoch != self.microphone_epoch or self.stopping.is_set()
+                    or (capture_source is not None and not capture_source.permitted())
+                    or policy['epoch']!=motor_policy_epoch or policy['quiet'] or policy['privacy_all']
+                    or (valid_until is not None and time.monotonic()>=valid_until))
+        def interrupted():
+            return bool(monitor and monitor.interrupted.is_set())
+        def cancelled_result():
+            return {'ok': True, 'cancelled': True, 'interrupted': bool(monitor and monitor.interrupted.is_set())}
+        if cancelled():
+            return cancelled_result()
+        prefix=self.config['conversation'].get('speech_address_prefix','')
+        if type(prefix) is not str or prefix not in ('','Алиса, '):raise ValueError('Invalid conversation speech address prefix')
+        payload=dict(payload,speech_address_prefix=prefix)
+        if replay is not None and replay.get('cursor_verified') is not True:
+            self.resume_audio=None
+            self.resume_blocked_reason='unverified_pcm_cursor'
+            return {**cancelled_result(),'cancelled':True,'resume_blocked_reason':self.resume_blocked_reason}
+        self.resume_blocked_reason=None
+        if path in ('/text', '/turn'):
+            self.expressions.set('processing')
+        if not self.config['streaming']['enabled']:
+            response = self.request(self.config['network']['voice_url'], path, payload)
+            if cancelled():
+                return cancelled_result()
+            self.expressions.set('speaking', response.get('emotion', 'neutral'))
+            try:
+                self.play(response.get('audio_base64', ''), epoch)
+            finally:
+                self.expressions.hold()
+                if not cancelled():self.expressions.set('neutral')
+            return response
+        if path in ('/text','/turn') and replay is None:
+            timing = self._stream_timing_begin(epoch,motor_policy_epoch)
+        item = Request(self.config['network']['voice_url'] + '/stream' + path,
+                       data=json.dumps(payload).encode(),
+                       headers={'Content-Type': 'application/json',
+                                'Authorization': 'Bearer ' + self.config.token})
+        process = None
+        complete = False
+        result = None
+        total = 0
+        settings = self.config['streaming']
+        maximum = settings['sample_rate'] * 2 * settings['max_output_seconds']
+        deadline = None
+        selector = None
+        from .speech_clock import SpeechClock
+        clock = SpeechClock(settings['sample_rate'], settings['playback_latency_seconds'])
+        full_pcm = bytearray()
+        all_cues = []
+        cursor = None
+        from .replay import ReplayResponse
+        try:
+            if (self._capture_enabled() and self.microphone.enabled and self.listening.is_set()
+                    ):
+                # Spoken visual child has returned before it calls voice('/say').
+                self._capture_suspended = False
+                capture_source = self._capture_get()
+                # A0 only drains PCM during output. No additional STT request
+                # and no acoustic barge-in claim without hardware acceptance.
+            if cancelled():
+                return cancelled_result()
+            self._stream_timing_mark(timing,'response_open_begin')
+            response_context = self.http.open(item, timeout=self.config['timeouts']['client']) if replay is None else ReplayResponse(replay, settings)
+            self._stream_timing_mark(timing,'response_open_end')
+            with response_context as response:
+                self.voice_response = response
+                if response.headers.get_content_type() != 'application/x-ndjson':
+                    raise RuntimeError('Expected an audio event stream')
+                while True:
+                    if cancelled():
+                        return cancelled_result()
+                    line = response.readline(settings['max_event_bytes'] + 1)
+                    if not line:
+                        break
+                    if len(line) > settings['max_event_bytes'] or not line.endswith(b'\n'):
+                        raise ValueError('Invalid stream event size')
+                    event = json.loads(line)
+                    if cancelled():return cancelled_result()
+                    if event['type'] == 'reply':
+                        self._stream_timing_mark(timing,'first_reply_received')
+                        self._stream_timing_bind(timing,event.get('content_attempt_id'))
+                        result = event
+                        spoken=event.get('spoken_text')
+                        if type(spoken) is not str or not spoken.strip() or len(spoken)>self.config['limits']['max_speech_chars']:
+                            spoken=event.get('reply','')
+                        if self._capture_enabled() and not pump_reply_seen:
+                            self.current_reply_text = ''
+                            pump_reply_seen = True
+                        self.current_reply_text += ' ' + spoken
+                    elif event['type'] == 'motion':
+                        if len(all_cues) + len(event['cues']) > self.config['conversation']['expressions']['speech_sync']['max_cues']:
+                            raise ValueError('Too many speech motion cues')
+                        all_cues.extend(event['cues'])
+                        if not interrupted():
+                            self.expressions.timeline(event['cues'], clock)
+                            self._stream_timing_mark(timing,'first_motion_enqueued')
+                    elif event['type'] == 'audio':
+                        self._stream_timing_mark(timing,'first_audio_line_received')
+                        if cancelled():
+                            return cancelled_result()
+                        if event.get('sample_rate') != settings['sample_rate'] or event.get('format') != 'S16_LE' or event.get('channels') != 1:
+                            raise ValueError('Unsupported stream audio format')
+                        pcm = base64.b64decode(event['pcm_base64'], validate=True)
+                        total += len(pcm)
+                        if len(pcm) % 2 or total > maximum:
+                            raise ValueError('Invalid stream audio length')
+                        full_pcm.extend(pcm)
+                        if interrupted():
+                            if cursor is None:
+                                cursor = clock.resume_cursor()
+                            continue
+                        if process is None:
+                            if all_cues:
+                                self._stream_timing_mark(timing,'timeline_wait_begin')
+                                self.expressions.wait_timeline(clock)
+                                self._stream_timing_mark(timing,'timeline_wait_end')
+                            if cancelled(): return cancelled_result()
+                            self.phase = 'speaking'
+                            if not all_cues:
+                                self.expressions.set('speaking', (result or {}).get('emotion', 'neutral'))
+                            self._stream_timing_mark(timing,'aplay_popen_begin')
+                            if capture_source is not None:
+                                capture_source.output(True)
+                            process = subprocess.Popen(['aplay', '-q', '-D', self.audio['playback_device'],
+                                '--buffer-time='+str(settings['playback_buffer_us']), '--period-time='+str(settings['playback_period_us']),
+                                '-t', 'raw', '-f', 'S16_LE', '-r', str(settings['sample_rate']), '-c', '1'],
+                                stdin=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
+                            self._stream_timing_mark(timing,'aplay_popen_end')
+                            self.playback_process = process
+                            if not self._capture_enabled() and allow_barge_in and self.microphone.enabled and self.config['conversation'].get('barge_in', {}).get('enabled', False):
+                                from .barge_in import BargeInMonitor
+                                monitor = BargeInMonitor(self)
+                                monitor.start()
+                                self._stream_timing_mark(timing,'monitor_start_return')
+                            if cancelled():
+                                return cancelled_result()
+                            os.set_blocking(process.stdin.fileno(), False)
+                            selector = selectors.DefaultSelector()
+                            selector.register(process.stdin, selectors.EVENT_WRITE)
+                            deadline = time.monotonic() + settings['max_output_seconds'] + self.config['timeouts']['playback_margin']
+                        remaining = memoryview(pcm)
+                        while remaining:
+                            if interrupted():
+                                if cursor is None:
+                                    cursor = clock.resume_cursor()
+                                break
+                            if cancelled():
+                                return cancelled_result()
+                            if time.monotonic() > deadline:
+                                raise TimeoutError('Streaming playback stopped or timed out')
+                            if process.poll() is not None:
+                                raise RuntimeError('Streaming playback failed')
+                            if selector.select(timeout=0.2):
+                                try:
+                                    written = os.write(process.stdin.fileno(), remaining)
+                                    if written>0:self._stream_timing_mark(timing,'first_positive_write',written)
+                                    clock.feed(written)
+                                    remaining = remaining[written:]
+                                except BrokenPipeError:
+                                    if not interrupted():
+                                        raise
+                                except BlockingIOError:
+                                    pass
+                    elif event['type'] == 'done':
+                        if result is None or not event.get('ok'):
+                            raise RuntimeError('Invalid stream completion')
+                        result = event
+                        complete = True
+                        break
+                    elif event['type'] == 'error':
+                        raise RuntimeError('Compute worker failed during audio stream')
+                    else:
+                        raise ValueError('Unknown stream event')
+                if not complete:
+                    raise RuntimeError('Audio stream ended without completion')
+            if process is not None:
+                process.stdin.close()
+                process.wait(timeout=max(1, deadline - time.monotonic()))
+                if cancelled():
+                    return cancelled_result()
+                if process.returncode and not interrupted():
+                    raise RuntimeError('Streaming playback failed')
+                if not interrupted():
+                    time.sleep(self.audio['echo_tail_seconds'])
+            if interrupted():
+                if cursor is None:
+                    cursor = clock.resume_cursor()
+                if cursor is None:
+                    self.resume_audio=None
+                    self.resume_blocked_reason='unverified_pcm_cursor'
+                    return {**{key:value for key,value in result.items() if key!='type'},
+                            **cancelled_result(),'resume_blocked_reason':self.resume_blocked_reason}
+                self.resume_audio = {'pcm': bytes(full_pcm), 'cursor': min(cursor, len(full_pcm)),
+                                     'cursor_verified': True,
+                                     'result': {key: value for key, value in result.items() if key != 'type'},
+                                     'cues': all_cues, 'epoch': epoch, 'spoken_text': self.current_reply_text,
+                                     'deadline': (self.last_voice_at or time.monotonic()) + self.config['conversation']['interaction']['resume_after_empty_seconds']}
+                return {**self.resume_audio['result'], **cancelled_result()}
+            self.resume_audio = None
+            return {key: value for key, value in result.items() if key != 'type'}
+        except Exception:
+            if cancelled() or interrupted():
+                self.resume_audio = None
+                return cancelled_result()
+            raise
+        finally:
+            self.voice_response = None
+            if selector is not None:
+                selector.close()
+            if process is not None and process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=self.config['timeouts']['process_stop'])
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+            if process is not None:
+                if not process.stdin.closed:
+                    process.stdin.close()
+                process.stderr.close()
+            self.playback_process = None
+            if capture_source is not None:
+                capture_source.output(False)
+            try:
+                if (epoch != self.microphone_epoch or not self.microphone.enabled
+                        or (capture_source is not None and not capture_source.permitted())):
+                    self.resume_audio = None
+                if monitor is not None:
+                    pcm = monitor.finish()
+                    if pcm and self._capture_enabled():
+                        with self.microphone_lock:
+                            pump = getattr(self, '_capture_pump', None)
+                            if pump is not None and epoch == self.microphone_epoch and pump.fresh(pcm):
+                                self.pending_pcm = (epoch, pcm)
+                    elif pcm:
+                        self.pending_pcm = (epoch, pcm)
+                    if self.resume_audio is not None:
+                        self.resume_audio['deadline'] = (self.last_voice_at or time.monotonic()) + self.config['conversation']['interaction']['resume_after_empty_seconds']
+            finally:
+                self.expressions.hold()
+                if not cancelled() and not interrupted():
+                    self.expressions.set('neutral')
+
+    def run(self):
+        greeted = False
+        while not self.stopping.is_set():
+            if not self.listening.wait(timeout=1):
+                if not self.audio_lock.locked():
+                    self.phase = 'paused'
+                    if self.microphone.enabled:
+                        self.expressions.set('neutral')
+                    else:
+                        self.expressions.hold()
+                continue
+            try:
+                with self.audio_lock:
+                    epoch = self.microphone_epoch
+                    if not self.listening.is_set():
+                        continue
+                    health = self.request(self.config['network']['voice_url'], '/health', timeout=self.config['timeouts']['http'])
+                    if not health.get('ok'):
+                        raise RuntimeError('Voice server is not ready')
+                    status = self.request(self.config['network']['hub_url'], '/status', timeout=self.config['timeouts']['http'])
+                    if status['ownership']['state'] != 'free':
+                        raise RuntimeError('Robot is controlled by another application')
+                    if not self.listening.is_set() or epoch != self.microphone_epoch:
+                        continue
+                    self.last_error = None
+                    if not self.playback_configured:
+                        self.configure_playback()
+                        self.playback_configured = True
+                    if not greeted:
+                        if self.config['conversation']['wake_on_start'] and self.motor_permitted():
+                            self.request(self.config['network']['hub_url'], '/actions/wake', {}, timeout=self.config['timeouts']['wake'])
+                        if self.config['conversation']['greet_on_start']:
+                            self.voice('/say', {'text': self.config['conversation']['greeting']}, expected_epoch=epoch)
+                        greeted = True
+                    if not self.listening.is_set() or epoch != self.microphone_epoch:
+                        continue
+                    interrupted_input = False
+                    snapshot_turn = False
+                    from .spoken_vision import binding
+                    captured_operator = binding(self.operator_status())
+                    pending, self.pending_pcm = self.pending_pcm, None
+                    if pending is not None and pending[0] == epoch:
+                        pcm = self._capture_pending(pending[1]) if self._capture_enabled() else pending[1]
+                        interrupted_input = True
+                    else:
+                        pcm = self.capture()
+                    if not pcm or not self.listening.is_set() or epoch != self.microphone_epoch:
+                        continue
+                    self._vision_route = (captured_operator, dict(
+                        stt_nonempty=False, normalized_exact_visual=False, own_echo_match=False,
+                        action_allowlisted=False, route_attempted=False,
+                        stage='capture', result='pending', child_phase=None, child_error_class=None))
+                    if interrupted_input:
+                        self.vision_route_update(stage='interrupted', result='existing_interruption_path')
+                    self.phase = 'processing'
+                    LOG.info('phrase captured seconds=%.2f', len(pcm) / 32000)
+                    if interrupted_input:
+                        recognized = self.request(self.config['network']['voice_url'], '/transcribe',
+                                                  {'pcm_base64': base64.b64encode(pcm).decode()})
+                        if self._capture_enabled() and not self._capture_fresh():
+                            continue
+                        text = recognized['transcript']
+                        if not text and self.resume_audio is not None:
+                            saved = self.resume_audio
+                            if saved.get('cursor_verified') is not True:
+                                self.resume_audio=None
+                                self.resume_blocked_reason='unverified_pcm_cursor'
+                                continue
+                            self.phase = 'waiting_to_resume'
+                            if time.monotonic() < saved['deadline']:
+                                more = self.capture(idle_deadline=saved['deadline'], skip_expression=True)
+                                if more:
+                                    self.pending_pcm = (epoch, more)
+                                    continue
+                            if self.sounds.music:
+                                self.resume_audio = None
+                                continue
+                            if self.microphone.enabled and self.listening.is_set() and epoch == self.microphone_epoch:
+                                LOG.info('empty_interruption_resume')
+                                self.voice('/say', {}, expected_epoch=epoch, replay=saved)
+                            continue
+                        self.resume_audio = None
+                        if not text:
+                            continue
+                        if recognized['decision']['action'] == 'stop':
+                            self.last_transcript = text
+                            LOG.info('spoken_stop')
+                            self.set_microphone(False)
+                            continue
+                        response = self.voice('/text', {'text': text, 'session': self.config['conversation']['session'],
+                                                       'previous_reply_interrupted': True}, expected_epoch=epoch)
+                        response['transcript'] = text
+                    else:
+                        from .spoken_vision import matches, dispatch
+                        self.vision_route_update(stage='stt', result='pending')
+                        recognized = self.request(self.config['network']['voice_url'], '/transcribe',
+                                                  {'pcm_base64': base64.b64encode(pcm).decode()})
+                        if self._capture_enabled() and not self._capture_fresh():
+                            continue
+                        text = recognized['transcript']
+                        if (recognized.get('ok') is not True or type(text) is not str
+                                or len(text) > self.config['limits']['max_text_chars']):
+                            raise ValueError('Invalid transcription result')
+                        if not self.listening.is_set() or epoch != self.microphone_epoch:
+                            continue
+                        exact_visual = matches(text)
+                        visual_allowed = matches(text, self.current_reply_text)
+                        self.vision_route_update(stt_nonempty=bool(text),
+                            normalized_exact_visual=exact_visual,
+                            own_echo_match=exact_visual and not visual_allowed,
+                            stage='action', result='pending')
+                        action = recognized['decision']['action']
+                        self.vision_route_update(action_allowlisted=action in ('answer', 'stop', 'pause', 'reset'),
+                            stage='route', result=('action_rejected' if action != 'answer' else
+                                'empty_stt' if not text else 'nonmatching_stt' if not exact_visual else
+                                'echo_rejected' if not visual_allowed else 'eligible'))
+                        if action in ('stop', 'pause'):
+                            response = {'transcript': text, 'command': action}
+                        elif action == 'reset':
+                            self.resume_audio = None
+                            self.request(self.config['network']['voice_url'], '/reset',
+                                         {'session': self.config['conversation']['session']})
+                            response = self.voice('/say', {'text': self.config['conversation']['reset_reply'],
+                                                          'session': self.config['conversation']['session']}, expected_epoch=epoch)
+                            response['transcript'] = text
+                        elif action == 'answer' and visual_allowed:
+                            snapshot_turn = True
+                            self.vision_route_update(route_attempted=True, stage='dispatch', result='pending')
+                            try:
+                                response = self._capture_visual(dispatch, text, epoch, captured_operator)
+                            except Exception as exc:
+                                self.vision_route_failure(exc)
+                                raise
+                            self.vision_route_update(stage='dispatch', result='returned')
+                        elif text:
+                            response = self.voice('/text', {'text': text,
+                                                           'session': self.config['conversation']['session'],
+                                                           'previous_reply_interrupted': False}, expected_epoch=epoch)
+                            response['transcript'] = text
+                        else:
+                            continue
+                    if self._capture_enabled() and (response.get('cancelled')
+                            or not self.microphone.enabled or not self.listening.is_set()
+                            or epoch != self.microphone_epoch or self.stopping.is_set()
+                            or captured_operator['policy_epoch'] != self.motion_policy.snapshot()['epoch']):
+                        continue
+                    self.last_transcript = response.get('transcript', '')
+                    if self.last_transcript:
+                        self.turns += 1
+                        if self.config['logging']['log_transcripts'] and not snapshot_turn:
+                            LOG.info('turn transcript=%r reply=%r', self.last_transcript, response.get('reply'))
+                    if response.get('command') == 'stop':
+                        self.resume_audio = None
+                    if response.get('command') in ('pause', 'stop'):
+                        self.set_microphone(False)
+                    self.last_error = None
+            except Exception as exc:
+                self.last_error = str(exc)
+                self.phase = 'error'
+                LOG.exception('conversation_error')
+                self.stopping.wait(self.config['conversation']['retry_seconds'])
+        pump = self._capture_retire() if self._capture_enabled() else None
+        if pump is not None:
+            pump.close()
+        self.phase = 'stopped'
+
+    def set_listening(self, enabled, payload, *, require_paused=False):
+        """Bind automated pause/resume to existing authority at event mutation."""
+        if type(enabled) is not bool or type(payload) is not dict:
+            raise ValueError('Listening control object required')
+        binding = None
+        if payload:
+            if set(payload) != {'operator_binding'} or type(payload['operator_binding']) is not dict:
+                raise ValueError('Exact listening operator binding required')
+            binding = dict(payload['operator_binding'])
+            if (set(binding) != {'agent_boot_id', 'microphone_epoch', 'policy_epoch', 'owner_id', 'expires_at_monotonic'}
+                    or type(binding['agent_boot_id']) is not str or not 1 <= len(binding['agent_boot_id']) <= 256
+                    or (binding['owner_id'] is not None and (type(binding['owner_id']) is not str or not 1 <= len(binding['owner_id']) <= 128))
+                    or any(type(binding[k]) is not int or not 0 <= binding[k] < 2**63 for k in ('microphone_epoch', 'policy_epoch'))
+                    or type(binding['expires_at_monotonic']) not in (int, float)
+                    or not 0 <= binding['expires_at_monotonic'] <= 1e15
+                    or not math.isfinite(binding['expires_at_monotonic'])):
+                raise ValueError('Exact listening operator binding required')
+        # Same lock order as operator snapshots. Check and mutate atomically
+        # with microphone OFF/new owner and MotionPolicy.save, without I/O.
+        retired_capture = None
+        with self.microphone_lock, self.motion_policy.lock:
+            if binding is not None:
+                policy = self.motion_policy.snapshot()
+                if (self.agent_boot_id != binding['agent_boot_id']
+                        or self.microphone_epoch != binding['microphone_epoch']
+                        or policy['epoch'] != binding['policy_epoch']
+                        or self.microphone_owner_id != binding['owner_id']
+                        or self.motion_policy.owner_id != binding['owner_id']
+                        or not self.microphone.enabled or self.microphone.error is not None
+                        or policy['motor_enabled'] is not True or policy['quiet'] is not False
+                        or policy['privacy_all'] is not False or self.stopping.is_set()
+                        or not 0 < binding['expires_at_monotonic'] - time.monotonic() <= 60
+                        or ((enabled or require_paused) and (self.phase != 'paused' or self.capture_active))
+                        or (require_paused and self.listening.is_set())):
+                    raise RuntimeError('Listening operator or snapshot changed')
+            if enabled:
+                if not self.microphone.enabled:
+                    raise RuntimeError('Microphone is muted; enable it with the microphone switch')
+                self.listening.set()
+            else:
+                self.listening.clear()
+                retired_capture = getattr(self, '_capture_pump', None)
+                if retired_capture is not None:
+                    # Only set the Event while holding policy.lock: the reader
+                    # may hold its condition while taking a policy snapshot.
+                    retired_capture.retired.set()
+                    self._capture_packet = self.pending_pcm = None
+            result = {'ok': True, 'listening': enabled}
+        if retired_capture is not None:
+            retired_capture.close()
+        return result
+
+    def manual(self, path, payload):
+        binding = payload.get('operator_binding')
+        if 'operator_binding' in payload:
+            if (path != '/say' or set(payload) != {'text', 'operator_binding'} or type(binding) is not dict
+                    or set(binding) != {'agent_boot_id', 'microphone_epoch', 'policy_epoch', 'owner_id', 'expires_at_monotonic'}
+                    or type(binding['agent_boot_id']) is not str or not 1 <= len(binding['agent_boot_id']) <= 256
+                    or (binding['owner_id'] is not None and (type(binding['owner_id']) is not str or not 1 <= len(binding['owner_id']) <= 128))
+                    or any(type(binding[k]) is not int or not 0 <= binding[k] < 2**63 for k in ('microphone_epoch', 'policy_epoch'))
+                    or type(binding['expires_at_monotonic']) not in (int, float)
+                    or not math.isfinite(binding['expires_at_monotonic'])):
+                raise ValueError('Exact bounded speech operator binding required')
+        def same_owner():
+            value = self.operator_status()
+            return (value['agent_boot_id'] == binding['agent_boot_id']
+                and value['microphone_epoch'] == binding['microphone_epoch']
+                and value['motion_policy']['epoch'] == binding['policy_epoch']
+                and value['microphone_owner_id'] == binding['owner_id']
+                and value['motion_policy_owner_id'] == binding['owner_id']
+                and value['microphone_enabled'] and not value['capture_active'] and not value['listening']
+                and value['phase'] == 'paused' and value['motion_policy']['motor_enabled']
+                and not value['motion_policy']['quiet'] and not value['motion_policy']['privacy_all']
+                and 0 < binding['expires_at_monotonic'] - time.monotonic() <= 60)
+        if binding is not None and not same_owner():
+            raise RuntimeError('Speech operator or snapshot changed')
+        if binding is not None:
+            was_listening = False
+            self.set_listening(False, {'operator_binding': binding}, require_paused=True)
+        else:
+            was_listening = self.listening.is_set()
+            self.set_listening(False, {})
+        def restore_listening():
+            if was_listening:
+                with self.microphone_lock, self.motion_policy.lock:
+                    policy = self.motion_policy.snapshot()
+                    if (self.microphone.enabled and not self.stopping.is_set()
+                            and not policy['quiet'] and not policy['privacy_all']):
+                        self.listening.set()
+        acquired = self.audio_lock.acquire(timeout=self.config['timeouts']['manual_audio_lock'])
+        if not acquired:
+            restore_listening()
+            raise RuntimeError('Robot is processing a voice turn; try again when idle')
+        try:
+            options = dict(allow_barge_in=was_listening)
+            if binding is not None:
+                if not same_owner():raise RuntimeError('Speech operator or snapshot changed')
+                options.update(expected_epoch=binding['microphone_epoch'], expected_policy_epoch=binding['policy_epoch'],
+                               valid_until=binding['expires_at_monotonic'])
+            response = self.voice('/text' if path == '/ask' else '/say',
+                                    {'text': payload['text'], 'session': self.config['conversation']['session']}, **options)
+            return {k: v for k, v in response.items() if k != 'audio_base64'}
+        finally:
+            self.phase = 'paused'
+            self.audio_lock.release()
+            restore_listening()
+
+
+def main(config, test_speaker=False):
+    logging.basicConfig(level=config['logging']['level'], format='%(asctime)s %(levelname)s %(message)s')
+    agent = Agent(config)
+    try:
+        agent.configure_playback()
+        agent.playback_configured = True
+    except Exception:
+        LOG.exception('initial_playback_configuration_failed')
+    if test_speaker:
+        response = agent.request(config['network']['voice_url'], '/text',
+                                 {'text': 'Поздоровайся и скажи, что разговор через локальную модель работает.',
+                                  'session': 'setup-test'})
+        agent.play(response['audio_base64'])
+        print(json.dumps({k: v for k, v in response.items() if k != 'audio_base64'}, ensure_ascii=False))
+        return
+
+    class Handler(BaseHTTPRequestHandler):
+        def reply(self, code, value):
+            data = json.dumps(value, ensure_ascii=False).encode()
+            self.send_response(code)
+            self.send_header('Content-Type', 'application/json; charset=utf-8')
+            self.send_header('Content-Length', str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def auth(self):
+            if not hmac.compare_digest(self.headers.get('Authorization', '').encode(),
+                                       ('Bearer ' + config.token).encode()):
+                self.reply(401, {'error': 'Bearer token required'})
+                return False
+            return True
+
+        def do_GET(self):
+            if not self.auth():
+                return
+            if self.path == '/vision-capabilities':
+                self.reply(200, {'bound_snapshot_say':1,'agent_boot_id':agent.agent_boot_id})
+                return
+            if self.path not in ('/status','/operator'):
+                self.reply(404, {'error': 'Not found'})
+                return
+            self.reply(200, agent.operator_status() if self.path=='/operator' else agent.status())
+
+        def do_POST(self):
+            if not self.auth():
+                return
+            if self.path == '/actors/motion/native':
+                self.close_connection = True
+                try:
+                    size=int(self.headers.get('Content-Length',0))
+                    if not 0<size<=4096: raise ValueError('Native request size')
+                    from .autonomous.contracts import decode
+                    value=agent.motion_proxy.handle(decode(self.rfile.read(size)))
+                    self.reply(200 if value.get('accepted') is True else 409,value)
+                except Exception as exc:
+                    self.reply(409, {'accepted':False,'error':type(exc).__name__})
+                return
+            try:
+                if self.path in ('/pause', '/resume'):
+                    size = int(self.headers.get('Content-Length', 0))
+                    if not 0 <= size <= 4096:
+                        raise ValueError('Listening request bound')
+                    from .autonomous.contracts import decode
+                    payload = decode(self.rfile.read(size)) if size else {}
+                    value = agent.set_listening(self.path == '/resume', payload)
+                elif self.path == '/volume':
+                    size = int(self.headers.get('Content-Length', 0))
+                    if not 0 < size <= config['limits']['max_agent_request_bytes']:
+                        raise ValueError('Invalid request size')
+                    value = agent.set_volume(json.loads(self.rfile.read(size))['volume_percent'])
+                elif self.path == '/motion-policy':
+                    size=int(self.headers.get('Content-Length',0))
+                    if not 0<size<=4096:raise ValueError('Policy request bound')
+                    from .autonomous.contracts import decode
+                    value=agent.set_motion_policy(decode(self.rfile.read(size)))
+                elif self.path == '/microphone':
+                    size = int(self.headers.get('Content-Length', 0))
+                    if not 0 < size <= config['limits']['max_agent_request_bytes']:
+                        raise ValueError('Invalid request size')
+                    payload=json.loads(self.rfile.read(size))
+                    if not isinstance(payload,dict):raise ValueError('Microphone control fields')
+                    fields=set(payload)
+                    authority={'expected_boot_id','expected_epoch'}
+                    if fields & authority and not authority<=fields:raise ValueError('Complete microphone authority required')
+                    if fields & authority and (not isinstance(payload['expected_boot_id'],str) or not payload['expected_boot_id'] or type(payload['expected_epoch']) is not int):
+                        raise ValueError('Complete microphone authority required')
+                    owners={'owner_id','expected_owner_id'}
+                    if fields & owners and (not authority<=fields or any(not isinstance(payload[key],str) or not 1<=len(payload[key])<=128 for key in fields & owners)):
+                        raise ValueError('Bounded microphone owner requires authority')
+                    if fields-authority-owners not in ({'enabled'},{'enabled','listen'}):raise ValueError('Microphone control fields')
+                    value = agent.set_microphone(payload['enabled'],payload.get('listen',True),
+                        expected_boot_id=payload.get('expected_boot_id'),expected_epoch=payload.get('expected_epoch'),
+                        owner_id=payload.get('owner_id'),expected_owner_id=payload.get('expected_owner_id'))
+                elif self.path in ('/ask', '/say'):
+                    size = int(self.headers.get('Content-Length', 0))
+                    if not 0 < size <= config['limits']['max_agent_request_bytes']:
+                        raise ValueError('Invalid request size')
+                    value = agent.manual(self.path, json.loads(self.rfile.read(size)))
+                else:
+                    self.reply(404, {'error': 'Not found'})
+                    return
+                self.reply(200, value)
+            except Exception as exc:
+                LOG.exception('control_failed')
+                self.reply(409, {'error': str(exc)})
+
+        def log_message(self, fmt, *args):
+            LOG.info('http %s', fmt % args)
+
+    server = ThreadingHTTPServer((config['servers']['agent']['listen'], config['servers']['agent']['port']), Handler)
+    server.daemon_threads = True
+    threading.Thread(target=agent.run, daemon=True).start()
+
+    def stop(signum, frame):
+        agent.listening.clear()
+        agent.stopping.set()
+        # Exit from the main signal handler; systemd kills any remaining children.
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
+    server.serve_forever()

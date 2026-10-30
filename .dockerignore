@@ -12,3 +12,12 @@ __pycache__
 **/__pycache__
 work
 outputs
+.gitignore
+.venv-*
+build
+dist
+tests
+docs
+diagnostics
+*.key.*
+text-api.json

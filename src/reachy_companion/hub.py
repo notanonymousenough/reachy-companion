@@ -43,6 +43,7 @@ class Hub:
         self.boot_id = str(uuid.uuid4())
         self.stock_scope=threading.local();self.stock_unknown=False;self.stock_owned=None;self.stock_stop_observed=None
         self.stock_stop_request=None
+        self._stock_fresh_reject_logged=False
 
     def stock_selected(self):
         return self.config['guarded_motion'].get('transport','native')=='stock'
@@ -50,7 +51,9 @@ class Hub:
     def stock_operator(self):
         if not self.config['guarded_motion']['enabled'] or self.stock_unknown:raise RuntimeError('Stock motion disabled or completion unknown')
         began=time.monotonic();value=self.agent('/operator')
-        if type(value) is not dict or time.monotonic()-began>.3:raise RuntimeError('Fresh stock operator required')
+        if type(value) is not dict or time.monotonic()-began>.3:
+            self.stock_fresh_reject_receipt(began,value)
+            raise RuntimeError('Fresh stock operator required')
         policy=value.get('motion_policy')
         if (type(policy) is not dict or type(value.get('agent_boot_id')) is not str or not 1<=len(value['agent_boot_id'])<=256
                 or any(type(epoch) is not int or not 0<=epoch<2**63 for epoch in (value.get('microphone_epoch'),policy.get('epoch')))
@@ -63,6 +66,38 @@ class Hub:
                 or value['expression_version']!=expression_version):
             raise RuntimeError('Stock command binding changed: expression_version')
         return value['agent_boot_id'],value['microphone_epoch'],policy['epoch'],value['microphone_enabled']
+
+    def stock_fresh_reject_receipt(self, began, value):
+        # Called only after the original reject predicate is true. Production
+        # stock_begin/stock_check run in the serialized Hub action/move lane.
+        # One diagnostic attempt per Hub boot, separate from policy/authority.
+        try:
+            if self._stock_fresh_reject_logged:return
+            self._stock_fresh_reject_logged=True
+            elapsed=time.monotonic()-began
+            elapsed_valid=type(elapsed) in (int,float) and math.isfinite(elapsed) and elapsed>=0
+            elapsed=max(0.,min(86400.,elapsed)) if elapsed_valid else -1.
+            is_dict=type(value) is dict
+            policy=value.get('motion_policy') if is_dict else None
+            phase=value.get('phase') if is_dict else None
+            def typed(item):
+                return (type(item) is tuple and len(item)==4 and type(item[0]) is str and 1<=len(item[0])<=256
+                        and all(type(v) is int and 0<=v<2**63 for v in item[1:3]) and type(item[3]) is bool)
+            bound=getattr(self.stock_scope,'binding',None)
+            observed=(value.get('agent_boot_id'),value.get('microphone_epoch'),policy.get('epoch'),
+                      value.get('microphone_enabled')) if is_dict and type(policy) is dict else None
+            phase_known=type(phase) is str and phase in ('starting','paused','listening','recording','processing',
+                'speaking','waiting_to_resume','music','error','stopped')
+            LOG.warning('stock_operator_fresh_reject elapsed_seconds=%.6f elapsed_valid=%s is_dict=%s '
+                'phase_known=%s phase_processing=%s phase_listening=%s phase_speaking=%s '
+                'scope_binding_present=%s scope_binding_typed=%s operator_binding_typed=%s binding_matches=%s expression_bound=%s',
+                elapsed,elapsed_valid,is_dict,phase_known,type(phase) is str and phase=='processing',
+                type(phase) is str and phase=='listening',type(phase) is str and phase=='speaking',
+                bound is not None,typed(bound),typed(observed),typed(bound) and typed(observed) and bound==observed,
+                getattr(self.stock_scope,'expression_version',None) is not None)
+        except BaseException:
+            # Instrumentation must never replace the original RuntimeError.
+            pass
 
     def stock_begin(self):
         if self.stock_selected():
@@ -317,6 +352,31 @@ class Hub:
                 return decode_reconciliation_json(body)
             return json.load(response)
 
+    def panel_state(self):
+        value=self.agent('/panel-state',timeout=min(3,self.config['timeouts']['http']),max_bytes=16384)
+        if (type(value) is not dict or value.get('version')!=1
+                or any(type(value.get(k)) is not dict for k in ('binding','microphone','automatic','policy','volume','capabilities','conversation_mode'))):
+            raise ValueError('Panel state unavailable')
+        return value
+
+    def panel_control(self,payload):
+        if type(payload) is not dict or payload.get('action') not in (
+                'microphone_on','microphone_off','automatic_on','automatic_off','stop','mode_normal','mode_alice_test'):
+            raise ValueError('Exact panel action required')
+        positive=payload['action'] in ('microphone_on','automatic_on')
+        mode_action=payload['action'] in ('mode_normal','mode_alice_test')
+        if set(payload)!=({'action','binding','mode_generation'} if mode_action else {'action','binding'} if positive else {'action'}):
+            raise ValueError('Exact panel action fields required')
+        if (positive or mode_action) and type(payload['binding']) is not dict:
+            raise ValueError('Panel binding required')
+        if mode_action and (type(payload['mode_generation']) is not int or not 0<=payload['mode_generation']<2**63):
+            raise ValueError('Conversation mode generation required')
+        value=self.agent('/panel-control',payload,timeout=self.config['timeouts']['http'],max_bytes=16384)
+        if (type(value) is not dict or value.get('accepted') is not True
+                or value.get('action')!=payload['action'] or type(value.get('state')) is not dict):
+            raise ValueError('Panel action not confirmed')
+        return value
+
     def operator_proxy(self):
         began=time.monotonic()
         value=self.agent('/operator',timeout=.3,max_bytes=8192)
@@ -490,6 +550,12 @@ def serve(hub):
             self.wfile.write(body)
 
         def do_GET(self):
+            if self.path=='/control/panel-state':
+                if not hmac.compare_digest(self.headers.get('Authorization','').encode(),('Bearer '+hub.config.token).encode()):
+                    self.reply(401,dict(error='Bearer token required'),no_store=True);return
+                try:self.reply(200,hub.panel_state(),no_store=True)
+                except Exception:self.reply(503,dict(error='panel_state_unavailable'),no_store=True)
+                return
             if self.path=='/control/operator':
                 if not hmac.compare_digest(self.headers.get('Authorization','').encode(),('Bearer '+hub.config.token).encode()):
                     self.reply(401,dict(error='Bearer token required'),no_store=True);return
@@ -534,6 +600,17 @@ def serve(hub):
             token = self.headers.get('Authorization', '')
             if not hmac.compare_digest(token, 'Bearer ' + hub.config.token):
                 self.reply(401, {'error': 'Bearer token required'})
+                return
+            if self.path=='/control/panel':
+                try:
+                    size=int(self.headers.get('Content-Length',0))
+                    if not 0<size<=4096:raise ValueError('Panel request bound')
+                    self.connection.settimeout(min(3,hub.config['timeouts']['http']))
+                    payload=decode_reconciliation_json(self.rfile.read(size))
+                    self.reply(200,hub.panel_control(payload),no_store=True)
+                except (ValueError,KeyError,TypeError):self.reply(400,dict(error='invalid_panel_request'),no_store=True)
+                except HTTPError as exc:self.reply(409 if exc.code in (400,409) else 503,dict(error='panel_control_denied' if exc.code in (400,409) else 'panel_control_unavailable'),no_store=True)
+                except Exception:self.reply(503,dict(error='panel_control_unavailable'),no_store=True)
                 return
             if self.path=='/actions/stock-reconcile':
                 diagnostic=dict(phase='decode')

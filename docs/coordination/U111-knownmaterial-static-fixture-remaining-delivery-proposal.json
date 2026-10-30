@@ -1,0 +1,50 @@
+{
+  "status": "ONE_PRICED_REMAINING_DELIVERY_STATIC_FIXTURE_TRANSPORT_DECOUPLING_NOT_GO_NO_NEW_READS_OPS_TESTS",
+  "prior": 1598.37,
+  "cap_minutes": 50,
+  "maximum": 1648.37,
+  "new_premise": {
+    "known_not_submitted": true,
+    "submitted": false,
+    "qualification_provider_POSTs": 0,
+    "native_generations": 0,
+    "error_class": "URLError",
+    "reason": "<urlopen error timed out>",
+    "underlying": "TimeoutError at socket.create_connection -> sock.connect",
+    "failed_frozen_line": 23,
+    "failed_operation": "PCDocker stdlib GET RobotAgent/pause-state",
+    "successful_previous_operation": "GET Hub/control/panel-state + ownedbinding/policy/mode/MICclosed assertions",
+    "model_payload_pending_and_POST_not_reached": true,
+    "provider_protocol_capability": "NOT_TESTED",
+    "not_modelunsupported": true,
+    "not_inferenceUNKNOWN": true,
+    "frozen_remote_CODE_sha256": "18f4a56669a7e781d9daabde0eb2c42f30803d3c4df3c705211825721c66a94b",
+    "terminal_file": "/config/u111-protocol-terminal.json",
+    "terminal_byte_sha256": "fc0ba993b9aa1e0346b0465593fef2ed10977ed8c8ca014dd94a510171fe395d"
+  },
+  "reuse": "Exact U111 complete42file engineeringbundle/e9f5source/4701support + actualcandidate-currentCLIimportproof; no new source/module/modelaudit or new productcandidate/promptvariant. Restage onlyidentical hash-boundinactivefiles asneeded afterknowncleanup.",
+  "goal": "Complete real single same-model capability qualification and usefulordinaryFULL→genuine scheduledselfactivity recovery using existing qualifiedsupportbundle.",
+  "clocks_relative_minutes": {
+    "frozen_complete_operator_compatibility_and_native_fallback_before_anycall_or_control": 10,
+    "actual_protocol_result": 18,
+    "WHOLE_before_enable_install": 22,
+    "FIRST_saved_useful_FULL_native": 32,
+    "actual_end_retained": 40,
+    "HARD_including_cleanup8_handoff2": 50
+  },
+  "maximum_generation_requests": {
+    "real_provider_protocol_qualification": 1,
+    "usefulordinary": 1,
+    "genuine_scheduledself": 1,
+    "total": 3,
+    "no_retries_altprofiles": true
+  },
+  "operator_change": "Remove unsupported physical preflight coupling from nonactuating static synthetic fixture. Frozen fixture accepts ONLY allowlisted originalmodel/provider metadata and targetschema; fixed synthetic three-system role-shape input, no ownerpersona/history/sensor/PCM data, no controller/Hub/Agent API calls, no audio/TTS/actions/publishing/profile-enable. AST/helperproof: only one networkoperation is bounded fixedsame-provider chatcompletions POST; response parsed/validated only. This is not timeoutskip/fakeauthorityPASS. Root physicalmaintenance/model-exclusivity/currentintent/correctiveAUTO gates remain through alreadyqualified canonical Root→Robot/Hub transport.",
+  "required_physical_gates": "Before necessaryonlyOWNMICnegative: freshactualbinding-STOPprivacy-mode-owner/knownproducerstate/modelprofile and exactpendinghumanON lineage from U111 original618/374→OWNnegative619/375→OWNreturn620/376. CurrentactualrequestedFALSE not fabricatedasfreshON; bind pendingauthorization to completeownedchain/currentexactstate and invalidate on anylaterhumannegative/SGintentpolicychange. Canonicalalloldproducer/capture-expression-stockknownrelease held beforefixture guarantees exclusive modeltrial; genuineunknown keepsnegative. Currentnative/profile-install/onlyOWNcapture/correctiveAUTO safety checks never removed; PCinstalleruses provenHubpanel route, no directPC→Agent gate.",
+  "protocol": "One actualfirst providerqualificationcall (U111 had0), exactsameoriginalHauhauprofile/PID3648/JITTTLunchanged/targetreply1-180-noquestion-nowake/fullsingleline/schema-source-config-modelhashes; boundedpending-terminalreceipt, strictJSON-finishstop-exactmodel+fulltextvalidation. Acceptedprofileartifact ONLYactualresponse+review. Unsupported/incomplete/empty/outofcontract/actualproducerUNKNOWN END/no secondcall/profile. Non-submittedoperatorfailure classifiedfromexplicitphase, notghostUNKNOWN.",
+  "native": "AfteractualprotocolPASS+WHOLE22: samecompletePC-only support/source/config install and neededworkerrestart with exactparentfallback; onlyOWNMICfreshcapture whileAUTOpendingOFF→ONEusefultruthfulnormaloperator_textordinaryFULLsemantic/reap-terminal-PCnewbootrelease→ONEsourceboundcorrectiveAUTO aftercausalfinitebundleprofile+ordinaryPASS/currentpendinghumanON/no laternegative/noUNKNOWN via existingfinite409 rules→ONEgenuineNEWscheduler selfepisode/cadence300/explicitwholefiction/FULLsemantic/reap-PCsamebootrelease-freshcapture. Preserve8mincadence-generation-reviewheadroom beforeend40; no forcedwake/thirdnative.",
+  "fallback": "Exactaaba/c019/installedbrains9c69/R73/active63b-E7-U96-model/parents/currentintentprivacy; onlyOWNMICreturnwhenactualmodelknownrelease-latestauthority, protectiveAUTO_OFF retained ifunaccepted/no blindAUTOpositive. No DBprivacy/oldRAMbootrestore/modelresources/controllerAPI/newnetworkrelay. Onlyownedinactivefiles retired afterarchive; accepteddependencies retained.",
+  "userQA_resources_spend": 0,
+  "topicloop_physicalASR": "OPENseparate",
+  "automatic_GO": false
+}

@@ -1,0 +1,87 @@
+--- a/voice.py
++++ b/voice.py
+@@ -33,6 +33,19 @@
+             'equalizer', str(eq['bass_hz']), str(eq['bass_width_q']) + 'q', str(eq['bass_db']),
+             'equalizer', str(eq['presence_hz']), str(eq['presence_width_q']) + 'q', str(eq['presence_db']),
+             'treble', str(eq['treble_db']), 'gain', '-n', str(-eq['headroom_db'])]
++
++
++ALICE_SHORT_FORMAT = (
++    '\nДля текущего ответа Алисе правила краткости и формата выше заменяются следующими: '
++    'выдай ровно одно короткое законченное предложение с конечной точкой, вопросительным '
++    'или восклицательным знаком. Начни текст ровно одним обращением «Алиса, ». '
++    'Всего не более 11 слов и 120 символов вместе с обращением (не более 10 слов после него). '
++    'Не добавляй второе предложение, пояснение или хвост. Заверши мысль или вопрос; '
++    'не обрывай фразу ради лимита. Без многоточий, сокращений с точками, Markdown и переносов строк. '
++    'Допустимы только одна начальная метка <emotion=NAME> и одна начальная <gesture=NAME> '
++    'из разрешённых выше; обе необязательны. Внутри предложения не меняй метки '
++    'и не разбивай ответ на выразительные фрагменты.'
++)
+ 
+ 
+ class AlicePhraseRejected(RuntimeError):
+@@ -197,24 +210,27 @@
+             return segments
+         if len(segments) == 1 and segments[0]['text'] == '':
+             return []  # The legacy stream represents silent controls this way.
+-        # Reuse the expression segments; no second generator or sentence slicing.
+-        if len(segments) != 1:
+-            raise AlicePhraseRejected('Exactly one complete Alice segment required')
+-        return [dict(segments[0], text=validate_alice_phrase(segments[0]['text']))]
++        # Preserve every segment's words in order; keep the initial delivery style.
++        # Validate the complete aggregate before the single TTS dispatch.
++        text = ' '.join(segment['text'] for segment in segments)
++        return [dict(segments[0], text=validate_alice_phrase(text))]
+ 
+     def speech_address_metadata(self,text,speech_address_prefix=DEFAULT_SPEECH_ADDRESS):
+         prefix=self.speech_address(speech_address_prefix)
+         return dict(speech_address_prefix=prefix,speech_address_scope='tts_utterance',
+                     spoken_text=self.address_speech(re.sub(r'[*#`]', '', text).strip(),prefix)) if prefix else {}
+ 
+-    def answer(self, text, session, interrupted=False, *, reply_constraints=None):
++    def answer(self, text, session, interrupted=False, *, reply_constraints=None, alice_short=False):
+         now = time.monotonic()
+         self.sessions = {k: v for k, v in self.sessions.items() if now - v['used'] < self.config['llm']['history_ttl_seconds']}
+         if session not in self.sessions and len(self.sessions) >= self.config['llm']['max_sessions']:
+             del self.sessions[min(self.sessions, key=lambda k: self.sessions[k]['used'])]
+         self.agent_sessions = {k: v for k, v in self.agent_sessions.items() if k in self.sessions}
+         entry = self.sessions.get(session, {'used': now, 'messages': []})
+-        messages = [{'role': 'system', 'content': self.config['llm']['system_prompt']}]
++        system_prompt = self.config['llm']['system_prompt']
++        if alice_short:
++            system_prompt += ALICE_SHORT_FORMAT
++        messages = [{'role': 'system', 'content': system_prompt}]
+         messages += entry['messages'][-self.config['llm']['history_messages']:]
+         if interrupted:
+             messages.append({'role': 'system', 'content': 'Предыдущий ответ был прерван и не прозвучал полностью. Отвечай на новую реплику пользователя, не продолжай старый ответ без просьбы.'})
+@@ -272,15 +288,26 @@
+             reply = text
+         else:
+             self.phase = 'thinking'
+-            reply, pending = (answer_result if answer_result is not None else
+-                              (self.answer(text,session,payload.get('previous_reply_interrupted',False),reply_constraints=reply_constraints)
+-                               if reply_constraints is not None else self.answer(text,session,payload.get('previous_reply_interrupted',False))))
++            if self.alice_short_mode(prefix):
++                reply, pending = (answer_result if answer_result is not None else
++                                  self.answer(text,session,payload.get('previous_reply_interrupted',False),
++                                              reply_constraints=reply_constraints,alice_short=True))
++            else:
++                reply, pending = (answer_result if answer_result is not None else
++                                  (self.answer(text,session,payload.get('previous_reply_interrupted',False),reply_constraints=reply_constraints)
++                                   if reply_constraints is not None else self.answer(text,session,payload.get('previous_reply_interrupted',False))))
+         if reply_constraints is not None:
+             from .spoken_reply import validate_text
+             validate_text(reply,reply_constraints)
+-        from .expressions import spoken_expression, spoken_segments
++        from .expressions import CONTROL, spoken_expression, spoken_segments
+         original_reply=reply
+         segments = spoken_segments(reply)
++        if self.alice_short_mode(prefix):
++            # Removing style tags must not split or replace any original word.
++            unstyled = CONTROL.sub('', original_reply)
++            aggregate = ' '.join(segment['text'] for segment in segments)
++            if re.findall(r'[^\W_]+', unstyled) != re.findall(r'[^\W_]+', aggregate):
++                raise AlicePhraseRejected('Alice style split must preserve all words')
+         reply, emotion = spoken_expression(reply)
+         if reply_constraints is not None:
+             validate_text(reply,reply_constraints)

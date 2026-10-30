@@ -1,0 +1,13 @@
+{
+  "payload": {
+    "agent.py": {
+      "before": "001be4ec456141b41d0146b49d06e737ced5383dcba2201c288fa3ed35b667f6",
+      "after": "1f4e52a6b54b6c12de2bd325e094625ebdf4e2e341df2fa5e2230a51ee660a19"
+    },
+    "expression_player.py": {
+      "before": "7a5f7a0019352ecf8ceb2d3b6cf958e206655ab3a58387671c163aa86730bfdb",
+      "after": "4b2ea1039145da87a381b3da04ea64693842547d159e3afd65e393247c516e66"
+    }
+  },
+  "restored_from": "R20 preimage, R29 preimage and U127 source; exact hashes in historical R15 report"
+}

@@ -17,6 +17,33 @@ def context_mode(context):
 
 def load(path):
     config = decode(Path(path).read_text())
+    native = config.get('native_agent', {})
+    if (type(native) is not dict or set(native) - {'enabled', 'operator_goal', 'stock_profile', 'goal_ttl_s'}
+            or ('enabled' in native and type(native['enabled']) is not bool)):
+        raise ValueError('Explicit native Agent profile')
+    if 'operator_goal' in native:
+        from .contracts import validate
+        validate('Goal', native['operator_goal'])
+        if not native.get('enabled') or native['operator_goal']['origin'] != 'operator':
+            raise ValueError('Native goal requires explicit operator origin')
+    if native.get('stock_profile', 'r5_pcm') not in ('r5_pcm', 'finite_goal_clock'):
+        raise ValueError('Explicit native stock profile')
+    if native.get('stock_profile') == 'finite_goal_clock':
+        import math
+        goal = native.get('operator_goal', {})
+        ttl = native.get('goal_ttl_s')
+        if (native.get('enabled') is not True or not goal.get('text', '').strip() or goal.get('evidence_ids')
+                or type(goal.get('version')) is not int or not 0 <= goal['version'] < 2**63
+                or type(ttl) not in (int, float) or not math.isfinite(ttl) or not 1 <= ttl <= 180
+                or config.get('context', {}).get('enabled')):
+            raise ValueError('Finite goal/clock profile requires independent goal, expiry and context OFF')
+    elif 'goal_ttl_s' in native:
+        raise ValueError('Goal expiry belongs to explicit finite goal/clock profile')
+    if native.get('enabled') and (config.get('speech', {}).get('enabled')
+            or config.get('motion', {}).get('enabled') or config.get('workflows', {}).get('enabled')):
+        raise ValueError('Native Agent owns capture/main/reply; no second executor')
+    if native.get('enabled') and config['models']['fast'].get('projection', 'full') != 'full':
+        raise ValueError('Native metadata requires full fast projection')
     if config['version'] != 1 or config['actuators'] not in ('simulated','bounded_native_antenna17') or config['export_enabled']:
         raise ValueError('Unsupported actor mode/export')
     motion=config.get('motion',{'enabled':False})
